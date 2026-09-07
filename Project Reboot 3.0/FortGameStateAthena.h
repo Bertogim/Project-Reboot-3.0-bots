@@ -131,7 +131,10 @@ public:
 
 	FPlayerBuildableClassContainer*& GetPlayerBuildableClasses()
 	{
-		static auto PlayerBuildableClassesOffset = GetOffset("PlayerBuildableClasses");
+		static auto PlayerBuildableClassesOffset = GetOffset("PlayerBuildableClasses", false);
+		static FPlayerBuildableClassContainer* NullContainer = nullptr;
+		if (PlayerBuildableClassesOffset == -1)
+			return NullContainer;
 		return Get<FPlayerBuildableClassContainer*>(PlayerBuildableClassesOffset);
 	}
 

@@ -1053,18 +1053,29 @@ public:
 
 	void BuildWallAt(const FVector& Location, const FRotator& Rotation)
 	{
+		// Building is only possible in the real match (SafeZones onward): in the lobby
+		// (None/Setup/Warmup) and on the bus (Aircraft) there is no build phase, the
+		// GameState's PlayerBuildableClasses container is uninitialized/garbage and the
+		// player has no materials, so trying to read it would hand the engine a bogus
+		// UClass and crash inside GetPathName.
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 		if (!GameState)
 			return;
+		if (GameState->GetGamePhase() < EAthenaGamePhase::SafeZones)
+			return;
+
 		auto Container = GameState->GetPlayerBuildableClasses();
-		if (!Container || Container->BuildingClasses.Num() == 0)
+		if (!Container)
+			return;
+		auto& Classes = Container->BuildingClasses;
+		if (Classes.Num() <= 0 || !Classes.Data)
 			return;
 
 		UClass* WallClass = nullptr;
-		for (int i = 0; i < Container->BuildingClasses.Num(); ++i)
+		for (int i = 0; i < Classes.Num(); ++i)
 		{
-			UClass* Candidate = Container->BuildingClasses.at(i);
-			if (!Candidate)
+			UClass* Candidate = Classes.at(i);
+			if (!Candidate || !Candidate->IsValidLowLevel())
 				continue;
 			std::string Name = BotWeapons::Lower(Candidate->GetPathName());
 			if (Name.find("wall") != std::string::npos)
@@ -1074,7 +1085,12 @@ public:
 			}
 		}
 		if (!WallClass)
-			WallClass = Container->BuildingClasses.at(0);
+		{
+			UClass* Fallback = Classes.at(0);
+			if (!Fallback || !Fallback->IsValidLowLevel())
+				return;
+			WallClass = Fallback;
+		}
 		if (!WallClass)
 			return;
 

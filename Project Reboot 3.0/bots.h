@@ -16,6 +16,15 @@
 #include "GameplayTagContainer.h"
 #include "botnames.h"
 
+// Windows.h defines min/max macros that collide with std::min/std::max.
+// Bot AI code uses std:: algorithms extensively; disable the macros here.
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 // Shared battlefield audio: when any bot fires, it records the shot so nearby bots can
 // "hear" it and investigate (see PlayerBot::Tick hearing path).
 static inline float LastGlobalGunshotTime = -100.0f;
@@ -98,7 +107,7 @@ namespace BotMath // tiny self-contained math helpers so we don't depend on the 
 		return std::sqrt(DX * DX + DY * DY);
 	}
 
-	static inline FVector Normalize(const FVector& V)
+	static inline FVector Normalize(FVector V)
 	{
 		auto Length = std::sqrt(V.SizeSquared());
 		if (Length < 0.0001f)
@@ -111,7 +120,7 @@ namespace BotMath // tiny self-contained math helpers so we don't depend on the 
 		return A | B;
 	}
 
-	static inline FRotator LookAtRotation(const FVector& From, const FVector& To)
+	static inline FRotator LookAtRotation(FVector From, FVector To)
 	{
 		FVector Dir = To - From;
 		auto HorizontalLength = std::sqrt(Dir.X * Dir.X + Dir.Y * Dir.Y);
@@ -249,48 +258,8 @@ public:
 	float CurrentThreatScore = 0.0f; // 0 = weak, increasing = stronger relative to us
 	bool bFightIsUnfavorable = false;
 
-	void SetupBotAI();
-	void Tick();
-	void AssignRandomPersonality();
-
-	// helpers
-	AFortPlayerControllerAthena* GetAthenaController();
-	AFortInventory* GetBotInventory();
-	UObject* GetCharacterMovement();
-	uint8 GetMovementMode();
-	bool IsPawnAirborne();
-	bool HasLineOfSight(AActor* Other);
-	void SetControlRotation(FRotator NewRotation);
-	void BotLookAt(const FVector& Location, float PitchOverride = 0);
-	void BotMoveToward(const FVector& Destination, float SpeedMultiplier = 1.0f);
-	bool BotReachedDestination(const FVector& Destination, float Acceptance = 250.0f);
-
-	// bus / landing
-	void PickLandingSpot();
-	void JumpFromBus();
-
-	// loot
-	ABuildingContainer* FindNearestContainer(float MaxRange);
-	void SearchContainer(ABuildingContainer* Container);
-	AFortPickup* FindNearestPickup(float MaxRange);
-	void PickupNearbyLoot();
-	void EquipBestWeapon();
-
-	// combat
-	AFortPlayerPawnAthena* FindBestTarget(float MaxRange);
-	void EngageTarget(float DeltaTime);
-	void FireAt(AFortPlayerPawnAthena* Target, float DeltaTime);
-	void ApplyBotDamage(AFortPlayerPawnAthena* Victim, float Damage);
-	void DefendAgainst(AFortPlayerPawnAthena* Attacker);
-	void BuildWallAt(const FVector& Location, const FRotator& Rotation);
-
-	// healing / storm
-	void TryHeal(float DeltaTime);
-	FVector GetSafeZoneCenter();
-	float GetSafeZoneRadius();
-	bool IsInsideSafeZone(float Margin = 0);
-
-	void StayAwayFromStorm(float DeltaTime);
+	// NOTE: all bot AI methods (SetupBotAI, Tick, AssignRandomPersonality and the
+	// helpers below) are implemented inline further down in this class body.
 
 	void OnPlayerEncountered()
 	{
@@ -481,7 +450,7 @@ public:
 		SetControlRotation(Ideal);
 	}
 
-	void BotMoveToward(const FVector& Destination, float SpeedMultiplier = 1.0f)
+	void BotMoveToward(FVector Destination, float SpeedMultiplier = 1.0f)
 	{
 		if (!Pawn || Pawn->IsActorBeingDestroyed())
 			return;

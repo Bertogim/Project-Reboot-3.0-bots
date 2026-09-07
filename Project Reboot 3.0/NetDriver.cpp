@@ -265,7 +265,7 @@ void UNetDriver::ServerReplicateActors_BuildConsiderList(std::vector<FNetworkObj
 				}
 
 				const float MinOptimalDelta = 1.0f / Actor->GetNetUpdateFrequency();									  // Don't go faster than NetUpdateFrequency
-				const float MaxOptimalDelta = max(1.0f / Actor->GetMinNetUpdateFrequency(), MinOptimalDelta); // Don't go slower than MinNetUpdateFrequency (or NetUpdateFrequency if it's slower)
+				const float MaxOptimalDelta = std::max(1.0f / Actor->GetMinNetUpdateFrequency(), MinOptimalDelta); // Don't go slower than MinNetUpdateFrequency (or NetUpdateFrequency if it's slower)
 
 				const float Alpha = std::clamp((LastReplicateDelta - ScaleDownStartTime) / ScaleDownTimeRange, 0.0f, 1.0f); // should we use fmath?
 				ActorInfo->OptimalNetUpdateDelta = std::lerp(MinOptimalDelta, MaxOptimalDelta, Alpha); // should we use fmath?
@@ -878,7 +878,7 @@ int32 UNetDriver::ServerReplicateActors()
 						// LOG_INFO(LogReplication, "Replicated Actor!");
 						auto TimeSeconds = UGameplayStatics::GetTimeSeconds(World);
 						const float MinOptimalDelta = 1.0f / Actor->GetNetUpdateFrequency();
-						const float MaxOptimalDelta = max(1.0f / Actor->GetMinNetUpdateFrequency(), MinOptimalDelta);
+						const float MaxOptimalDelta = std::max(1.0f / Actor->GetMinNetUpdateFrequency(), MinOptimalDelta);
 						const float DeltaBetweenReplications = (TimeSeconds - ActorInfo->LastNetReplicateTime);
 
 						// Choose an optimal time, we choose 70% of the actual rate to allow frequency to go up if needed

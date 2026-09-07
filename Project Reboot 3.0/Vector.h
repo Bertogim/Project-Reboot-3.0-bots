@@ -48,6 +48,11 @@ public:
 		return FVector{ this->X * A, this->Y * A, this->Z * A };
 	}
 
+	FVector operator-() const
+	{
+		return FVector{ -this->X, -this->Y, -this->Z };
+	}
+
 	/* bool operator==(const FVector& A)
 	{
 		return X == A.X && Y == A.Y && Z == A.Z;

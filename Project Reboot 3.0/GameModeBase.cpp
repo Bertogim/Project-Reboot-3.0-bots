@@ -135,7 +135,7 @@ APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AControll
 	// Only displace mid-match: during the lobby/respawn this hook also runs and a big
 	// Z offset makes unused lobby pawns spawn floating then fall in a respawn loop.
 	bool bInMatchPhase = false;
-	if (auto GS = Cast<AFortGameStateAthena>(GameMode->GetWorld()->GetGameState()))
+	if (auto GS = ((AFortGameModeAthena*)GameMode)->GetGameStateAthena())
 		bInMatchPhase = GS->GetGamePhase() >= EAthenaGamePhase::Aircraft;
 
 	if (NewPlayer && bInMatchPhase && Bots::IsBotController((AController*)NewPlayer))

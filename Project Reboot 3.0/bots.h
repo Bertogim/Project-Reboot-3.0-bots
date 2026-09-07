@@ -475,9 +475,9 @@ public:
 
 				float Alt = MyLoc.Z - Destination.Z;
 				if (Alt > 1500.0f)
-					TargetVelocity.Z = std::min(Velocity.Z, -1800.0f); // dive
+					TargetVelocity.Z = std::min((float)Velocity.Z, -1800.0f); // dive
 				else if (Alt < 900.0f)
-					TargetVelocity.Z = std::max(Velocity.Z, -600.0f);  // slow down (glider / landing)
+					TargetVelocity.Z = std::max((float)Velocity.Z, -600.0f);  // slow down (glider / landing)
 
 				Velocity = TargetVelocity;
 			}

@@ -790,15 +790,15 @@ public:
 		for (int i = 0; i < Alive.Num(); ++i)
 		{
 			auto OtherPC = Alive.at(i);
-			if (!OtherPC || OtherPC == Controller || OtherPC->IsActorBeingDestroyed())
+			if (!OtherPC || !OtherPC->IsValidLowLevel() || OtherPC->IsPendingKill() || OtherPC == Controller || OtherPC->IsActorBeingDestroyed())
 				continue;
 
 			auto OtherState = Cast<AFortPlayerStateAthena>(OtherPC->GetPlayerState());
-			if (!OtherState || OtherState->GetTeamIndex() == MyTeam)
+			if (!OtherState || !OtherState->IsValidLowLevel() || OtherState->GetTeamIndex() == MyTeam)
 				continue;
 
 			auto OtherPawn = Cast<AFortPlayerPawnAthena>(OtherPC->GetPawn());
-			if (!OtherPawn || OtherPawn->IsActorBeingDestroyed())
+			if (!OtherPawn || !OtherPawn->IsValidLowLevel() || OtherPawn->IsActorBeingDestroyed())
 				continue;
 
 			FVector TheirLoc = OtherPawn->GetActorLocation();
@@ -841,7 +841,7 @@ public:
 	// skill/aggression combine into a single score. Higher = more dangerous.
 	float EvaluateThreat(AFortPlayerPawnAthena* Opponent)
 	{
-		if (!Pawn || !Opponent)
+		if (!Pawn || !Opponent || !Pawn->IsValidLowLevel() || !Opponent->IsValidLowLevel())
 			return 0.0f;
 
 		FVector MyLoc = Pawn->GetActorLocation();
@@ -901,10 +901,10 @@ public:
 
 	void ApplyBotDamage(AFortPlayerPawnAthena* Victim, float Damage)
 	{
-		if (!Victim || Victim->IsActorBeingDestroyed())
+		if (!Victim || !Victim->IsValidLowLevel() || Victim->IsPendingKill() || Victim->IsActorBeingDestroyed())
 			return;
 		auto VictimFort = Cast<AFortPawn>(Victim);
-		if (!VictimFort)
+		if (!VictimFort || !VictimFort->IsValidLowLevel())
 			return;
 
 		float Shield = VictimFort->GetShield();
@@ -945,7 +945,7 @@ public:
 
 	void FireAt(AFortPlayerPawnAthena* Target, float DeltaTime)
 	{
-		if (!Target || !Pawn)
+		if (!Target || !Pawn || !Target->IsValidLowLevel() || !Pawn->IsValidLowLevel())
 			return;
 
 		auto Weapon = Pawn->GetCurrentWeapon();
@@ -983,7 +983,7 @@ public:
 
 	void EngageTarget(float DeltaTime)
 	{
-		if (!CurrentTarget || !Pawn)
+		if (!CurrentTarget || !Pawn || !CurrentTarget->IsValidLowLevel() || CurrentTarget->IsPendingKill())
 			return;
 		if (CurrentTarget->IsActorBeingDestroyed())
 		{
@@ -1225,7 +1225,9 @@ public:
 
 	void Tick()
 	{
-		if (!Controller || Controller->IsActorBeingDestroyed())
+		if (!Controller || !Controller->IsValidLowLevel() || Controller->IsPendingKill())
+			return;
+		if (Controller->IsActorBeingDestroyed())
 			return;
 
 		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
@@ -1233,7 +1235,8 @@ public:
 		auto PC = Cast<AFortPlayerControllerAthena>(Controller);
 		Pawn = Cast<AFortPlayerPawnAthena>(PC ? PC->GetPawn() : Controller->GetPawn());
 		PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState());
-		if (!Pawn || !PlayerState || Pawn->IsActorBeingDestroyed())
+		if (!Pawn || !Pawn->IsValidLowLevel() || !PlayerState || !PlayerState->IsValidLowLevel()
+			|| Pawn->IsActorBeingDestroyed() || PlayerState->IsPendingKill())
 			return;
 
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
@@ -1430,18 +1433,26 @@ public:
 
 		case EBotState::Looting:
 		{
-			if (GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
-			{
-				SetControlRotation(BotMath::LookAtRotation(Pawn->GetActorLocation(), Pawn->GetActorLocation() + BotMath::DirectionFromYaw(Now * 20.0f) * 300.0f));
-				break;
-			}
-
 			if (Now - LastDecisionTime > 2.0f)
 			{
 				LastDecisionTime = Now;
 				EquipBestWeapon();
 			}
 			PickupNearbyLoot();
+
+			// In warmup there are no containers/floor loot to grab, so just roam and
+			// keep trying to equip a weapon (bots get starting items + pickaxe at spawn).
+			if (GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
+			{
+				if (Now - LastMoveTargetChange > BotMath::RandomRange(2.0f, 5.0f) || BotReachedDestination(MoveTarget, 350.0f))
+				{
+					MoveTarget = Pawn->GetActorLocation() + BotMath::DirectionFromYaw(BotMath::RandomRange(0, 360)) * BotMath::RandomRange(600.0f, 2000.0f);
+					MoveTarget.Z = Pawn->GetActorLocation().Z;
+					LastMoveTargetChange = Now;
+				}
+				BotMoveToward(MoveTarget, 1.0f);
+				break;
+			}
 
 			if (CurrentContainer && (CurrentContainer->IsActorBeingDestroyed() || CurrentContainer->IsAlreadySearched()))
 			{
@@ -2101,10 +2112,16 @@ namespace Bots
 		{
 			auto CurrentPlayer = PlayerBot.Controller;
 
+			if (!CurrentPlayer || !CurrentPlayer->IsValidLowLevel() || CurrentPlayer->IsPendingKill())
+				continue;
+
 			if (CurrentPlayer->IsActorBeingDestroyed())
 				continue;
 
 			auto CurrentPawn = CurrentPlayer->GetPawn();
+
+			if (!CurrentPawn || !CurrentPawn->IsValidLowLevel() || CurrentPawn->IsPendingKill())
+				continue;
 
 			if (CurrentPawn->IsActorBeingDestroyed())
 				continue;

@@ -1400,7 +1400,11 @@ public:
 		}
 
 		// ---- endgame escalation ----
-		int PlayersLeft = GameState->GetPlayersLeft();
+		// Only escalate during the real match (SafeZones phase onward). In the lobby
+		// (None/Setup/Warmup) and on the bus (Aircraft) GetPlayersLeft() is tiny or
+		// meaningless, so forcing EndGame there makes bots wander to a "hold point" and
+		// teleport-fight instead of roaming the lobby.
+		int PlayersLeft = GameState->GetGamePhase() >= EAthenaGamePhase::SafeZones ? GameState->GetPlayersLeft() : 999;
 		bool bIsEndGame = Globals::bLateGame.load() || (PlayersLeft > 0 && PlayersLeft <= 8);
 		if (bIsEndGame)
 		{
@@ -2014,11 +2018,15 @@ namespace Bots
 			{
 				if (i > 0) // displace so bots don't all try to spawn in the exact same spot (collision crash)
 				{
-					float Ring = 120.0f + (float)(i * 40);
+					// bump bots outward (ring 300..~3k) and clear of the ground so they
+					// don't stack on top of the spawning player and fall/respawn in a loop
+					float Spacing = 300.0f + (float)(i % 8) * 275.0f;
+					int RingIdx = 1 + i / 8;
+					float Ring = Spacing * (float)RingIdx;
 					float Ang = (float)((i * 137) % 360);
 					Transform.Translation.X = SpawnLocator->GetActorLocation().X + std::cos(Ang * 3.14159265f / 180.0f) * Ring;
 					Transform.Translation.Y = SpawnLocator->GetActorLocation().Y + std::sin(Ang * 3.14159265f / 180.0f) * Ring;
-					Transform.Translation.Z = SpawnLocator->GetActorLocation().Z + 1000.0f + (float)(i % 4) * 150.0f;
+					Transform.Translation.Z = SpawnLocator->GetActorLocation().Z + 150.0f;
 				}
 				if (SpawnBot(Transform, SpawnLocator))
 					Spawned++;
@@ -2052,11 +2060,13 @@ namespace Bots
 			FTransform SpawnTransform = PlayerStart->GetTransform();
 			if (i > 0) // displace so bots don't stack on the same start (collision crash)
 			{
-				float Ring = 120.0f + (float)(i * 40);
+				float Spacing = 300.0f + (float)(i % 8) * 275.0f;
+				int RingIdx = 1 + i / 8;
+				float Ring = Spacing * (float)RingIdx;
 				float Ang = (float)((i * 137) % 360);
 				SpawnTransform.Translation.X += std::cos(Ang * 3.14159265f / 180.0f) * Ring;
 				SpawnTransform.Translation.Y += std::sin(Ang * 3.14159265f / 180.0f) * Ring;
-				SpawnTransform.Translation.Z += 1000.0f + (float)(i % 4) * 150.0f;
+				SpawnTransform.Translation.Z += 150.0f;
 			}
 
 			if (SpawnBot(SpawnTransform, PlayerStart))
@@ -2126,14 +2136,27 @@ namespace Bots
 
 		for (int i = 0; i < AmountOfBots; ++i)
 		{
-			AActor* PlayerStart = PlayerStarts.at(std::rand() % (PlayerStarts.size() - 1));
+			int StartIndex = (ActorsNum == 1) ? 0 : (std::rand() % ActorsNum);
+			AActor* PlayerStart = PlayerStarts.at(StartIndex);
 
 			if (!PlayerStart)
 			{
 				return;
 			}
 
-			auto NewBot = SpawnBot(PlayerStart->GetTransform(), PlayerStart);
+			FTransform SpawnTransform = PlayerStart->GetTransform();
+			if (i > 0)
+			{
+				float Spacing = 300.0f + (float)(i % 8) * 275.0f;
+				int RingIdx = 1 + i / 8;
+				float Ring = Spacing * (float)RingIdx;
+				float Ang = (float)((i * 137) % 360);
+				SpawnTransform.Translation.X += std::cos(Ang * 3.14159265f / 180.0f) * Ring;
+				SpawnTransform.Translation.Y += std::sin(Ang * 3.14159265f / 180.0f) * Ring;
+				SpawnTransform.Translation.Z += 150.0f;
+			}
+
+			auto NewBot = SpawnBot(SpawnTransform, PlayerStart);
 			NewBot->SetCanBeDamaged(Fortnite_Version < 7); // idk lol for spawn island
 		}
 

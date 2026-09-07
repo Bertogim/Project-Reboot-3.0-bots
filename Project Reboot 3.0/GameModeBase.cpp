@@ -131,7 +131,14 @@ APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AControll
 	// location, every bot after the first fails to spawn due to collision, leaving
 	// them without a pawn (frozen mid-air / then crash). Jitter the spawn so each
 	// bot lands a bit apart.
-	if (NewPlayer && Bots::IsBotController((AController*)NewPlayer))
+	//
+	// Only displace mid-match: during the lobby/respawn this hook also runs and a big
+	// Z offset makes unused lobby pawns spawn floating then fall in a respawn loop.
+	bool bInMatchPhase = false;
+	if (auto GS = Cast<AFortGameStateAthena>(GameMode->GetWorld()->GetGameState()))
+		bInMatchPhase = GS->GetGamePhase() >= EAthenaGamePhase::Aircraft;
+
+	if (NewPlayer && bInMatchPhase && Bots::IsBotController((AController*)NewPlayer))
 	{
 		int BotIndex = 0;
 		for (auto& PB : AllPlayerBotsToTick)

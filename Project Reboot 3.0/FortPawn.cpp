@@ -106,9 +106,20 @@ void AFortPawn::SetMaxShield(float NewShieldVal)
 
 void AFortPawn::NetMulticast_Athena_BatchedDamageCuesHook(UObject* Context, FFrame* Stack, void* Ret)
 {
-	bool bRanBody = false;
-	CRASHGUARD_BEGIN
 	auto Pawn = (AFortPawn*)Context;
+
+	// In the lobby (pre-Aircraft) bots are barely-spawned placeholder pawns that the
+	// engine respawns every few seconds. Processing batched damage cues on them there
+	// (e.g. hitting a bot with the pickaxe) crashes the game thread hard. Skip the
+	// whole multicast until the real match phase (SafeZones onward).
+	auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+	if (GameState && GameState->GetGamePhase() < EAthenaGamePhase::SafeZones)
+	{
+		NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
+		return;
+	}
+
+	bool bRanBody = false;
 	auto Controller = Cast<AFortPlayerController>(Pawn->GetController());
 	auto CurrentWeapon = Pawn->GetCurrentWeapon();
 	auto WorldInventory = Controller ? Controller->GetWorldInventory() : nullptr;
@@ -121,7 +132,6 @@ void AFortPawn::NetMulticast_Athena_BatchedDamageCuesHook(UObject* Context, FFra
 		WorldInventory->CorrectLoadedAmmo(CurrentWeapon->GetItemEntryGuid(), AmmoCount);
 	}
 	bRanBody = true;
-	CRASHGUARD_END
 
 	NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
 }

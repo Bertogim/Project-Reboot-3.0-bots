@@ -45,6 +45,7 @@
 #include "vendingmachine.h"
 #include "die.h"
 #include "calendar.h"
+#include "bots.h"
 #include "KismetRenderingLibrary.h"
 
 #define GAME_TAB 1
@@ -62,6 +63,7 @@
 #define DEBUGLOG_TAB 13
 #define SETTINGS_TAB 14
 #define CREDITS_TAB 15
+#define BOTS_TAB 16
 
 #define MAIN_PLAYERTAB 1
 #define INVENTORY_PLAYERTAB 2
@@ -343,8 +345,6 @@ static inline void StaticUI()
 		}
 	}
 
-	// ImGui::InputInt("Amount of bots to spawn", &AmountOfBotsToSpawn);
-
 	ImGui::Checkbox("Infinite Ammo", &Globals::bInfiniteAmmo);
 	ImGui::Checkbox("Infinite Materials", &Globals::bInfiniteMaterials);
 	
@@ -428,6 +428,14 @@ static inline void MainTabs()
 		if (ImGui::BeginTabItem("Fun"))
 		{
 			Tab = FUN_TAB;
+			PlayerTab = -1;
+			bInformationTab = false;
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Bots"))
+		{
+			Tab = BOTS_TAB;
 			PlayerTab = -1;
 			bInformationTab = false;
 			ImGui::EndTabItem();
@@ -1281,6 +1289,55 @@ static inline void MainUI()
 					{
 						CurrentPlaylist->GetRespawnType() = (EAthenaRespawnType)bRespawning;
 					}
+				}
+			}
+		}
+		else if (Tab == BOTS_TAB)
+		{
+			// Using this tab implies we want the bot AI running
+			bEnableBotTick = true;
+
+			const char* DifficultyNames[] = { "Novato", "Casual", "Agresivo", "Defensivo", "Pro", "Random" };
+			int CurrentDiff = (int)Bots::GlobalBotDifficulty;
+
+			if (ImGui::Combo("Bot Difficulty", &CurrentDiff, DifficultyNames, IM_ARRAYSIZE(DifficultyNames)))
+			{
+				Bots::GlobalBotDifficulty = (EBotPersonalityType)CurrentDiff;
+				Bots::ApplyGlobalDifficulty();
+			}
+
+			ImGui::Separator();
+
+			auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+			int AlivePlayers = GameState ? GameState->GetPlayersLeft() : 0;
+			int CurrentBots = (int)AllPlayerBotsToTick.size();
+
+			ImGui::Text("Current bots: %d", CurrentBots);
+			ImGui::Text("Alive players (incl. bots): %d", AlivePlayers);
+
+			ImGui::Separator();
+
+			ImGui::InputInt("Bots to add", &AmountOfBotsToSpawn);
+			if (AmountOfBotsToSpawn < 0) AmountOfBotsToSpawn = 0;
+
+			AActor* SpawnLocator = nullptr;
+			if (auto LocalPC = Cast<AFortPlayerController>(GetLocalPlayerController()))
+				SpawnLocator = LocalPC->GetPawn();
+
+			if (ImGui::Button("Add bots"))
+			{
+				int N = Bots::AddBots(AmountOfBotsToSpawn, SpawnLocator);
+				LOG_INFO(LogBots, "Added {} bots", N);
+			}
+
+			if (ImGui::Button("Fill up to 100"))
+			{
+				// AlivePlayers already includes our bots, so adding this many reaches 100 total
+				int ToAdd = 100 - AlivePlayers;
+				if (ToAdd > 0)
+				{
+					int N = Bots::AddBots(ToAdd, SpawnLocator);
+					LOG_INFO(LogBots, "Filled up to 100; added {} bots", N);
 				}
 			}
 		}

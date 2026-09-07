@@ -1921,21 +1921,135 @@ public:
 	}
 };
 
-static inline std::vector<PlayerBot> AllPlayerBotsToTick;
+inline std::vector<PlayerBot> AllPlayerBotsToTick;
 
 namespace Bots
 {
+	inline EBotPersonalityType GlobalBotDifficulty = EBotPersonalityType::Casual;
+	inline bool bNewBotsUseGlobalDifficulty = true;
+
+	static AController* SpawnBot(FTransform SpawnTransform, AActor* InSpawnLocator);
+
+	static void ApplyGlobalDifficulty()
+	{
+		for (auto& PlayerBot : AllPlayerBotsToTick)
+		{
+			switch (GlobalBotDifficulty)
+			{
+			case EBotPersonalityType::Novato:
+				PlayerBot.Personality = { 0.25f, 0.25f, 0.20f, 0.40f, 0.30f, 0.25f };
+				break;
+			case EBotPersonalityType::Agresivo:
+				PlayerBot.Personality = { 0.85f, 0.50f, 0.45f, 0.60f, 0.55f, 0.80f };
+				break;
+			case EBotPersonalityType::Defensivo:
+				PlayerBot.Personality = { 0.35f, 0.50f, 0.80f, 0.55f, 0.70f, 0.25f };
+				break;
+			case EBotPersonalityType::Pro:
+				PlayerBot.Personality = { 0.90f, 0.95f, 0.90f, 0.95f, 0.95f, 0.90f };
+				break;
+			case EBotPersonalityType::Random:
+				PlayerBot.AssignRandomPersonality();
+				continue;
+			case EBotPersonalityType::Casual:
+			default:
+				PlayerBot.Personality = { 0.50f, 0.45f, 0.40f, 0.60f, 0.50f, 0.50f };
+				break;
+			}
+			PlayerBot.PersonalityType = GlobalBotDifficulty;
+		}
+	}
+
+	// Spawn bots at whatever player starts exist; returns count spawned.
+	static int AddBots(int AmountOfBots, AActor* SpawnLocator = nullptr)
+	{
+		if (AmountOfBots <= 0)
+			return 0;
+
+		int Spawned = 0;
+
+		if (SpawnLocator)
+		{
+			FTransform Transform;
+			Transform.Translation = SpawnLocator->GetActorLocation();
+			Transform.Translation.Z += 1000;
+			Transform.Scale3D = FVector(1, 1, 1);
+
+			for (int i = 0; i < AmountOfBots; ++i)
+			{
+				if (SpawnBot(Transform, SpawnLocator))
+					Spawned++;
+			}
+			return Spawned;
+		}
+
+		static auto FortPlayerStartCreativeClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerStartCreative");
+		static auto FortPlayerStartWarmupClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerStartWarmup");
+		TArray<AActor*> PlayerStarts = UGameplayStatics::GetAllActorsOfClass(GetWorld(), Globals::bCreative ? FortPlayerStartCreativeClass : FortPlayerStartWarmupClass);
+
+		int ActorsNum = PlayerStarts.Num();
+
+		if (ActorsNum == 0)
+		{
+			PlayerStarts.Free();
+			return 0;
+		}
+
+		for (int i = 0; i < AmountOfBots; ++i)
+		{
+			AActor* PlayerStart = PlayerStarts.at(std::rand() % (PlayerStarts.size() - 1));
+
+			if (!PlayerStart)
+			{
+				PlayerStarts.Free();
+				return Spawned;
+			}
+
+			if (SpawnBot(PlayerStart->GetTransform(), PlayerStart))
+				Spawned++;
+		}
+
+		PlayerStarts.Free();
+		return Spawned;
+	}
+
 	static AController* SpawnBot(FTransform SpawnTransform, AActor* InSpawnLocator)
 	{
 		auto playerBot = PlayerBot();
 		playerBot.Initialize(SpawnTransform, InSpawnLocator);
+
+		if (bNewBotsUseGlobalDifficulty && GlobalBotDifficulty != EBotPersonalityType::Random)
+		{
+			switch (GlobalBotDifficulty)
+			{
+			case EBotPersonalityType::Novato:
+				playerBot.Personality = { 0.25f, 0.25f, 0.20f, 0.40f, 0.30f, 0.25f };
+				break;
+			case EBotPersonalityType::Agresivo:
+				playerBot.Personality = { 0.85f, 0.50f, 0.45f, 0.60f, 0.55f, 0.80f };
+				break;
+			case EBotPersonalityType::Defensivo:
+				playerBot.Personality = { 0.35f, 0.50f, 0.80f, 0.55f, 0.70f, 0.25f };
+				break;
+			case EBotPersonalityType::Pro:
+				playerBot.Personality = { 0.90f, 0.95f, 0.90f, 0.95f, 0.95f, 0.90f };
+				break;
+			case EBotPersonalityType::Casual:
+			default:
+				playerBot.Personality = { 0.50f, 0.45f, 0.40f, 0.60f, 0.50f, 0.50f };
+				break;
+			}
+			playerBot.PersonalityType = GlobalBotDifficulty;
+		}
+
 		AllPlayerBotsToTick.push_back(playerBot);
 		return playerBot.Controller;
 	}
 
 	static void SpawnBotsAtPlayerStarts(int AmountOfBots)
 	{
-		return;
+		if (AmountOfBots <= 0)
+			return;
 
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());

@@ -1949,6 +1949,16 @@ namespace Bots
 		return false;
 	}
 
+	static bool IsBotController(AController* Controller)
+	{
+		if (!Controller)
+			return false;
+		for (auto& PB : AllPlayerBotsToTick)
+			if (PB.Controller == Controller)
+				return true;
+		return false;
+	}
+
 	static AController* SpawnBot(FTransform SpawnTransform, AActor* InSpawnLocator);
 
 	static void ApplyGlobalDifficulty()

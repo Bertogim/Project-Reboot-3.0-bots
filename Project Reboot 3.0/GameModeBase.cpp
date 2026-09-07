@@ -10,6 +10,7 @@
 #include "FortAthenaMutator_InventoryOverride.h"
 #include "calendar.h"
 #include "hooking.h"
+#include "bots.h"
 
 void AGameModeBase::RestartPlayerAtTransform(AController* NewPlayer, FTransform SpawnTransform)
 {
@@ -125,6 +126,28 @@ APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AControll
 	static auto SpawnDefaultPawnAtTransformFn = FindObject<UFunction>(L"/Script/Engine.GameModeBase.SpawnDefaultPawnAtTransform");
 
 	FTransform SpawnTransform = StartSpot->GetTransform();
+
+	// Bots all share the same StartSpot (aircraft). If they spawn in the exact same
+	// location, every bot after the first fails to spawn due to collision, leaving
+	// them without a pawn (frozen mid-air / then crash). Jitter the spawn so each
+	// bot lands a bit apart.
+	if (NewPlayer && Bots::IsBotController((AController*)NewPlayer))
+	{
+		int BotIndex = 0;
+		for (auto& PB : AllPlayerBotsToTick)
+		{
+			if (PB.Controller == NewPlayer)
+				break;
+			++BotIndex;
+		}
+		float Ring = 180.0f + (float)(BotIndex * 45);
+		float Ang = (float)((BotIndex * 137) % 360);
+		FVector Loc = SpawnTransform.Translation;
+		Loc.X += std::cos(Ang * 3.14159265f / 180.0f) * Ring;
+		Loc.Y += std::sin(Ang * 3.14159265f / 180.0f) * Ring;
+		Loc.Z += 1200.0f + (float)(BotIndex % 4) * 400.0f;
+		SpawnTransform.Translation = Loc;
+	}
 
 	struct { AController* NewPlayer; FTransform SpawnTransform; APawn* ReturnValue; }
 	AGameModeBase_SpawnDefaultPawnAtTransform_Params{ NewPlayer, SpawnTransform };

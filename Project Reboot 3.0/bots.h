@@ -206,6 +206,9 @@ public:
 	int TotalPlayersEncountered;
 	std::vector<BotPOI> POIsTraveled;
 	float NextJumpTime = 1.0f;
+	bool bHasJumpedBus = false;
+	FVector LastTickLocation{};
+	bool bHasLastTickLocation = false;
 
 	// ---------- Bot AI ----------
 	EBotState BotState = EBotState::InBus;
@@ -341,6 +344,7 @@ public:
 	{
 		AssignRandomPersonality();
 		bWasAirborne = false;
+		bHasJumpedBus = false;
 		bHasEnemy = false;
 		bHasLandingTarget = false;
 		bHasMoveTarget = false;
@@ -1281,15 +1285,26 @@ public:
 		// bots that the server still flags as "in aircraft" would sit frozen trying to
 		// jump from a bus that hasn't started. Only jump logic when the real Aircraft
 		// phase is active; otherwise treat them as on-foot and roam/loot.
-		if (GameState->GetGamePhase() >= EAthenaGamePhase::Aircraft && PlayerState->IsInAircraft())
+		// Note: bots are NOT flagged by IsInAircraft() (which the server only sets for
+		// real players), so key the jump on the exact Aircraft phase + a per-bot flag.
+		bool bJumpPhase = GameState->GetGamePhase() == EAthenaGamePhase::Aircraft;
+		if (bJumpPhase && !bHasJumpedBus)
 		{
+			// bots aren't flagged by the server as in-aircraft, so their NextJumpTime
+			// was never scheduled by SetupBotAI. Schedule a staggered jump so they don't
+			// all leave at the same instant (matching the human's skydive timing).
+			if (NextJumpTime <= 1.0f)
+				NextJumpTime = Now + BotMath::RandomRange(2.0f, 18.0f - Personality.Aggression * 4.0f);
 			if (!bHasLandingTarget)
 			{
 				PickLandingSpot();
 				BotState = EBotState::ChoosingLanding;
 			}
 			if (Now >= NextJumpTime)
+			{
 				JumpFromBus();
+				bHasJumpedBus = true;
+			}
 			return;
 		}
 		if (BotState == EBotState::InBus || BotState == EBotState::ChoosingLanding)
@@ -2218,6 +2233,24 @@ namespace Bots
 
 			// Run the bot's own decision/tick logic (movement, loot, combat, storm, endgame)
 			PlayerBot.Tick();
+
+			// Teleport-detector: if the pawn's location jumped way too far in a single
+			// frame while it's not flying/falling, something externally relocated it
+			// (e.g. a respawn/teleport back to its original lobby spawn). Log so we can
+			// correlate with respawn hooks.
+			FVector NowLoc = CurrentPawn ? CurrentPawn->GetActorLocation() : FVector{};
+			float PhaseNum = GameState ? (float)GameState->GetGamePhase() : -1.0f;
+			if (PlayerBot.bHasLastTickLocation && CurrentPawn)
+			{
+				float Jump2D = BotMath::Dist2D(PlayerBot.LastTickLocation, NowLoc);
+				if (Jump2D > 1200.0f && !PlayerBot.IsPawnAirborne())
+					LOG_WARN(LogBots, "BOT TELEPORT?? state={} phase={} from=({:.0f},{:.0f},{:.0f}) to=({:.0f},{:.0f},{:.0f}) jump2d={:.0f}",
+						(int)PlayerBot.BotState, PhaseNum,
+						PlayerBot.LastTickLocation.X, PlayerBot.LastTickLocation.Y, PlayerBot.LastTickLocation.Z,
+						NowLoc.X, NowLoc.Y, NowLoc.Z, Jump2D);
+			}
+			PlayerBot.LastTickLocation = NowLoc;
+			PlayerBot.bHasLastTickLocation = true;
 		}
 
 		// AllBuildingContainers.Free();

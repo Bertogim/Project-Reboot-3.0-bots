@@ -1,6 +1,7 @@
 #include "FortPlayerControllerAthena.h"
 #include "FortPlayerPawn.h"
 #include "FortKismetLibrary.h"
+#include "bots.h"
 
 #include "SoftObjectPtr.h"
 #include "globals.h"
@@ -362,7 +363,7 @@ void AFortPlayerControllerAthena::ServerRestartPlayerHook(AFortPlayerControllerA
 	// Controller->GetStateName() = NAME_Spectating;
 	// Controller->SetPlayerIsWaiting(true);
 
-	LOG_INFO(LogDev, "ServerRestartPlayerHook Call 0x{:x} returning with 0x{:x}!", ZoneServerRestartPlayer - __int64(_ReturnAddress()), __int64(ZoneServerRestartPlayerOriginal) - __int64(GetModuleHandleW(0)));
+	LOG_INFO(LogDev, "ServerRestartPlayerHook bot={} Call 0x{:x} returning with 0x{:x}!", Bots::IsBotController(Controller), ZoneServerRestartPlayer - __int64(_ReturnAddress()), __int64(ZoneServerRestartPlayerOriginal) - __int64(GetModuleHandleW(0)));
 	return ZoneServerRestartPlayerOriginal(Controller);
 }
 
@@ -417,7 +418,11 @@ void AFortPlayerControllerAthena::ServerTeleportToPlaygroundLobbyIslandHook(AFor
 
 void AFortPlayerControllerAthena::ServerAcknowledgePossessionHook(APlayerController* Controller, APawn* Pawn)
 {
-	LOG_INFO(LogDev, "ServerAcknowledgePossession!");
+	LOG_INFO(LogDev, "ServerAcknowledgePossession! bot={} possingPawn=({:.0f},{:.0f},{:.0f})",
+		Bots::IsBotController((AController*)Controller),
+		Pawn ? Pawn->GetActorLocation().X : 0.0f,
+		Pawn ? Pawn->GetActorLocation().Y : 0.0f,
+		Pawn ? Pawn->GetActorLocation().Z : 0.0f);
 	static auto AcknowledgedPawnOffset = Controller->GetOffset("AcknowledgedPawn");
 
 	const APawn* OldAcknowledgedPawn = Controller->Get<APawn*>(AcknowledgedPawnOffset);

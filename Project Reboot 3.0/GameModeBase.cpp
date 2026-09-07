@@ -106,7 +106,9 @@ bool AGameModeBase::PlayerCanRestartHook(UObject* Context, FFrame& Stack, bool* 
 
 APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AController* NewPlayer, AActor* StartSpot)
 {
-	LOG_INFO(LogDev, "SpawnDefaultPawnForHook!");
+	bool bIsCtrl = NewPlayer ? Bots::IsBotController((AController*)NewPlayer) : false;
+	FVector SpotLoc = StartSpot ? StartSpot->GetActorLocation() : FVector{};
+	LOG_INFO(LogDev, "SpawnDefaultPawnForHook! bot={} start=({:.0f},{:.0f},{:.0f})", bIsCtrl, SpotLoc.X, SpotLoc.Y, SpotLoc.Z);
 
 	auto NewPlayerAsAthena = Cast<AFortPlayerControllerAthena>(NewPlayer);
 

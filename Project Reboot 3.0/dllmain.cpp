@@ -8,6 +8,7 @@
 #include "hooking.h"
 #include "GameSession.h"
 #include "FortPlayerControllerAthena.h"
+#include "bots.h"
 #include "AbilitySystemComponent.h"
 #include "FortPlayerPawn.h"
 #include "globals.h"
@@ -558,6 +559,10 @@ void TeleportPlayerPawnHook(UObject* Context, FFrame& Stack, void* Ret)
     Stack.StepCompiledIn(&DestRotation);
     Stack.StepCompiledIn(&bIgnoreCollision);
     Stack.StepCompiledIn(&bIgnoreSupplementalKillVolumeSweep);
+
+    LOG_INFO(LogEvent, "TeleportPlayerPawn bot={} pawn=0x{:x} to=({:.0f},{:.0f},{:.0f}) ignoreCol={}",
+        PlayerPawn ? Bots::IsBotPawn((UObject*)PlayerPawn) : false,
+        __int64(PlayerPawn), DestLocation.X, DestLocation.Y, DestLocation.Z, bIgnoreCollision);
 
     PlayerPawn->TeleportTo(DestLocation, DestRotation);
 

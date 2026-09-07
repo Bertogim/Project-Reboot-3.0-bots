@@ -1317,6 +1317,19 @@ static inline void MainUI()
 
 			ImGui::Separator();
 
+			int StateCounts[(int)EBotState::EndGame + 1] = {};
+			const char* StateNames[] = {
+				"InBus", "ChoosingLanding", "Jumping", "Gliding", "Landing",
+				"Looting", "Exploring", "Farming", "SearchingEnemy", "Fighting",
+				"Defending", "Healing", "Rotating", "EndGame",
+			};
+			for (auto& PB : AllPlayerBotsToTick)
+				StateCounts[(int)PB.BotState]++;
+			for (int s = 0; s <= (int)EBotState::EndGame; ++s)
+				ImGui::Text("%s: %d", StateNames[s], StateCounts[s]);
+
+			ImGui::Separator();
+
 			ImGui::InputInt("Bots to add", &AmountOfBotsToSpawn);
 			if (AmountOfBotsToSpawn < 0) AmountOfBotsToSpawn = 0;
 

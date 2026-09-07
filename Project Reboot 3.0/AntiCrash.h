@@ -59,6 +59,15 @@ namespace AntiCrash
 
 		DWORD Code = Info->ExceptionRecord->ExceptionCode;
 
+		// Debugger notifications (OutputDebugString etc.) are raised constantly
+		// (e.g. DBG_PRINTEXCEPTION_C 0x40010006, DBG_PRINTEXCEPTION_WIDE_C
+		// 0x4001000A). They are informational, not fatal: the game itself raises
+		// them on every damage hit. Logging them from inside the handler (spdlog
+		// locks a mutex) jams the game thread until the server dies. Fatal codes
+		// always set the severity bit (0x80000000); debug ones do not.
+		if (!(Code & 0x80000000))
+			return EXCEPTION_CONTINUE_SEARCH;
+
 		// Only log the memory-access failures that commonly kill the server from our hooks.
 		if (Code == EXCEPTION_ACCESS_VIOLATION)
 		{

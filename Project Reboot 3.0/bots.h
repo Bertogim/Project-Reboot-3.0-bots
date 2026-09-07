@@ -1277,10 +1277,11 @@ public:
 		bWasAirborne = Airborne;
 
 		// ---- Battle Bus ----
-		// In the lobby (Warmup) the aircraft isn't actually flying, so bots that the
-		// server still flags as "in aircraft" would sit frozen in the ChoosingLanding
-		// state. Treat them as on-foot and let them roam/loot during warmup instead.
-		if (GameState->GetGamePhase() != EAthenaGamePhase::Warmup && PlayerState->IsInAircraft())
+		// In the lobby (GamePhase is None/Setup/Warmup, the aircraft isn't flying yet)
+		// bots that the server still flags as "in aircraft" would sit frozen trying to
+		// jump from a bus that hasn't started. Only jump logic when the real Aircraft
+		// phase is active; otherwise treat them as on-foot and roam/loot.
+		if (GameState->GetGamePhase() >= EAthenaGamePhase::Aircraft && PlayerState->IsInAircraft())
 		{
 			if (!bHasLandingTarget)
 			{
@@ -1293,13 +1294,8 @@ public:
 		}
 		if (BotState == EBotState::InBus || BotState == EBotState::ChoosingLanding)
 		{
-			if (GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
-				BotState = EBotState::Looting;
-			else
-			{
-				BotState = EBotState::Landing;
-				LandedTime = Now;
-			}
+			BotState = EBotState::Looting;
+			bHasLandingTarget = false;
 		}
 
 		// ---- perception ----

@@ -1277,7 +1277,10 @@ public:
 		bWasAirborne = Airborne;
 
 		// ---- Battle Bus ----
-		if (PlayerState->IsInAircraft())
+		// In the lobby (Warmup) the aircraft isn't actually flying, so bots that the
+		// server still flags as "in aircraft" would sit frozen in the ChoosingLanding
+		// state. Treat them as on-foot and let them roam/loot during warmup instead.
+		if (GameState->GetGamePhase() != EAthenaGamePhase::Warmup && PlayerState->IsInAircraft())
 		{
 			if (!bHasLandingTarget)
 			{
@@ -1290,8 +1293,13 @@ public:
 		}
 		if (BotState == EBotState::InBus || BotState == EBotState::ChoosingLanding)
 		{
-			BotState = EBotState::Landing;
-			LandedTime = Now;
+			if (GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
+				BotState = EBotState::Looting;
+			else
+			{
+				BotState = EBotState::Landing;
+				LandedTime = Now;
+			}
 		}
 
 		// ---- perception ----
@@ -2008,6 +2016,14 @@ namespace Bots
 
 			for (int i = 0; i < AmountOfBots; ++i)
 			{
+				if (i > 0) // displace so bots don't all try to spawn in the exact same spot (collision crash)
+				{
+					float Ring = 120.0f + (float)(i * 40);
+					float Ang = (float)((i * 137) % 360);
+					Transform.Translation.X = SpawnLocator->GetActorLocation().X + std::cos(Ang * 3.14159265f / 180.0f) * Ring;
+					Transform.Translation.Y = SpawnLocator->GetActorLocation().Y + std::sin(Ang * 3.14159265f / 180.0f) * Ring;
+					Transform.Translation.Z = SpawnLocator->GetActorLocation().Z + 1000.0f + (float)(i % 4) * 150.0f;
+				}
 				if (SpawnBot(Transform, SpawnLocator))
 					Spawned++;
 			}
@@ -2028,7 +2044,8 @@ namespace Bots
 
 		for (int i = 0; i < AmountOfBots; ++i)
 		{
-			AActor* PlayerStart = PlayerStarts.at(std::rand() % (PlayerStarts.size() - 1));
+			int StartIndex = (ActorsNum == 1) ? 0 : (std::rand() % ActorsNum);
+			AActor* PlayerStart = PlayerStarts.at(StartIndex);
 
 			if (!PlayerStart)
 			{
@@ -2036,7 +2053,17 @@ namespace Bots
 				return Spawned;
 			}
 
-			if (SpawnBot(PlayerStart->GetTransform(), PlayerStart))
+			FTransform SpawnTransform = PlayerStart->GetTransform();
+			if (i > 0) // displace so bots don't stack on the same start (collision crash)
+			{
+				float Ring = 120.0f + (float)(i * 40);
+				float Ang = (float)((i * 137) % 360);
+				SpawnTransform.Translation.X += std::cos(Ang * 3.14159265f / 180.0f) * Ring;
+				SpawnTransform.Translation.Y += std::sin(Ang * 3.14159265f / 180.0f) * Ring;
+				SpawnTransform.Translation.Z += 1000.0f + (float)(i % 4) * 150.0f;
+			}
+
+			if (SpawnBot(SpawnTransform, PlayerStart))
 				Spawned++;
 		}
 

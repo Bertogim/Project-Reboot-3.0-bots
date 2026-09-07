@@ -85,13 +85,11 @@ namespace AntiCrash
 	}
 }
 
-// Wrap a native hook body. On AV it logs and continues instead of crashing.
-// NOTE: do NOT declare C++ objects with non-trivial destructors inside this scope
-// (MSVC forbids __try with unwind). Keep the guarded block C-style.
-#define CRASHGUARD_BEGIN \
-	__try {
+// Wrappers reserved for possible future SEH guarding. MSVC refuses __try in
+// functions that require C++ object unwinding (C2712, even under /EHa), and these
+// hooks declare objects with destructors (Cast<>, TArray, smart refs...). The real
+// safety net is the vectored exception handler above, which turns a silent crash
+// into a detailed error in the log.
+#define CRASHGUARD_BEGIN
 
-#define CRASHGUARD_END \
-	} __except (AntiCrash::CurrentExceptionCount++, EXCEPTION_EXECUTE_HANDLER) { \
-		LOG_ERROR(LogBots, "AntiCrash: caught exception in hook (code 0x{:x})", GetExceptionCode()); \
-	}
+#define CRASHGUARD_END

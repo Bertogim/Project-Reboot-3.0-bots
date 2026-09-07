@@ -39,6 +39,20 @@ public:
 
 		constexpr size_t Inc = 1;
 
+		// Always copy into our own buffer. Pointing at external memory (especially
+		// temporaries like std::wstring::c_str()) leaves dangling FStrings that
+		// replicate as mojibake (Chinese) to clients once the source dies.
+		if (FMemory::Realloc)
+		{
+			int NewLen = (int)std::wcslen(NewStr) + 1;
+			Data.ArrayNum = NewLen;
+			Data.ArrayMax = NewLen;
+			wchar_t* NewData = (wchar_t*)FMemory::Realloc(0, NewLen * sizeof(wchar_t), 0);
+			memcpy(NewData, NewStr, NewLen * sizeof(wchar_t));
+			Data.Data = NewData;
+			return;
+		}
+
 #ifndef EXPERIMENTAL_FSTRING
 		Data.ArrayMax = Data.ArrayNum = *NewStr ? (int)std::wcslen(NewStr) + Inc : 0;
 

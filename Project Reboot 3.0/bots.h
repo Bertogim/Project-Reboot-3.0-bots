@@ -12,6 +12,7 @@
 #include "FortWeaponItemDefinition.h"
 #include "FortSafeZoneIndicator.h"
 #include "KismetSystemLibrary.h"
+#include "KismetStringLibrary.h"
 #include "EngineTypes.h"
 #include "GameplayTagContainer.h"
 #include "botnames.h"
@@ -209,6 +210,21 @@ public:
 	bool bHasJumpedBus = false;
 	FVector LastTickLocation{};
 	bool bHasLastTickLocation = false;
+
+	// ---- server-side movement fallback ----
+	// The server CharacterMovement of these bot pawns (created with a PlayerController
+	// that has no client connection) often stays in MOVE_None(0): nothing ever performs
+	// the fall -> landing transition that flips it into MOVE_Walking, so PhysWalking
+	// never translates the capsule and the replicated location never leaves the spawn
+	// point (clients re-sync the bot back to spawn the moment they get within range).
+	// BotMoveToward forces the movement mode AND, if the CMC still fails to move the
+	// pawn that frame, relocates it explicitly so the server truth actually advances.
+	float LastMoveTickTime = -100.0f;
+	FVector PrevServLoc{};
+	bool bHasPrevServLoc = false;
+	float LastGroundCheckTime = -100.0f;
+	float CachedGroundZ = 0.0f;
+	bool bHasCachedGround = false;
 
 	// ---------- Bot AI ----------
 	EBotState BotState = EBotState::InBus;
@@ -408,6 +424,68 @@ public:
 		return Mode == 3 || Mode == 4 || Mode == 5 || Mode == 6;
 	}
 
+	// PhysWalking only translates the capsule while MovementMode == MOVE_Walking(1).
+	// These bot pawns spawn with mode stuck at MOVE_None(0) (no client ever triggers the
+	// spawn-landing transition), so force it explicitly when we want to walk. Writing the
+	// byte directly keeps the pawn internally consistent with what GetMovementMode reads.
+	void SetCMCMovementMode(uint8 NewMode)
+	{
+		auto CM = GetCharacterMovement();
+		if (!CM)
+			return;
+		static auto MovementModeOffset = CM->GetOffset("MovementMode");
+		auto& Mode = CM->Get<uint8>(MovementModeOffset);
+		if (Mode != NewMode)
+			Mode = NewMode;
+	}
+
+	// The floor height under the pawn, cached ~1s so we don't trace every frame. Returns
+	// the pawn's own Z when no floor is found (over the void): never snap below it.
+	float GetGroundZ()
+	{
+		if (!Pawn)
+			return 0.0f;
+		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+		if (bHasCachedGround && Now - LastGroundCheckTime < 1.0f)
+			return CachedGroundZ;
+
+		FVector Start = Pawn->GetActorLocation();
+		FVector End = Start;
+		End.Z -= 3000.0f;
+
+		TArray<AActor*> Ignore;
+		Ignore.Add(Pawn);
+
+		static auto BlockAllName = UKismetStringLibrary::Conv_StringToName(L"BlockAll");
+		FHitResult* GroundHit = nullptr;
+		bool bHit = UKismetSystemLibrary::LineTraceSingleByProfile(GetWorld(), Start, End, BlockAllName, false, Ignore, EDrawDebugTrace::None, &GroundHit, false, FLinearColor(), FLinearColor(), 0.0f);
+
+		CachedGroundZ = (bHit && GroundHit) ? GroundHit->GetLocation().Z : Start.Z;
+		LastGroundCheckTime = Now;
+		bHasCachedGround = true;
+		return CachedGroundZ;
+	}
+
+	// Move the pawn straight to NewLocation (teleport-style, no sweep) so the replicating
+	// server position follows the bot even when the CMC isn't simulating it.
+	void SetPawnLocation(const FVector& NewLocation)
+	{
+		if (!Pawn || Pawn->IsActorBeingDestroyed())
+			return;
+		static auto K2_SetActorLocationFn = FindObject<UFunction>(L"/Script/Engine.Actor.K2_SetActorLocation");
+		if (!K2_SetActorLocationFn)
+			return;
+		static auto NewLocationOffset = K2_SetActorLocationFn->GetOffsetFunc("NewLocation");
+		static auto bSweepOffset = K2_SetActorLocationFn->GetOffsetFunc("bSweep");
+		static auto bTeleportOffset = K2_SetActorLocationFn->GetOffsetFunc("bTeleport");
+		static auto ParamsSize = K2_SetActorLocationFn->GetPropertiesSize();
+		auto Params = Alloc(ParamsSize);
+		*(FVector*)(__int64(Params) + NewLocationOffset) = NewLocation;
+		*(bool*)(__int64(Params) + bSweepOffset) = false;
+		*(bool*)(__int64(Params) + bTeleportOffset) = true;
+		Pawn->ProcessEvent(K2_SetActorLocationFn, Params);
+	}
+
 	bool HasLineOfSight(AActor* Other)
 	{
 		if (!Pawn || !Other)
@@ -486,20 +564,60 @@ public:
 			return;
 		}
 
+		// ---- ground movement ----
 		// Drive the CMC velocity directly (same as the airborne path). AddMovementInput
 		// alone does not translate these bot pawns on the dedicated server (their controller
 		// has no client connection), so the server-side location never changes and remote
 		// clients re-sync the bot back to its spawn point.
+		//
+		// The CMC also stays in MOVE_None(0) for these pawns (nothing ever performs the
+		// fall->landing transition that flips it into MOVE_Walking), and PhysWalking only
+		// translates the capsule while mode == MOVE_Walking(1). Force the mode so the CMC
+		// *can* simulate, then verify it actually moved the pawn this frame; if it didn't,
+		// relocate the pawn explicitly so the replicated server position advances.
+		SetCMCMovementMode(1); // MOVE_Walking
+
 		auto CM = GetCharacterMovement();
+		float GroundSpeed = 520.0f * SpeedMultiplier;
 		if (CM)
 		{
 			static auto VelocityOffset = CM->GetOffset("Velocity");
 			auto& Velocity = CM->Get<FVector>(VelocityOffset);
 
-			float GroundSpeed = 520.0f * SpeedMultiplier;
 			Velocity.X = Dir.X * GroundSpeed;
 			Velocity.Y = Dir.Y * GroundSpeed;
 		}
+
+		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+		float DeltaTime = Now - LastMoveTickTime;
+		LastMoveTickTime = Now;
+		if (DeltaTime < 0.001f || DeltaTime > 0.5f)
+			DeltaTime = 0.033f; // guard against hitches / the first tick after spawn
+
+		float WantMove = std::min(GroundSpeed * DeltaTime, BotMath::Dist2D(MyLoc, Destination));
+		float AlreadyMoved = bHasPrevServLoc ? BotMath::Dist2D(Pawn->GetActorLocation(), PrevServLoc) : 0.0f;
+
+		// Only nudge when the CMC under-contributed. If it is simulating (or the bot is
+		// already moving) this is ~0 and we never double-move the pawn.
+		float Shortfall = WantMove - AlreadyMoved;
+		if (Shortfall > 10.0f)
+		{
+			float Step = std::min(Shortfall, 25.0f);
+			FVector NewLoc = Pawn->GetActorLocation() + Dir * Step;
+
+			// Bots spawn 150 units above the ground/player and, if the CMC never simulates,
+			// would hover there forever. Snap them down onto the floor (feet on the ground:
+			// capsule half-height above the terrain trace), but never below it.
+			float GroundZ = GetGroundZ();
+			if (NewLoc.Z - GroundZ > 90.0f)
+				NewLoc.Z = GroundZ + 85.0f;
+
+			SetPawnLocation(NewLoc);
+			Pawn->ForceNetUpdate();
+		}
+
+		bHasPrevServLoc = true;
+		PrevServLoc = Pawn->GetActorLocation();
 
 		static auto AddMovementInputFn = FindObject<UFunction>(L"/Script/Engine.Pawn.AddMovementInput");
 		if (AddMovementInputFn)
@@ -2283,7 +2401,7 @@ namespace Bots
 			{
 				float Jump2D = BotMath::Dist2D(PlayerBot.LastTickLocation, NowLoc);
 				if (Jump2D > 1200.0f && !PlayerBot.IsPawnAirborne())
-					LOG_WARN(LogBots, "BOT TELEPORT?? state={} phase={} from=({:.0f},{:.0f},{:.0f}) to=({:.0f},{:.0f},{:.0f}) jump2d={:.0f}",
+					LOG_INFO(LogBots, "BOT TELEPORT?? state={} phase={} from=({:.0f},{:.0f},{:.0f}) to=({:.0f},{:.0f},{:.0f}) jump2d={:.0f}",
 						(int)PlayerBot.BotState, PhaseNum,
 						PlayerBot.LastTickLocation.X, PlayerBot.LastTickLocation.Y, PlayerBot.LastTickLocation.Z,
 						NowLoc.X, NowLoc.Y, NowLoc.Z, Jump2D);

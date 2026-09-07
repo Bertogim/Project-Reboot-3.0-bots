@@ -24,6 +24,7 @@
 #include "gui.h"
 #include "FortAthenaMutator_InventoryOverride.h"
 #include "FortAthenaMutator_TDM.h"
+#include "bots.h"
 
 void AFortPlayerController::ClientReportDamagedResourceBuilding(ABuildingSMActor* BuildingSMActor, EFortResourceType PotentialResourceType, int PotentialResourceCount, bool bDestroyed, bool bJustHitWeakspot)
 {
@@ -1299,6 +1300,31 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 
 	if (!DeadPawn || !GameState || !DeadPlayerState)
 		return ClientOnPawnDiedOriginal(PlayerController, DeathReport);
+
+	// ---- Lobby no-death guard for bots ----
+	// Before the real match starts (pre-Aircraft: None/Setup/Warmup) the bot pawns are
+	// placeholder placeables. If a client kills one, the usual death + respawn flow
+	// teleports/respawns it back to its lobby StartSpot, which remote clients see as the
+	// bot snapping/frozen back to spawn. Bots must still receive damage, but they must not
+	// DIE here. Nip the whole death flow in the bud: restore the pawn exactly like a revive
+	// would (clear DBNO, restore HP/shield, clear death info) and bail without running the
+	// death report, kill credit or restart thread.
+	if (Bots::IsBotController(PlayerController) && GameState->GetGamePhase() < EAthenaGamePhase::Aircraft)
+	{
+		DeadPawn->SetShield(100);
+		DeadPawn->SetHealth(100);
+		if (DeadPawn->IsDBNO())
+		{
+			DeadPlayerState->EndDBNOAbilities();
+			DeadPawn->SetDBNO(false);
+			DeadPawn->SetHasPlayedDying(false);
+			DeadPawn->OnRep_IsDBNO();
+		}
+		DeadPlayerState->ClearDeathInfo();
+		DeadPawn->ForceNetUpdate();
+		LOG_INFO(LogBots, "Bot saved from death in lobby (phase={})", (int)GameState->GetGamePhase());
+		return;
+	}
 
 	auto DeathLocation = DeadPawn->GetActorLocation();
 

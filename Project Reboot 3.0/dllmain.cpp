@@ -3,6 +3,7 @@
 
 #include "FortGameModeAthena.h"
 #include "reboot.h"
+#include "AntiCrash.h"
 #include "finder.h"
 #include "hooking.h"
 #include "GameSession.h"
@@ -907,6 +908,8 @@ DWORD WINAPI Main(LPVOID)
 {
 #ifndef CLIENT_ONLY
     InitLogger();
+
+    AntiCrash::Install();
 
     std::cin.tie(0);
     std::cout.tie(0);

@@ -3,6 +3,7 @@
 #include "reboot.h"
 #include "FortPlayerControllerAthena.h"
 #include "bots.h"
+#include "AntiCrash.h"
 
 AFortWeapon* AFortPawn::EquipWeaponDefinition(UFortWeaponItemDefinition* WeaponData, const FGuid& ItemEntryGuid)
 {
@@ -105,6 +106,8 @@ void AFortPawn::SetMaxShield(float NewShieldVal)
 
 void AFortPawn::NetMulticast_Athena_BatchedDamageCuesHook(UObject* Context, FFrame* Stack, void* Ret)
 {
+	bool bRanBody = false;
+	CRASHGUARD_BEGIN
 	auto Pawn = (AFortPawn*)Context;
 	auto Controller = Cast<AFortPlayerController>(Pawn->GetController());
 	auto CurrentWeapon = Pawn->GetCurrentWeapon();
@@ -112,17 +115,15 @@ void AFortPawn::NetMulticast_Athena_BatchedDamageCuesHook(UObject* Context, FFra
 
 	// Skip ammo-correction for bots: their lobby/early-game inventory and weapons
 	// aren't fully initialized, and reading/correcting ammo there can crash the engine.
-	if (!WorldInventory || !CurrentWeapon || Bots::IsBotPawn((UObject*)Pawn))
-		return NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
+	if (!bRanBody && WorldInventory && CurrentWeapon && !Bots::IsBotPawn((UObject*)Pawn) && CurrentWeapon->IsValidLowLevel())
+	{
+		auto AmmoCount = CurrentWeapon->GetAmmoCount();
+		WorldInventory->CorrectLoadedAmmo(CurrentWeapon->GetItemEntryGuid(), AmmoCount);
+	}
+	bRanBody = true;
+	CRASHGUARD_END
 
-	auto AmmoCount = CurrentWeapon->GetAmmoCount();
-
-	if (!CurrentWeapon->IsValidLowLevel())
-		return NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
-
-	WorldInventory->CorrectLoadedAmmo(CurrentWeapon->GetItemEntryGuid(), AmmoCount);
-
-	return NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
+	NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
 }
 
 void AFortPawn::MovingEmoteStoppedHook(UObject* Context, FFrame* Stack, void* Ret)

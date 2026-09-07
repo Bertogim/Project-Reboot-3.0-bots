@@ -11,6 +11,7 @@
 #include "AssertionMacros.h"
 #include "bots.h"
 #include "gui.h"
+#include "AntiCrash.h"
 
 enum class EChannelCloseReason : uint8
 {
@@ -40,6 +41,15 @@ void UNetDriver::RemoveNetworkActor(AActor* Actor)
 	// RenamedStartupActors.Remove(Actor->GetFName());
 }
 
+// Called from TickFlushHook. Wrapped in SEH so an AV inside the bot AI (e.g. a
+// stale pointer) logs an error and is swallowed instead of killing the server.
+void SafeBotsTick()
+{
+	CRASHGUARD_BEGIN
+	Bots::Tick();
+	CRASHGUARD_END
+}
+
 void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 {
 	if (bShouldDestroyAllPlayerBuilds) // i hate this
@@ -62,7 +72,7 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 	
 	if (bEnableBotTick)
 	{
-		Bots::Tick();
+		SafeBotsTick();
 	}
 
 	if (Globals::bStartedListening)

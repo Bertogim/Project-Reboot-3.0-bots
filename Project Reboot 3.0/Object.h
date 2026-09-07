@@ -133,7 +133,7 @@ public:
 
 	void AddToRoot();
 	bool IsValidLowLevel();
-	FORCEINLINE bool IsPendingKill() const;
+	bool IsPendingKill() const;
 
 	// static class UClass* StaticClass();
 };

@@ -2,6 +2,7 @@
 
 #include "reboot.h"
 #include "FortPlayerControllerAthena.h"
+#include "bots.h"
 
 AFortWeapon* AFortPawn::EquipWeaponDefinition(UFortWeaponItemDefinition* WeaponData, const FGuid& ItemEntryGuid)
 {
@@ -109,10 +110,15 @@ void AFortPawn::NetMulticast_Athena_BatchedDamageCuesHook(UObject* Context, FFra
 	auto CurrentWeapon = Pawn->GetCurrentWeapon();
 	auto WorldInventory = Controller ? Controller->GetWorldInventory() : nullptr;
 
-	if (!WorldInventory || !CurrentWeapon)
+	// Skip ammo-correction for bots: their lobby/early-game inventory and weapons
+	// aren't fully initialized, and reading/correcting ammo there can crash the engine.
+	if (!WorldInventory || !CurrentWeapon || Bots::IsBotPawn((UObject*)Pawn))
 		return NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
 
 	auto AmmoCount = CurrentWeapon->GetAmmoCount();
+
+	if (!CurrentWeapon->IsValidLowLevel())
+		return NetMulticast_Athena_BatchedDamageCuesOriginal(Context, Stack, Ret);
 
 	WorldInventory->CorrectLoadedAmmo(CurrentWeapon->GetItemEntryGuid(), AmmoCount);
 

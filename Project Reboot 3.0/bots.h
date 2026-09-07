@@ -1939,6 +1939,16 @@ namespace Bots
 	inline EBotPersonalityType GlobalBotDifficulty = EBotPersonalityType::Casual;
 	inline bool bNewBotsUseGlobalDifficulty = true;
 
+	static bool IsBotPawn(UObject* Pawn)
+	{
+		if (!Pawn)
+			return false;
+		for (auto& PB : AllPlayerBotsToTick)
+			if (PB.Pawn == Pawn || (PB.Controller && PB.Controller->GetPawn() == Pawn))
+				return true;
+		return false;
+	}
+
 	static AController* SpawnBot(FTransform SpawnTransform, AActor* InSpawnLocator);
 
 	static void ApplyGlobalDifficulty()

@@ -472,21 +472,33 @@ public:
 				static auto VelocityOffset = CM->GetOffset("Velocity");
 				auto& Velocity = CM->Get<FVector>(VelocityOffset);
 
+				// steer horizontally toward the destination only; let the game's
+				// glider/gravity physics handle the vertical fall naturally so we
+				// never manually dive the bot below the map
 				FVector TargetVelocity = Velocity;
 				float HorizontalSpeed = 520.0f * SpeedMultiplier;
 				TargetVelocity.X = Dir.X * HorizontalSpeed;
 				TargetVelocity.Y = Dir.Y * HorizontalSpeed;
 
-				float Alt = MyLoc.Z - Destination.Z;
-				if (Alt > 1500.0f)
-					TargetVelocity.Z = std::min((float)Velocity.Z, -1800.0f); // dive
-				else if (Alt < 900.0f)
-					TargetVelocity.Z = std::max((float)Velocity.Z, -600.0f);  // slow down (glider / landing)
-
 				Velocity = TargetVelocity;
 			}
 			SetControlRotation(BotMath::LookAtRotation(MyLoc, Destination));
 			return;
+		}
+
+		// Drive the CMC velocity directly (same as the airborne path). AddMovementInput
+		// alone does not translate these bot pawns on the dedicated server (their controller
+		// has no client connection), so the server-side location never changes and remote
+		// clients re-sync the bot back to its spawn point.
+		auto CM = GetCharacterMovement();
+		if (CM)
+		{
+			static auto VelocityOffset = CM->GetOffset("Velocity");
+			auto& Velocity = CM->Get<FVector>(VelocityOffset);
+
+			float GroundSpeed = 520.0f * SpeedMultiplier;
+			Velocity.X = Dir.X * GroundSpeed;
+			Velocity.Y = Dir.Y * GroundSpeed;
 		}
 
 		static auto AddMovementInputFn = FindObject<UFunction>(L"/Script/Engine.Pawn.AddMovementInput");

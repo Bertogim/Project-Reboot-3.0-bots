@@ -19,13 +19,19 @@ public:
 
 	FGuid& GetItemEntryGuid()
 	{
-		static auto ItemEntryGuidOffset = GetOffset("ItemEntryGuid");
+		static auto ItemEntryGuidOffset = GetOffset("ItemEntryGuid", false);
+		static FGuid Dummy{};
+		if (ItemEntryGuidOffset == -1)
+			return Dummy;
 		return Get<FGuid>(ItemEntryGuidOffset);
 	}
 
 	int& GetAmmoCount()
 	{
-		static auto AmmoCountOffset = GetOffset("AmmoCount");
+		static auto AmmoCountOffset = GetOffset("AmmoCount", false);
+		static int Dummy = 0;
+		if (AmmoCountOffset == -1)
+			return Dummy;
 		return Get<int>(AmmoCountOffset);
 	}
 

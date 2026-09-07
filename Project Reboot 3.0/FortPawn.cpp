@@ -128,10 +128,16 @@ void AFortPawn::NetMulticast_Athena_BatchedDamageCuesHook(UObject* Context, FFra
 	// aren't fully initialized, and reading/correcting ammo there can crash the engine.
 	// Also only correct ammo for FIREARMS: a melee weapon (pickaxe) has no ammo
 	// state and reading its AmmoCount/ItemEntryGuid reads invalid offsets -> AV.
+	// Classify by pathname (GetPathName is symbol-safe) instead of dereferencing
+	// GetWeaponData, which can return a garbage pointer for weapons whose SDK
+	// offsets fail to resolve.
 	if (!bRanBody && WorldInventory && CurrentWeapon && !Bots::IsBotPawn((UObject*)Pawn) && CurrentWeapon->IsValidLowLevel())
 	{
-		auto WeaponDef = CurrentWeapon->GetWeaponData<UFortWeaponItemDefinition>();
-		if (WeaponDef && WeaponDef->IsValidLowLevel() && BotWeapons::IsFirearm(WeaponDef))
+		std::string WeaponName = BotWeapons::Lower(CurrentWeapon->GetPathName());
+		bool bIsMelee = WeaponName.find("pickax") != std::string::npos ||
+			WeaponName.find("harvest") != std::string::npos ||
+			WeaponName.find("melee") != std::string::npos;
+		if (!bIsMelee)
 		{
 			auto AmmoCount = CurrentWeapon->GetAmmoCount();
 			WorldInventory->CorrectLoadedAmmo(CurrentWeapon->GetItemEntryGuid(), AmmoCount);

@@ -2,36 +2,37 @@
 
 #include <windows.h>
 #include <psapi.h>
+#include <dbghelp.h>
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <cstdio>
 
 #include "log.h"
 
 #pragma comment(lib, "Psapi.lib")
+#pragma comment(lib, "dbghelp.lib")
 
 // Lightweight anti-crash utilities.
 //
 // 1. A vectored exception handler that logs any unhandled access violation with
-//    useful detail (exception code, faulting address, module + offset) straight
-//    into the spdlog reboot.log, so a crash gives you a real trace instead of a
-//    silent process death.
-//
-// 2. A CRASHGUARD macro to wrap the body of our risky native hooks in __try/__except
-//    so an access violation is captured, logged and swallowed instead of killing the
-//    whole dedicated server.
+//    useful detail (exception code, faulting address, registers, the bytes of the
+//    faulting instruction and a native backtrace with module+offset per frame)
+//    straight into the spdlog reboot.log, so a crash gives you a real trace
+//    instead of a silent process death.
 
 namespace AntiCrash
 {
 	inline long CurrentExceptionCount = 0;
 
-	inline void PrintModule(uintptr_t Address)
+	inline const char* GetModuleName(uintptr_t Address)
 	{
-		HMODULE hMods[256];
+		static thread_local char TLName[MAX_PATH] = "";
+		HMODULE hMods[512];
 		DWORD cbNeeded = 0;
+		TLName[0] = 0;
 		if (!EnumProcessModulesEx(GetCurrentProcess(), hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL))
-			return;
-
+			return TLName;
 		int Count = (int)(cbNeeded / sizeof(HMODULE));
 		for (int i = 0; i < Count; ++i)
 		{
@@ -43,13 +44,81 @@ namespace AntiCrash
 			{
 				if (GetModuleBaseNameA(GetCurrentProcess(), hMods[i], Name, sizeof(Name)))
 				{
-					LOG_ERROR(LogBots, "AntiCrash: fault in module '{}' at 0x{:x} (offset from base 0x{:x})",
-						(Name[0] ? Name : "?"), Address, Address - (uintptr_t)Info.lpBaseOfDll);
+					snprintf(TLName, MAX_PATH, "%s+0x%llx", Name[0] ? Name : "?", (unsigned long long)(Address - (uintptr_t)Info.lpBaseOfDll));
 				}
-				return;
+				break;
 			}
 		}
-		LOG_ERROR(LogBots, "AntiCrash: fault at unknown module, addr 0x{:x}", Address);
+		return TLName;
+	}
+
+	inline bool IsRangeReadable(uintptr_t Addr, size_t Len)
+	{
+		MEMORY_BASIC_INFORMATION Mbi{};
+		if (!VirtualQuery((LPCVOID)Addr, &Mbi, sizeof(Mbi)))
+			return false;
+		if (Mbi.State != MEM_COMMIT)
+			return false;
+		if (Mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+			return false;
+		return true;
+	}
+
+	inline void PrintRegisters(CONTEXT* C)
+	{
+#if defined(_M_X64)
+		LOG_ERROR(LogBots, "AntiCrash: RIP=0x{:x} RSP=0x{:x} RBP=0x{:x}", (uintptr_t)C->Rip, (uintptr_t)C->Rsp, (uintptr_t)C->Rbp);
+		LOG_ERROR(LogBots, "AntiCrash: RAX=0x{:x} RBX=0x{:x} RCX=0x{:x} RDX=0x{:x}",
+			(uintptr_t)C->Rax, (uintptr_t)C->Rbx, (uintptr_t)C->Rcx, (uintptr_t)C->Rdx);
+		LOG_ERROR(LogBots, "AntiCrash: RSI=0x{:x} RDI=0x{:x} R8=0x{:x} R9=0x{:x}",
+			(uintptr_t)C->Rsi, (uintptr_t)C->Rdi, (uintptr_t)C->R8, (uintptr_t)C->R9);
+		LOG_ERROR(LogBots, "AntiCrash: R10=0x{:x} R11=0x{:x} R12=0x{:x} R13=0x{:x} R14=0x{:x} R15=0x{:x}",
+			(uintptr_t)C->R10, (uintptr_t)C->R11, (uintptr_t)C->R12, (uintptr_t)C->R13, (uintptr_t)C->R14, (uintptr_t)C->R15);
+#else
+		LOG_ERROR(LogBots, "AntiCrash: EIP=0x{:x} ESP=0x{:x} EBP=0x{:x}", (uintptr_t)C->Eip, (uintptr_t)C->Esp, (uintptr_t)C->Ebp);
+		LOG_ERROR(LogBots, "AntiCrash: EAX=0x{:x} EBX=0x{:x} ECX=0x{:x} EDX=0x{:x}", (uintptr_t)C->Eax, (uintptr_t)C->Ebx, (uintptr_t)C->Ecx, (uintptr_t)C->Edx);
+		LOG_ERROR(LogBots, "AntiCrash: ESI=0x{:x} EDI=0x{:x}", (uintptr_t)C->Esi, (uintptr_t)C->Edi);
+#endif
+	}
+
+	inline void PrintInstruction(uintptr_t Rip)
+	{
+		// Dump the raw bytes around the faulting instruction so a disassembler can
+		// decode it even without symbols for the engine.
+		uintptr_t Start = Rip >= 16 ? Rip - 16 : 0;
+		unsigned char Bytes[64];
+		int Printed = 0;
+		for (int i = 0; i < 64; ++i)
+		{
+			uintptr_t A = Start + i;
+			if (IsRangeReadable(A, 1))
+				Bytes[i] = *(volatile unsigned char*)A;
+			else
+				Bytes[i] = 0xCC;
+		}
+		std::string Hex = "AntiCrash: inst at RIP-16 [-16..+47]  ";
+		char Buf[8];
+		for (int i = 0; i < 64; ++i)
+		{
+			snprintf(Buf, sizeof(Buf), "%02x ", Bytes[i]);
+			Hex += Buf;
+			if (i == 31)
+				Hex += "\n                                      ";
+			Printed++;
+		}
+		LOG_ERROR(LogBots, "{}", Hex);
+	}
+
+	inline void PrintStackBacktrace()
+	{
+		constexpr int kMaxFrames = 64;
+		void* Frames[kMaxFrames] = {};
+		USHORT Count = CaptureStackBackTrace(0, kMaxFrames, Frames, nullptr);
+		for (int i = 0; i < Count; ++i)
+		{
+			const char* Mod = GetModuleName((uintptr_t)Frames[i]);
+			LOG_ERROR(LogBots, "AntiCrash: #{:02d} 0x{:x} [{}]", i, (uintptr_t)Frames[i], Mod[0] ? Mod : "?");
+		}
 	}
 
 	inline LONG WINAPI VectoredHandler(PEXCEPTION_POINTERS Info)
@@ -68,20 +137,28 @@ namespace AntiCrash
 		if (!(Code & 0x80000000))
 			return EXCEPTION_CONTINUE_SEARCH;
 
-		// Only log the memory-access failures that commonly kill the server from our hooks.
+		LOG_ERROR(LogBots, "========== AntiCrash: exception 0x{:08x} at RIP 0x{:x} ==========",
+			Code, (uintptr_t)Info->ContextRecord->Rip);
+
 		if (Code == EXCEPTION_ACCESS_VIOLATION)
 		{
+			ULONG_PTR Info0 = Info->ExceptionRecord->ExceptionInformation[0];
 			uintptr_t FaultAddress = (uintptr_t)Info->ExceptionRecord->ExceptionInformation[1];
-			LOG_ERROR(LogBots, "========== AntiCrash: ACCESS_VIOLATION at 0x{:x} (read), RIP 0x{:x} ==========",
-				FaultAddress, (uintptr_t)Info->ContextRecord->Rip);
-			PrintModule((uintptr_t)Info->ContextRecord->Rip);
-			LOG_ERROR(LogBots, "AntiCrash: if this repeats check Bots::Tick / bot spawn / damage hooks.");
+			LOG_ERROR(LogBots, "AntiCrash: ACCESS_VIOLATION access={} address=0x{:x}",
+				(Info0 == 0) ? "read" : (Info0 == 1) ? "write" : (Info0 == 8) ? "execute" : "?",
+				FaultAddress);
 		}
-		else
-		{
-			LOG_ERROR(LogBots, "AntiCrash: unhandled exception code 0x{:x} at RIP 0x{:x}", Code, (uintptr_t)Info->ContextRecord->Rip);
-			PrintModule((uintptr_t)Info->ContextRecord->Rip);
-		}
+
+		LOG_ERROR(LogBots, "AntiCrash: faulting instruction module: {}",
+			[](uintptr_t A) { const char* M = GetModuleName(A); return M[0] ? M : "?"; }((uintptr_t)Info->ContextRecord->Rip));
+
+		PrintRegisters(Info->ContextRecord);
+		PrintInstruction((uintptr_t)Info->ContextRecord->Rip);
+
+		LOG_ERROR(LogBots, "AntiCrash: native backtrace:");
+		PrintStackBacktrace();
+
+		LOG_ERROR(LogBots, "AntiCrash: if this repeats check Bots::Tick / bot spawn / damage hooks.");
 
 		return EXCEPTION_CONTINUE_SEARCH;
 	}

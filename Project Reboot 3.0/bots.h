@@ -1303,14 +1303,25 @@ public:
 		// phase is active; otherwise treat them as on-foot and roam/loot.
 		// Note: bots are NOT flagged by IsInAircraft() (which the server only sets for
 		// real players), so key the jump on the exact Aircraft phase + a per-bot flag.
+		// Replicate what the server does for real players when the bus starts: their
+		// PlayerState is flagged bInAircraft and they enter the InBus -> ChoosingLanding
+		// -> Jumping -> Gliding flow. Bots never get that flag (no client RPC), so they
+		// stay in whatever lobby state they had. Force them into the bus flow the first
+		// tick of the Aircraft phase so they always schedule a jump instead of being
+		// force-ejected at the end of the bus route and left hanging in the air.
 		bool bJumpPhase = GameState->GetGamePhase() == EAthenaGamePhase::Aircraft;
 		if (bJumpPhase && !bHasJumpedBus)
 		{
-			// bots aren't flagged by the server as in-aircraft, so their NextJumpTime
-			// was never scheduled by SetupBotAI. Schedule a staggered jump so they don't
-			// all leave at the same instant (matching the human's skydive timing).
 			if (NextJumpTime <= 1.0f)
+			{
 				NextJumpTime = Now + BotMath::RandomRange(2.0f, 18.0f - Personality.Aggression * 4.0f);
+				BotState = EBotState::InBus;
+				bHasLandingTarget = false;
+				bHasMoveTarget = false;
+				CurrentTarget = nullptr;
+				bHasEnemy = false;
+				bHasLastKnownEnemyLocation = false;
+			}
 			if (!bHasLandingTarget)
 			{
 				PickLandingSpot();

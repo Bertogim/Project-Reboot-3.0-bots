@@ -516,6 +516,11 @@ namespace
 			gDebugBot.Step = DebugBotState::MovingForward;
 			LOG_INFO(LogBots, "[DebugBot] -> MovingForward");
 
+			// EXPERIMENTO: impulso nativo (LaunchCharacter Z puro) para ver si la
+			// fisica del pawn responde. Si sube y cae: la fisica funciona.
+			LOG_INFO(LogBots, "[DebugBot] PHYSICS-PROBE: LaunchCharacter impulse Z=300");
+			CustomBotMovement::Launch(Bot, FVector(0, 0, 300), false, false);
+
 			FVector Fwd = Bot.Pawn->GetActorForwardVector();
 			FVector Start = Bot.Pawn->GetActorLocation();
 			FVector Dest{ Start.X + Fwd.X * 250.0f, Start.Y + Fwd.Y * 250.0f, Start.Z };
@@ -540,12 +545,24 @@ namespace
 			}
 			else
 			{
-				// Log de progreso cada 2 segundos.
+				// Log de progreso cada 2 segundos, incluyendo Velocity real y
+				// MovementMode para seguir el probe de fisica.
 				static double LastMoveLog = 0;
 				if (T - LastMoveLog >= 2.0)
 				{
-					LOG_INFO(LogBots, "[DebugBot] [MovingForward] pos=({:.0f},{:.0f},{:.0f}) moveState={}",
-						Pos.X, Pos.Y, Pos.Z, (int)Bot.MoveState);
+					FVector V{}, A{};
+					int Mode = -1;
+					if (auto* CM = CustomBotMovement::GetCharacterMovement(Bot))
+					{
+						static const auto OffV = CM->GetOffset("Velocity");
+						static const auto OffA = CM->GetOffset("Acceleration");
+						static const auto OffM = CM->GetOffset("MovementMode");
+						V = CM->Get<FVector>(OffV);
+						A = CM->Get<FVector>(OffA);
+						if (OffM != -1) Mode = *(int*)(__int64(CM) + OffM);
+					}
+					LOG_INFO(LogBots, "[DebugBot] [MovingForward] pos=({:.0f},{:.0f},{:.0f}) moveState={} vel=({:.0f},{:.0f},{:.0f}) acc=({:.0f},{:.0f},{:.0f}) mode={}",
+						Pos.X, Pos.Y, Pos.Z, (int)Bot.MoveState, V.X, V.Y, V.Z, A.X, A.Y, A.Z, Mode);
 					LastMoveLog = T;
 				}
 			}

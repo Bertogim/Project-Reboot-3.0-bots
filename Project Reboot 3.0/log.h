@@ -67,7 +67,7 @@ inline void InitLogger()
     sinks.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(logName, true))->set_pattern("[%D-%T] %n: %l: %v");
 
     MakeLogger("LogInit");
-    LOG_INFO(LogInit, "Project Reboot 3.0 build {} (hash {})", BuildVersion::GetVersion(), BuildVersion::GetHash());
+    if (auto L = spdlog::get("LogInit")) L->info("Project Reboot 3.0 build {} (hash {})", BuildVersion::GetVersion(), BuildVersion::GetHash());
 
     MakeLogger("LogTeams");
     MakeLogger("LogMemory");

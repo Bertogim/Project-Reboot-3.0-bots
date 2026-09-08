@@ -544,6 +544,11 @@ public:
 
 		if (IsPawnAirborne())
 		{
+			static int DBGAir = 0;
+			if ((DBGAir++ % 60) == 0)
+				LOG_INFO(LogBots, "MOVEAIR state={} mode={} loc=({:.0f},{:.0f},{:.0f}) dest=({:.0f},{:.0f},{:.0f})",
+					(int)BotState, (int)GetMovementMode(), MyLoc.X, MyLoc.Y, MyLoc.Z, Destination.X, Destination.Y, Destination.Z);
+
 			auto CM = GetCharacterMovement();
 			if (CM)
 			{

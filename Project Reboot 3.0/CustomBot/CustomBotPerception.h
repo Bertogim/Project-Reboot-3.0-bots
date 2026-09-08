@@ -18,6 +18,11 @@
 
 namespace CustomBotPerception
 {
+	// Forward declarations (usadas antes de su definicion al final del modulo).
+	static bool IsAlly(CustomBot& Bot, AFortPlayerStateAthena* Other);
+	static bool IsEnemy(CustomBot& Bot, AFortPlayerStateAthena* Other);
+	static AFortPlayerStateAthena* GetPlayerStateOf(AActor* Actor);
+
 	// Tipos de item que puede contener un pickup / inventory.
 	enum class EItemType : uint8_t
 	{

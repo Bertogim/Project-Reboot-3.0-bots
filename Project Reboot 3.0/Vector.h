@@ -23,12 +23,12 @@ public:
 	FVector() : X(0), Y(0), Z(0) {}
 	FVector(VectorDataType x, VectorDataType y, VectorDataType z) : X(x), Y(y), Z(z) {}
 
-	FVector operator+(const FVector& A)
+	FVector operator+(const FVector& A) const
 	{
 		return FVector{ this->X + A.X, this->Y + A.Y, this->Z + A.Z };
 	}
 
-	FVector operator-(const FVector& A)
+	FVector operator-(const FVector& A) const
 	{
 		return FVector{ this->X - A.X, this->Y - A.Y, this->Z - A.Z };
 	}
@@ -43,7 +43,7 @@ public:
 		return X * V.X + Y * V.Y + Z * V.Z;
 	}
 
-	FVector operator*(const VectorDataType A)
+	FVector operator*(const VectorDataType A) const
 	{
 		return FVector{ this->X * A, this->Y * A, this->Z * A };
 	}

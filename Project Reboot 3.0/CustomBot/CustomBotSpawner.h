@@ -19,6 +19,11 @@ namespace CustomBotSpawner
 	static inline UClass* PawnClass = nullptr;
 	static inline UClass* ControllerClass = nullptr;
 
+	// Forward declarations (definidas debajo; SpawnCustomBot las usa antes).
+	static void SetCustomBotName(CustomBot& Bot, AFortGameModeAthena* GameMode);
+	static void GrantAbilities(CustomBot& Bot);
+	static bool SetupInventory(CustomBot& Bot, AFortGameModeAthena* GameMode);
+
 	static void TickAll()
 	{
 		// Marcar los bots a eliminar y borrarlos DESPUES del bucle: un bot puede
@@ -47,7 +52,7 @@ namespace CustomBotSpawner
 	// Inicializa las clases de pawn/controller (una sola vez).
 	static bool InitializeClasses()
 	{
-		static inline bool bInitialized = false;
+		static bool bInitialized = false;
 
 		if (!bInitialized)
 		{

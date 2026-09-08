@@ -23,6 +23,10 @@ namespace CustomBotMovement
 
 	constexpr float RAD_TO_DEG = 180.0f / 3.14159265358979323846f;
 
+	// Rota el pawn (y su control) hacia una rotacion concreta. (definida debajo;
+	// LookAt la usa antes de su definicion).
+	static void SetRotation(CustomBot& Bot, const FRotator& Rotation);
+
 	// Devuelve la direccion normalizada desde From hacia To.
 	// Si From==To devuelve zero. La normalizacion se hace a mano porque FVector
 	// del repo no tiene .Size()/.Normalize() (solo SizeSquared y dot).

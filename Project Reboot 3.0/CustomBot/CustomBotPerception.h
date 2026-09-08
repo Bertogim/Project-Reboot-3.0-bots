@@ -51,17 +51,19 @@ namespace CustomBotPerception
 		static auto FortTrapItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortTrapItemDefinition");
 		static auto FortGadgetItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortGadgetItemDefinition");
 		static auto FortDecoItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortDecoItemDefinition");
+		static auto FortEditToolItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortEditToolItemDefinition");
 
 	#define IS(Class) (Class && ItemDefinition->IsA(Class))
 
-		if (IS(FortWeaponItemDefinitionClass)) return EItemType::Weapon;
-		if (IS(FortAmmoItemDefinitionClass))  return EItemType::Ammo;
+		if (IS(FortEditToolItemDefinitionClass))  return EItemType::BuildingPiece;
+		if (IS(FortWeaponItemDefinitionClass))    return EItemType::Weapon;
+		if (IS(FortAmmoItemDefinitionClass))      return EItemType::Ammo;
 		if (IS(FortConsumableItemDefinitionClass)) return EItemType::Consumable;
-		if (IS(FortResourceItemDefinitionClass))  return EItemType::Resource;
-		if (IS(FortBuildingItemDefinitionClass))  return EItemType::BuildingPiece;
-		if (IS(FortTrapItemDefinitionClass))     return EItemType::Trap;
-		if (IS(FortGadgetItemDefinitionClass))    return EItemType::Gadget;
-		if (IS(FortDecoItemDefinitionClass))     return EItemType::ConsumableDeco;
+		if (IS(FortResourceItemDefinitionClass))   return EItemType::Resource;
+		if (IS(FortBuildingItemDefinitionClass))   return EItemType::BuildingPiece;
+		if (IS(FortTrapItemDefinitionClass))       return EItemType::Trap;
+		if (IS(FortGadgetItemDefinitionClass))     return EItemType::Gadget;
+		if (IS(FortDecoItemDefinitionClass))       return EItemType::ConsumableDeco;
 
 	#undef IS
 

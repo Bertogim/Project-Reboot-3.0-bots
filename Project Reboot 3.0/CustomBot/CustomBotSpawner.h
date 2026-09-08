@@ -73,6 +73,8 @@ namespace CustomBotSpawner
 	// Spawna un bot custom en SpawnTransform y lo devuelve (o nullptr si falla).
 	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator = nullptr)
 	{
+		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot start ===");
+
 		if (!IsReadyToSpawn())
 		{
 			LOG_ERROR(LogBots, "[CustomBot] Classes not ready to spawn bot!");
@@ -94,6 +96,7 @@ namespace CustomBotSpawner
 
 		// Orden de spawn correcto (ver bots.h Initialize): controller, luego pawn,
 		// luego recuperar el playerstate de la posesion del controller.
+		LOG_INFO(LogBots, "[CustomBot] Spawning controller...");
 		Bot.Controller = GetWorld()->SpawnActor<AFortPlayerControllerAthena>(ControllerClass);
 
 		if (!Bot.Controller)
@@ -103,6 +106,7 @@ namespace CustomBotSpawner
 			return nullptr;
 		}
 
+		LOG_INFO(LogBots, "[CustomBot] Spawning pawn...");
 		Bot.Pawn = GetWorld()->SpawnActor<AFortPlayerPawnAthena>(
 			PawnClass,
 			SpawnTransform,
@@ -116,6 +120,7 @@ namespace CustomBotSpawner
 			return nullptr;
 		}
 
+		LOG_INFO(LogBots, "[CustomBot] Getting PlayerState...");
 		Bot.PlayerState = Cast<AFortPlayerStateAthena>(Bot.Controller->GetPlayerState());
 
 		if (!Bot.PlayerState)
@@ -129,13 +134,16 @@ namespace CustomBotSpawner
 
 		// Marcar como bot para el sistema nativo.
 		Bot.PlayerState->SetIsBot(true);
+		LOG_INFO(LogBots, "[CustomBot] SetIsBot=true");
 
 		// Poseer el pawn.
 		if (Bot.Controller->GetPawn() != Bot.Pawn)
 			Bot.Controller->Possess(Bot.Pawn);
+		LOG_INFO(LogBots, "[CustomBot] Possess done");
 
 		// Nombre.
 		SetCustomBotName(Bot, GameMode);
+		LOG_INFO(LogBots, "[CustomBot] Name set");
 
 		// Team + squad.
 		Bot.PlayerState->GetTeamIndex() = GameMode->Athena_PickTeamHook(GameMode, 0, Bot.Controller);
@@ -145,20 +153,27 @@ namespace CustomBotSpawner
 		if (SquadIdOffset != -1)
 			Bot.PlayerState->GetSquadId() = Bot.PlayerState->GetTeamIndex() - NumToSubtractFromSquadId;
 
+		LOG_INFO(LogBots, "[CustomBot] Team={} Squad={}", Bot.PlayerState->GetTeamIndex(),
+			SquadIdOffset != -1 ? (int)Bot.PlayerState->GetSquadId() : -1);
+
 		// Registrar en GameState.
 		GameState->AddPlayerStateToGameMemberInfo(Bot.PlayerState);
 
 		// Vida/escudo base.
 		Bot.Pawn->SetHealth(100);
 		Bot.Pawn->SetMaxHealth(100);
+		LOG_INFO(LogBots, "[CustomBot] Health set to 100/100");
 
 		// Abilities.
+		LOG_INFO(LogBots, "[CustomBot] Granting abilities...");
 		GrantAbilities(Bot);
 
 		// Inventario.
+		LOG_INFO(LogBots, "[CustomBot] Setting up inventory...");
 		SetupInventory(Bot, GameMode);
 
 		// Skin/cosmetico.
+		LOG_INFO(LogBots, "[CustomBot] Applying cosmetic loadout...");
 		ApplyRandomCosmeticLoadout(Bot);
 
 		// Registrar en GameMode.
@@ -168,7 +183,9 @@ namespace CustomBotSpawner
 
 		Bot.bInitialized = true;
 
-		LOG_INFO(LogBots, "[CustomBot] Finished spawning custom bot!");
+		FVector BotPos = Bot.Pawn->GetActorLocation();
+		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE pos=({:.0f},{:.0f},{:.0f}) ===",
+			BotPos.X, BotPos.Y, BotPos.Z);
 		return &AllCustomBots.back();
 	}
 
@@ -198,58 +215,91 @@ namespace CustomBotSpawner
 	}
 
 	// Aplica una skin aleatoria al bot (replica PickRandomLoadout + ApplyCosmeticLoadout
-	// del sistema antiguo bots.h). Busca todos los FortHeroType disponibles, elige uno
-	// al azar de /Game/Athena/Heroes/ y lo aplica via ApplyHID con ServerChoosePart.
+	// del sistema antiguo usa ApplyHID con ServerChoosePart=true, que solo procesa la
+	// primera specialization. El sistema real del jugador usa ApplyCID con
+	// bUseServerChoosePart=false → ApplyCharacterCosmetics que procesa TODAS las
+	// specializations. Replicamos ese flujo aqui.
 	static void ApplyRandomCosmeticLoadout(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn || !Bot.PlayerState)
-			return;
-
-		auto HeroTypeClass = FindObject<UClass>(L"/Script/FortniteGame.FortHeroType");
-
-		if (!HeroTypeClass)
-			return;
-
-		auto AllHeroTypes = GetAllObjectsOfClass(HeroTypeClass);
-		std::vector<UFortItemDefinition*> AthenaHeroTypes;
-
-		for (size_t i = 0; i < AllHeroTypes.size(); ++i)
 		{
-			auto CurrentHeroType = (UFortItemDefinition*)AllHeroTypes.at(i);
-
-			if (!CurrentHeroType)
-				continue;
-
-			if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
-				AthenaHeroTypes.push_back(CurrentHeroType);
+			LOG_WARN(LogBots, "[CustomBot] ApplyRandomCosmeticLoadout: bot not ready");
+			return;
 		}
 
-		// Seleccionar un HeroType: priorizar aleatorio de Athena, fallback a ruta conocida.
+		// Buscar un HeroType: primero GetAllObjectsOfClass, luego FindObject con paths conocidos.
+		auto HeroTypeClass = FindObject<UClass>(L"/Script/FortniteGame.FortHeroType");
 		UFortItemDefinition* HeroType = nullptr;
 
-		if (!AthenaHeroTypes.empty())
+		if (HeroTypeClass)
 		{
-			HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size());
+			auto AllHeroTypes = GetAllObjectsOfClass(HeroTypeClass);
+			std::vector<UFortItemDefinition*> AthenaHeroTypes;
+
+			for (size_t i = 0; i < AllHeroTypes.size(); ++i)
+			{
+				auto CurrentHeroType = (UFortItemDefinition*)AllHeroTypes.at(i);
+
+				if (!CurrentHeroType)
+					continue;
+
+				if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
+					AthenaHeroTypes.push_back(CurrentHeroType);
+			}
+
+			LOG_INFO(LogBots, "[CustomBot] Found {} Athena HeroTypes via GetAllObjectsOfClass", AthenaHeroTypes.size());
+
+			if (!AthenaHeroTypes.empty())
+				HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size());
 		}
-		else
+
+		// Fallback: FindObject con paths conocidos (varian por version).
+		if (!HeroType)
 		{
-			HeroType = FindObject<UFortItemDefinition>(
-				L"/Game/Athena/Heroes/HID_030_Athena_Commando_M_Halloween.HID_030_Athena_Commando_M_Halloween");
+			static const wchar_t* FallbackPaths[] = {
+				L"/Game/Athena/Heroes/HID_088_Athena_Commando_M_SpaceBlack.HID_088_Athena_Commando_M_SpaceBlack",
+				L"/Game/Athena/Heroes/HID_030_Athena_Commando_M_Halloween.HID_030_Athena_Commando_M_Halloween",
+				L"/Game/Athena/Heroes/HID_021_Athena_Commando_M_Soldier.HID_021_Athena_Commando_M_Soldier",
+			};
+
+			for (auto* Path : FallbackPaths)
+			{
+				HeroType = FindObject<UFortItemDefinition>(Path);
+
+				if (HeroType)
+				{
+					LOG_INFO(LogBots, "[CustomBot] Fallback HeroType found: {}", HeroType->GetPathName());
+					break;
+				}
+			}
 		}
 
 		if (!HeroType)
-			return; // nada que aplicar
+		{
+			LOG_WARN(LogBots, "[CustomBot] No HeroType found, bot will have no skin");
+			return;
+		}
+
+		LOG_INFO(LogBots, "[CustomBot] Applying cosmetic: {}", HeroType->GetPathName());
 
 		// Guardar en PlayerState (como hace el sistema antiguo).
 		static auto HeroTypeOffset = Bot.PlayerState->GetOffset("HeroType", false);
 
 		if (HeroTypeOffset != -1)
+		{
 			Bot.PlayerState->Get(HeroTypeOffset) = HeroType;
+			LOG_INFO(LogBots, "[CustomBot] HeroType set on PlayerState (offset={})", HeroTypeOffset);
+		}
+		else
+		{
+			LOG_WARN(LogBots, "[CustomBot] HeroType offset not found on PlayerState, skipping PS set");
+		}
 
-		// Aplicar las character parts al pawn.
-		ApplyHID(Bot.Pawn, HeroType, true);
+		// Aplicar character parts usando bUseServerChoosePart=false (como el jugador real).
+		// Esto usa ApplyCharacterCosmetics que procesa TODAS las specializations.
+		ApplyHID(Bot.Pawn, HeroType, false);
 
-		LOG_INFO(LogBots, "[CustomBot] Cosmetic loadout applied: {}", HeroType->GetPathName());
+		LOG_INFO(LogBots, "[CustomBot] ApplyHID completed (bUseServerChoosePart=false)");
 	}
 
 	// Otorga las abilities default de jugador.

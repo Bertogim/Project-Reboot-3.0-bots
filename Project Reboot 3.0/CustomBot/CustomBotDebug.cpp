@@ -216,6 +216,8 @@ namespace
 	// GObjects y elige la primera "gun" de Athena (excluyendo herramientas).
 	static UFortItemDefinition* FindTestWeaponDefinition()
 	{
+		LOG_INFO(LogBots, "[DebugBot] Searching for weapon definition...");
+
 		static const wchar_t* CandidatePaths[] = {
 			L"/Game/Athena/Items/Weapons/Guns/Assault/Assault_Longbarrel.SAID_Assault_Longbarrel_Auto",
 			L"/Game/Athena/Items/Weapons/Guns/Assault/Assault_Short.SAID_Assault_Short",
@@ -226,11 +228,18 @@ namespace
 		for (auto* Path : CandidatePaths)
 		{
 			if (auto* Def = FindObject<UFortItemDefinition>(Path))
+			{
+				LOG_INFO(LogBots, "[DebugBot] Weapon found by path: {}", Def->GetPathName());
 				return Def;
+			}
 		}
+
+		LOG_INFO(LogBots, "[DebugBot] Hardcoded paths failed, scanning GObjects...");
 
 		auto WeaponClass = FindObject<UClass>(L"/Script/FortniteGame.FortWeaponItemDefinition");
 		auto All = GetAllObjectsOfClass<UFortItemDefinition>(WeaponClass);
+
+		LOG_INFO(LogBots, "[DebugBot] Found {} WeaponItemDefinitions total", All.size());
 
 		for (auto* Def : All)
 		{
@@ -245,25 +254,45 @@ namespace
 				continue;
 			if (Path.find("BuildingTools") != std::string::npos)
 				continue;
+			if (Path.find("EditTool") != std::string::npos)
+				continue;
 			if (Path.find("Aimlaser") != std::string::npos)
 				continue;
 			if (Path.find("Melee") != std::string::npos)
 				continue;
+			if (Path.find("StatDebugger") != std::string::npos)
+				continue;
 
+			LOG_INFO(LogBots, "[DebugBot] Weapon found by scan: {}", Path);
 			return Def;
 		}
 
+		LOG_WARN(LogBots, "[DebugBot] No weapon definition found!");
 		return nullptr;
 	}
 
 	// Da al bot arma, municion, materiales y escudo. Devuelve false si no hay arma.
 	static bool DebugBotGrantLoadout(CustomBot& Bot)
 	{
+		LOG_INFO(LogBots, "[DebugBot] === Granting loadout ===");
+
+		// 1) Equipar pico PRIMERO para salir del build mode (EditTool de starting items).
+		LOG_INFO(LogBots, "[DebugBot] Step 1: Equipping pickaxe to exit build mode...");
+		bool bPickaxeEquipped = CustomBotInventory::EquipPickaxe(Bot);
+		LOG_INFO(LogBots, "[DebugBot] Pickaxe equipped: {}", bPickaxeEquipped ? "YES" : "NO");
+
+		// 2) Materiales.
+		LOG_INFO(LogBots, "[DebugBot] Step 2: Granting materials...");
 		CustomBotResources::GiveResource(Bot, EFortResourceType::Wood, 1000);
 		CustomBotResources::GiveResource(Bot, EFortResourceType::Stone, 1000);
 		CustomBotResources::GiveResource(Bot, EFortResourceType::Metal, 1000);
-		LOG_INFO(LogBots, "[DebugBot] Materials granted");
+		LOG_INFO(LogBots, "[DebugBot] Materials: Wood={} Stone={} Metal={}",
+			CustomBotResources::GetResourceCount(Bot, EFortResourceType::Wood),
+			CustomBotResources::GetResourceCount(Bot, EFortResourceType::Stone),
+			CustomBotResources::GetResourceCount(Bot, EFortResourceType::Metal));
 
+		// 3) Arma real.
+		LOG_INFO(LogBots, "[DebugBot] Step 3: Finding weapon...");
 		UFortItemDefinition* WeaponDef = FindTestWeaponDefinition();
 
 		if (!WeaponDef)
@@ -272,24 +301,41 @@ namespace
 			return false;
 		}
 
-		LOG_INFO(LogBots, "[DebugBot] Weapon equipped: {}", WeaponDef->GetPathName());
-
-		// Arma con 999 de municion cargada.
+		LOG_INFO(LogBots, "[DebugBot] Giving weapon: {}", WeaponDef->GetPathName());
 		CustomBotInventory::GiveItem(Bot, WeaponDef, 1, 999);
 
+		LOG_INFO(LogBots, "[DebugBot] Equipping weapon...");
 		if (!CustomBotInventory::EquipFirstWeapon(Bot))
 		{
 			LOG_ERROR(LogBots, "[DebugBot] ERROR: could not equip granted weapon!");
 			return false;
 		}
 
+		// Verificar que el arma equipada es la correcta (no el EditTool).
+		auto* CurrentWeapon = CustomBotInventory::GetCurrentWeapon(Bot);
+		if (CurrentWeapon)
+		{
+			auto* WeaponData = CurrentWeapon->GetWeaponData();
+			LOG_INFO(LogBots, "[DebugBot] Current weapon after equip: {}",
+				WeaponData ? WeaponData->GetPathName() : "UNKNOWN");
+		}
+		else
+		{
+			LOG_WARN(LogBots, "[DebugBot] No weapon equipped after EquipFirstWeapon!");
+		}
+
+		// 4) Municion.
+		LOG_INFO(LogBots, "[DebugBot] Step 4: Reloading weapon...");
 		CustomBotCombat::Reload(Bot, 999);
 		LOG_INFO(LogBots, "[DebugBot] Weapon ammo: {}", CustomBotCombat::GetCurrentAmmo(Bot));
 
+		// 5) Escudo.
+		LOG_INFO(LogBots, "[DebugBot] Step 5: Setting shield...");
 		Bot.Pawn->SetMaxShield(100);
 		Bot.Pawn->SetShield(100);
-		LOG_INFO(LogBots, "[DebugBot] Shield set to 100");
+		LOG_INFO(LogBots, "[DebugBot] Shield set to 100 (current={})", Bot.Pawn->GetShield());
 
+		LOG_INFO(LogBots, "[DebugBot] === Loadout complete ===");
 		return true;
 	}
 
@@ -356,25 +402,35 @@ namespace
 
 		if (!Bot.IsReady() || !Bot.IsValidActor() || Bot.GetLifeState() != CBT::ELifeState::Alive)
 		{
-			LOG_ERROR(LogBots, "[DebugBot] ERROR: bot lost/died during sequence, removing");
+			LOG_ERROR(LogBots, "[DebugBot] ERROR: bot lost/died during sequence (step={}, life={}), removing",
+				DebugBotStateName(gDebugBot.Step), (int)Bot.GetLifeState());
 			gDebugBot.NextActionTime = DebugBotTime() + 0.5;
 			gDebugBot.Step = DebugBotState::WaitingToDisappear;
 			return;
 		}
 
 		float T = DebugBotTime();
+		FVector Pos = Bot.Pawn->GetActorLocation();
+		auto* CurrentWeapon = CustomBotInventory::GetCurrentWeapon(Bot);
 
 		switch (gDebugBot.Step)
 		{
 		case DebugBotState::Spawned:
 		{
+			LOG_INFO(LogBots, "[DebugBot] [Spawned] pos=({:.0f},{:.0f},{:.0f}) weapon={} moveActive={}",
+				Pos.X, Pos.Y, Pos.Z,
+				CurrentWeapon ? CurrentWeapon->GetWeaponData()->GetPathName().c_str() : "NONE",
+				Bot.bMoveRequestActive);
+
 			// Configurados en el comando; arranca el avance real.
 			gDebugBot.Step = DebugBotState::MovingForward;
-			LOG_INFO(LogBots, "[DebugBot] Moving forward");
+			LOG_INFO(LogBots, "[DebugBot] -> MovingForward");
 
 			FVector Fwd = Bot.Pawn->GetActorForwardVector();
 			FVector Start = Bot.Pawn->GetActorLocation();
-			CustomBotMovement::MoveTo(Bot, FVector{ Start.X + Fwd.X * 250.0f, Start.Y + Fwd.Y * 250.0f, Start.Z }, 120.0f);
+			FVector Dest{ Start.X + Fwd.X * 250.0f, Start.Y + Fwd.Y * 250.0f, Start.Z };
+			LOG_INFO(LogBots, "[DebugBot] MoveTo dest=({:.0f},{:.0f},{:.0f}) radius=120", Dest.X, Dest.Y, Dest.Z);
+			CustomBotMovement::MoveTo(Bot, Dest, 120.0f);
 			gDebugBot.NextActionTime = T + 8.0; // watchdog si no llega
 			break;
 		}
@@ -383,10 +439,25 @@ namespace
 		{
 			if (Bot.HasArrived() || T >= gDebugBot.NextActionTime)
 			{
+				bool bWatchdog = T >= gDebugBot.NextActionTime;
+				LOG_INFO(LogBots, "[DebugBot] [MovingForward] arrived={} watchdog={} pos=({:.0f},{:.0f},{:.0f})",
+					Bot.HasArrived(), bWatchdog, Pos.X, Pos.Y, Pos.Z);
+
 				gDebugBot.Step = DebugBotState::Jumping;
-				LOG_INFO(LogBots, "[DebugBot] Jumping");
+				LOG_INFO(LogBots, "[DebugBot] -> Jumping");
 				CustomBotMovement::Jump(Bot);
 				gDebugBot.NextActionTime = T + 0.45;
+			}
+			else
+			{
+				// Log de progreso cada 2 segundos.
+				static double LastMoveLog = 0;
+				if (T - LastMoveLog >= 2.0)
+				{
+					LOG_INFO(LogBots, "[DebugBot] [MovingForward] pos=({:.0f},{:.0f},{:.0f}) moveState={}",
+						Pos.X, Pos.Y, Pos.Z, (int)Bot.MoveState);
+					LastMoveLog = T;
+				}
 			}
 			break;
 		}
@@ -395,10 +466,15 @@ namespace
 		{
 			if (T >= gDebugBot.NextActionTime)
 			{
-				gDebugBot.Step = DebugBotState::BuildingRamp;
-				LOG_INFO(LogBots, "[DebugBot] Building ramp");
+				LOG_INFO(LogBots, "[DebugBot] [Jumping] pos=({:.0f},{:.0f},{:.0f})", Pos.X, Pos.Y, Pos.Z);
 
-				if (CustomBotResources::GetTotalResourceCount(Bot) < 10)
+				gDebugBot.Step = DebugBotState::BuildingRamp;
+				LOG_INFO(LogBots, "[DebugBot] -> BuildingRamp");
+
+				int TotalMat = CustomBotResources::GetTotalResourceCount(Bot);
+				LOG_INFO(LogBots, "[DebugBot] Total materials: {}", TotalMat);
+
+				if (TotalMat < 10)
 				{
 					DebugBotError(Bot, "not enough materials to build ramp");
 					break;
@@ -407,19 +483,21 @@ namespace
 				FVector Fwd = Bot.Pawn->GetActorForwardVector();
 				FVector Start = Bot.Pawn->GetActorLocation();
 				FVector RampLoc{ Start.X + Fwd.X * 400.0f, Start.Y + Fwd.Y * 400.0f, Start.Z - 16.0f };
+				LOG_INFO(LogBots, "[DebugBot] BuildRamp at ({:.0f},{:.0f},{:.0f})", RampLoc.X, RampLoc.Y, RampLoc.Z);
 
 				gDebugBot.RampActor = CustomBotBuilding::BuildRamp(Bot, RampLoc, Bot.Pawn->GetActorRotation());
 
 				if (!gDebugBot.RampActor)
 				{
+					LOG_ERROR(LogBots, "[DebugBot] BuildRamp returned nullptr!");
 					DebugBotError(Bot, "ramp could not be built (invalid location)");
 					break;
 				}
 
-				LOG_INFO(LogBots, "[DebugBot] Ramp built (health {:.0f})", CustomBotDestruction::GetStructureHealth(gDebugBot.RampActor));
+				LOG_INFO(LogBots, "[DebugBot] Ramp built OK (health {:.0f})", CustomBotDestruction::GetStructureHealth(gDebugBot.RampActor));
 
 				gDebugBot.Step = DebugBotState::ClimbingRamp;
-				LOG_INFO(LogBots, "[DebugBot] Climbing ramp");
+				LOG_INFO(LogBots, "[DebugBot] -> ClimbingRamp");
 
 				FVector Climb{ Start.X + Fwd.X * 600.0f, Start.Y + Fwd.Y * 600.0f, Start.Z + 100.0f };
 				CustomBotMovement::MoveTo(Bot, Climb, 150.0f);

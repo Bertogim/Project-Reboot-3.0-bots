@@ -462,6 +462,26 @@ namespace
 				WeaponData ? WeaponData->GetPathName().c_str() : (CurrentWeapon ? "UNKNOWN" : "NONE"),
 				Bot.bMoveRequestActive);
 
+			// Diagnostico: estado real del sistema de movimiento para ver por que
+			// la fisica no se simula (gravedad/velocity no mueven el pawn).
+			if (auto* CM = CustomBotMovement::GetCharacterMovement(Bot))
+			{
+				static auto VelocityOffset = CM->GetOffset("Velocity");
+				static auto AccelerationOffset = CM->GetOffset("Acceleration");
+				static auto MovementModeOffset = CM->GetOffset("MovementMode");
+				FVector V = CM->Get<FVector>(VelocityOffset);
+				FVector A = CM->Get<FVector>(AccelerationOffset);
+				int Mode = 255;
+				auto TryMode = CM->GetOffset("MovementMode");
+				if (TryMode != -1) Mode = *(int*)(__int64(CM) + TryMode);
+				LOG_INFO(LogBots, "[DebugBot] CM: vel=({:.0f},{:.0f},{:.0f}) acc=({:.0f},{:.0f},{:.0f}) mode={}",
+					V.X, V.Y, V.Z, A.X, A.Y, A.Z, Mode);
+			}
+			else
+			{
+				LOG_ERROR(LogBots, "[DebugBot] ERROR: CharacterMovement is NULL on bot pawn!");
+			}
+
 			// Configurados en el comando; arranca el avance real.
 			gDebugBot.Step = DebugBotState::MovingForward;
 			LOG_INFO(LogBots, "[DebugBot] -> MovingForward");

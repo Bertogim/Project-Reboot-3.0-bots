@@ -133,6 +133,8 @@ namespace CustomBotMovement
 
 	// Aplica la velocidad horizontal hacia Destination una sola vez.
 	// (rota al pawn hacia la direccion de movimiento si bRotateTowardsMove).
+	// REGLA: NUNCA teletransportar bots; el movimiento DEBE salir de la fisica
+	// simulada del pawn (Velocity/Acceleration del CharacterMovement).
 	static void ApplyMoveVelocity(CustomBot& Bot, const FVector& Destination, float Speed, bool bRotateTowardsMove)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -158,11 +160,19 @@ namespace CustomBotMovement
 		FVector NewVelocity{ Dir.X * Speed, Dir.Y * Speed, 0.0f };
 
 		static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
+		static auto AccelerationOffset = CharacterMovement->GetOffset("Acceleration");
 		FVector& CharacterVelocity = CharacterMovement->Get<FVector>(VelocityOffset);
 
 		// Conservamos el componente vertical (gravedad/caida) del pawn.
 		CharacterVelocity.X = NewVelocity.X;
 		CharacterVelocity.Y = NewVelocity.Y;
+
+		// La fisica nativa recalcula Velocity desde Acceleration cada tick
+		// (CalcVelocity). Alimentamos Acceleration en la misma direccion para
+		// que el movimiento se mantenga pese al frenado por friccion.
+		FVector& CharacterAcceleration = CharacterMovement->Get<FVector>(AccelerationOffset);
+		CharacterAcceleration.X = Dir.X * Speed;
+		CharacterAcceleration.Y = Dir.Y * Speed;
 	}
 
 	// Mueve al pawn hacia Destination. bSprint usara velocidad de sprint.

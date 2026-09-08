@@ -118,6 +118,11 @@ public:
 	// Llamado periodicamente desde el loop del sistema custom bot (CustomBotSpawner).
 	void Tick()
 	{
+		static unsigned BotTickCounter = 0;
+		if ((++BotTickCounter) % 120 == 0)
+			LOG_INFO(LogBots, "[CustomBot] [bot.tick] ready={} valid={} dbgTick={} life={}",
+				IsReady(), IsValidActor(), DebugTick != nullptr, (int)GetLifeState());
+
 		if (!IsReady() || !IsValidActor())
 			return;
 

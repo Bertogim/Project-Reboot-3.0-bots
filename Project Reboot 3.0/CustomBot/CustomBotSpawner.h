@@ -32,7 +32,15 @@ namespace CustomBotSpawner
 		// Marcar los bots a eliminar y borrarlos DESPUES del bucle: un bot puede
 		// marcarse como destruido mientras Tick()/UpdateMovement() ejecutan (p.ej.
 		// la secuencia debugbot), y borrar dentro del iterador las invalidaria.
+		if (AllCustomBots.empty())
+			return;
+
 		std::vector<size_t> ToRemove;
+
+		// Diagnostico: contador de frames (robusto, no depende de timers), loguea
+		// ~una vez cada 120 llamadas (~2s a 60fps).
+		static unsigned TickAllCounter = 0;
+		unsigned tc = ++TickAllCounter;
 
 		for (size_t i = 0; i < AllCustomBots.size(); ++i)
 		{
@@ -40,19 +48,17 @@ namespace CustomBotSpawner
 
 			if (!Bot.IsValidActor())
 			{
+				if (tc % 120 == 0)
+					LOG_INFO(LogBots, "[CustomBot] [tickall] INVALID bot idx={} controller={} pawn={}, removing",
+						i, bool(Bot.Controller), bool(Bot.Pawn));
+
 				ToRemove.push_back(i);
 				continue;
 			}
 
-			// Diagnostico: confirma que TickAll itera e invoca cada frame (~2s).
-			static double LastTickAllLog = 0;
-			double Now = UGameplayStatics::GetTimeSeconds(GetWorld());
-			if (Now - LastTickAllLog >= 2.0)
-			{
-				LOG_INFO(LogBots, "[CustomBot] [tickall] count={} ready={} dbgTick={}",
-					AllCustomBots.size(), Bot.IsReady(), Bot.DebugTick != nullptr);
-				LastTickAllLog = Now;
-			}
+			if (tc % 120 == 0)
+				LOG_INFO(LogBots, "[CustomBot] [tickall] bots={} idx={} ready={} dbgTick={} life={}",
+					AllCustomBots.size(), i, Bot.IsReady(), Bot.DebugTick != nullptr, (int)Bot.GetLifeState());
 
 			Bot.Tick();                              // Parte 2 + secuencia debugbot
 			CustomBotMovement::UpdateMovement(Bot);  // pipeline de movimiento real

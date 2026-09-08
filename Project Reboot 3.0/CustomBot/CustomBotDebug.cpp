@@ -476,6 +476,36 @@ namespace
 				if (TryMode != -1) Mode = *(int*)(__int64(CM) + TryMode);
 				LOG_INFO(LogBots, "[DebugBot] CM: vel=({:.0f},{:.0f},{:.0f}) acc=({:.0f},{:.0f},{:.0f}) mode={}",
 					V.X, V.Y, V.Z, A.X, A.Y, A.Z, Mode);
+
+				// Estado de tick del componente (por que no se simula):
+				auto CMAddr = __int64(CM);
+				LOG_INFO(LogBots, "[DebugBot] CM state: addr=0x{:x}",
+					CMAddr);
+				auto ProbeByte = [&](const char* Field, int Def = -1) -> int {
+					int off = CM->GetOffset(Field, false);
+					if (off == -1) return Def;
+					return *(uint8_t*)(CMAddr + off);
+				};
+				auto ProbeTickFlags = [&](const char* StructField, const char* SubField) -> int {
+					// algunos campos de FTickFunction estan logicamente antes; probe por nombre
+					int off = CM->GetOffset(StructField, false);
+					if (off == -1) off = CM->GetOffset(SubField, false);
+					if (off == -1) return -1;
+					// bCanEverTick/bStartWithTickEnabled son bits consecutivos en FTickFunction
+					return *(uint8_t*)(CMAddr + off);
+				};
+				LOG_INFO(LogBots, "[DebugBot] CM flags: bMovementEnabled={} bComponentShouldTick={} bRegistered={} bNeedUROUpdate={} GravityScaleField={}",
+					ProbeByte("bMovementEnabled"), ProbeByte("bComponentShouldTick"),
+					ProbeByte("bRegistered"), ProbeByte("bNeedUROUpdate"),
+					ProbeTickFlags("PrimaryComponentTick", "bStartWithTickEnabled"));
+
+				// Estado del pawn (actor tick / control).
+				LOG_INFO(LogBots, "[DebugBot] Pawn: dormancy={} bTearOff={} bReplicates={} controllerPawnMatch={} netConnection={}",
+					(int)Bot.Pawn->GetNetDormancy(),
+					(int)Bot.Pawn->IsTearOff(),
+					Bot.Pawn->DoesReplicate(),
+					Bot.Controller && Bot.Controller->GetPawn() == Bot.Pawn,
+					Bot.Controller ? (bool)Bot.Controller->GetNetConnection() : false);
 			}
 			else
 			{

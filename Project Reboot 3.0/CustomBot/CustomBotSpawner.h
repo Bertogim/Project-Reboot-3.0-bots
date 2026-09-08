@@ -23,6 +23,7 @@ namespace CustomBotSpawner
 	static void SetCustomBotName(CustomBot& Bot, AFortGameModeAthena* GameMode);
 	static void GrantAbilities(CustomBot& Bot);
 	static bool SetupInventory(CustomBot& Bot, AFortGameModeAthena* GameMode);
+	static void ApplyRandomCosmeticLoadout(CustomBot& Bot);
 
 	static void TickAll()
 	{

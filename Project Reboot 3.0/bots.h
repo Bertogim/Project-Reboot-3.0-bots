@@ -614,6 +614,20 @@ public:
 
 			SetPawnLocation(NewLoc);
 			Pawn->ForceNetUpdate();
+
+			static int DBGCounter = 0;
+			if ((DBGCounter++ % 60) == 0)
+				LOG_INFO(LogBots, "MOVEDB state={} mode={} loc=({:.0f},{:.0f},{:.0f}) want={:.0f} moved={:.0f} step={:.0f} dir=({:.2f},{:.2f})",
+					(int)BotState, (int)GetMovementMode(), Pawn->GetActorLocation().X, Pawn->GetActorLocation().Y, Pawn->GetActorLocation().Z,
+					WantMove, AlreadyMoved, Step, Dir.X, Dir.Y);
+		}
+		else
+		{
+			static int DBGCounter2 = 0;
+			if ((DBGCounter2++ % 300) == 0)
+				LOG_INFO(LogBots, "MOVENOMOVE state={} mode={} loc=({:.0f},{:.0f},{:.0f}) want={:.0f} moved={:.0f} shortfall={:.0f}",
+					(int)BotState, (int)GetMovementMode(), Pawn->GetActorLocation().X, Pawn->GetActorLocation().Y, Pawn->GetActorLocation().Z,
+					WantMove, AlreadyMoved, Shortfall);
 		}
 
 		bHasPrevServLoc = true;

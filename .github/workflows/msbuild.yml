@@ -29,9 +29,21 @@ jobs:
           Write-Output "code=$ver" >> $env:GITHUB_OUTPUT
           Write-Output "hash=$short" >> $env:GITHUB_OUTPUT
 
+      - name: Generate BuildVersion header
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.code }}"
+          $hash = "${{ steps.version.outputs.hash }}"
+          $header = @"
+          #pragma once
+          #define REBOOT_BUILD_VERSION "$ver"
+          #define REBOOT_BUILD_HASH "$hash"
+          "@
+          Set-Content -Path "Project Reboot 3.0/BuildVersion.generated.h" -Value $header -Encoding ascii
+
       - name: Build Reboot
         working-directory: ${{ github.workspace }}
-        run: msbuild "${{ env.SOLUTION_FILE_PATH }}" /t:Build /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x64 "/p:AdditionalOptions=/DREBOOT_BUILD_VERSION=\"${{ steps.version.outputs.code }}\" /DREBOOT_BUILD_HASH=\"${{ steps.version.outputs.hash }}\"" /m
+        run: msbuild "${{ env.SOLUTION_FILE_PATH }}" /t:Build /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x64 /m
 
       - name: Write version file
         working-directory: ${{ github.workspace }}
@@ -41,7 +53,7 @@ jobs:
           $h = "${{ steps.version.outputs.hash }}"
           "build=$v" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii
           "hash=$h" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii -Append
-          "time=$env:GITHUB_ACTOR run #$env:GITHUB_RUN_NUMBER" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii -Append
+          "time=run#$env:GITHUB_RUN_NUMBER" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii -Append
 
       - name: Upload Artifact without ABOVE_S20
         uses: actions/upload-artifact@v4

@@ -1,8 +1,16 @@
 #pragma once
 
-// Version de build. La CI puede sobrescribir estos valores con /D defines
-// (REBOOT_BUILD_VERSION, REBOOT_BUILD_HASH) para que el DLL loguee una
-// version identificable y el artefacto incluya un archivo version.txt.
+// Version de build.
+//
+// La CI genera BuildVersion.generated.h (con REBOOT_BUILD_VERSION/REBOOT_BUILD_HASH)
+// antes de compilar y lo coloca junto a este fichero. Si no existe (build local),
+// se usan valores por defecto.
+#ifdef __has_include
+  #if __has_include("BuildVersion.generated.h")
+    #include "BuildVersion.generated.h"
+  #endif
+#endif
+
 #ifndef REBOOT_BUILD_VERSION
 #define REBOOT_BUILD_VERSION "dev"
 #endif

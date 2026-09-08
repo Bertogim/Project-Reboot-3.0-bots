@@ -506,6 +506,45 @@ namespace
 					Bot.Pawn->DoesReplicate(),
 					Bot.Controller && Bot.Controller->GetPawn() == Bot.Pawn,
 					Bot.Controller ? (bool)Bot.Controller->GetNetConnection() : false);
+
+				// Gates de gravedad/movimiento de Fortnite AFortPawn: si el pawn se
+				// materializo fuera del flujo de jugador (bus/skydive), el juego deja
+				// la gravedad desactivada (bSimGravityDisabled) y no se mueve. Se
+				// sondearon y, si estan puestos, se desactivan.
+				int GravOff = Bot.Pawn->GetOffset("bSimGravityDisabled", false);
+				int StopOff = Bot.Pawn->GetOffset("bDisableMovementAndTurnInPlace", false);
+				int AllowOff = Bot.Pawn->GetOffset("bAllowMovement", false);
+
+				LOG_INFO(LogBots, "[DebugBot] Pawn gates: bSimGravityDisabled={} bDisableMovementAndTurnInPlace={} bAllowMovement={} (offs={},{},{})",
+					GravOff != -1 ? *(uint8_t*)(__int64(Bot.Pawn) + GravOff) : -1,
+					StopOff != -1 ? *(uint8_t*)(__int64(Bot.Pawn) + StopOff) : -1,
+					AllowOff != -1 ? *(uint8_t*)(__int64(Bot.Pawn) + AllowOff) : -1,
+					GravOff, StopOff, AllowOff);
+
+				if (GravOff != -1 && *(uint8_t*)(__int64(Bot.Pawn) + GravOff))
+				{
+					*(uint8_t*)(__int64(Bot.Pawn) + GravOff) = 0;
+					LOG_INFO(LogBots, "[DebugBot] FORCED bSimGravityDisabled=false");
+				}
+				if (StopOff != -1 && *(uint8_t*)(__int64(Bot.Pawn) + StopOff))
+				{
+					*(uint8_t*)(__int64(Bot.Pawn) + StopOff) = 0;
+					LOG_INFO(LogBots, "[DebugBot] FORCED bDisableMovementAndTurnInPlace=false");
+				}
+				if (AllowOff != -1 && *(uint8_t*)(__int64(Bot.Pawn) + AllowOff) == 0)
+				{
+					*(uint8_t*)(__int64(Bot.Pawn) + AllowOff) = 1;
+					LOG_INFO(LogBots, "[DebugBot] FORCED bAllowMovement=true");
+				}
+
+				// Gravedad configurada en el movement component.
+				auto GetCmFloat = [&](const char* Field) -> float {
+					int Off = CM->GetOffset(Field, false);
+					if (Off == -1) return -99999.0f;
+					return *(float*)(CMAddr + Off);
+				};
+				LOG_INFO(LogBots, "[DebugBot] CM gravity: GravityZ={:.1f} GravityScale={:.2f}",
+					GetCmFloat("GravityZ"), GetCmFloat("GravityScale"));
 			}
 			else
 			{

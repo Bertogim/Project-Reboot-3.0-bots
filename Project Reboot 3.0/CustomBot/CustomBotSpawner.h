@@ -16,10 +16,14 @@
 namespace CustomBotSpawner
 {
 	// Todos los bots custom vivos, para tickearlos desde el game loop.
-	static inline std::vector<CustomBot> AllCustomBots;
+	// IMPORTANTE: inline SIN `static` (linkage externo). `static inline` en un
+	// header a scope de namespace crea UNA COPIA POR TU; SpawnCustomBot (desde
+	// CustomBotDebug.cpp) y TickAll (desde NetDriver.cpp) son TUs distintas, y
+	// el bot nunca llegaba a verse desde el ticker (bugs=0 TODO el rato).
+	inline std::vector<CustomBot> AllCustomBots;
 
-	static inline UClass* PawnClass = nullptr;
-	static inline UClass* ControllerClass = nullptr;
+	inline UClass* PawnClass = nullptr;
+	inline UClass* ControllerClass = nullptr;
 
 	// Forward declarations (definidas debajo; SpawnCustomBot las usa antes).
 	static void SetCustomBotName(CustomBot& Bot, AFortGameModeAthena* GameMode);
@@ -28,7 +32,7 @@ namespace CustomBotSpawner
 	static void ApplyRandomCosmeticLoadout(CustomBot& Bot);
 
 	// Diagnostico: log una vez al primer invocarse y despues cada ~30 llamadas.
-	static inline bool bTickAllFirstLogDone = false;
+	inline bool bTickAllFirstLogDone = false;
 
 	static void TickAll()
 	{

@@ -404,8 +404,6 @@ namespace
 					break;
 				}
 
-				CustomBotBuilding::SelectPiece(Bot, CustomBotBuilding::EPieceType::Ramp);
-
 				FVector Fwd = Bot.Pawn->GetActorForwardVector();
 				FVector Start = Bot.Pawn->GetActorLocation();
 				FVector RampLoc{ Start.X + Fwd.X * 400.0f, Start.Y + Fwd.Y * 400.0f, Start.Z - 16.0f };
@@ -848,9 +846,6 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 			return true;
 		}
 
-		// Seleccionar la pieza (build mode, igual que un jugador).
-		CustomBotBuilding::SelectPiece(Bot, PieceType);
-
 		// Posicionar la estructura justo al frente del bot.
 		FVector Forward = Bot.Pawn->GetActorForwardVector();
 		FVector BotLocation = Bot.Pawn->GetActorLocation();
@@ -964,9 +959,7 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 			return true;
 		}
 
-		// Seleccionar la pieza (build mode) y construir N rampas hacia arriba.
-		CustomBotBuilding::SelectPiece(Bot, CustomBotBuilding::EPieceType::Ramp);
-
+		// Construir N rampas hacia arriba.
 		const float StepHoriz = 300.0f;
 		const float StepZ = 96.0f;
 

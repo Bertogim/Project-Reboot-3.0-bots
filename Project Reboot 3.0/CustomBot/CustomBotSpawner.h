@@ -158,6 +158,9 @@ namespace CustomBotSpawner
 		// Inventario.
 		SetupInventory(Bot, GameMode);
 
+		// Skin/cosmetico.
+		ApplyRandomCosmeticLoadout(Bot);
+
 		// Registrar en GameMode.
 		GameMode->GetAlivePlayers().Add(Bot.Controller);
 		++GameState->GetPlayersLeft();
@@ -192,6 +195,61 @@ namespace CustomBotSpawner
 		}
 
 		Bot.PlayerState->OnRep_PlayerName();
+	}
+
+	// Aplica una skin aleatoria al bot (replica PickRandomLoadout + ApplyCosmeticLoadout
+	// del sistema antiguo bots.h). Busca todos los FortHeroType disponibles, elige uno
+	// al azar de /Game/Athena/Heroes/ y lo aplica via ApplyHID con ServerChoosePart.
+	static void ApplyRandomCosmeticLoadout(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn || !Bot.PlayerState)
+			return;
+
+		auto HeroTypeClass = FindObject<UClass>(L"/Script/FortniteGame.FortHeroType");
+
+		if (!HeroTypeClass)
+			return;
+
+		auto AllHeroTypes = GetAllObjectsOfClass(HeroTypeClass);
+		std::vector<UFortItemDefinition*> AthenaHeroTypes;
+
+		for (size_t i = 0; i < AllHeroTypes.size(); ++i)
+		{
+			auto CurrentHeroType = (UFortItemDefinition*)AllHeroTypes.at(i);
+
+			if (!CurrentHeroType)
+				continue;
+
+			if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
+				AthenaHeroTypes.push_back(CurrentHeroType);
+		}
+
+		// Seleccionar un HeroType: priorizar aleatorio de Athena, fallback a ruta conocida.
+		UFortItemDefinition* HeroType = nullptr;
+
+		if (!AthenaHeroTypes.empty())
+		{
+			HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size());
+		}
+		else
+		{
+			HeroType = FindObject<UFortItemDefinition>(
+				L"/Game/Athena/Heroes/HID_030_Athena_Commando_M_Halloween.HID_030_Athena_Commando_M_Halloween");
+		}
+
+		if (!HeroType)
+			return; // nada que aplicar
+
+		// Guardar en PlayerState (como hace el sistema antiguo).
+		static auto HeroTypeOffset = Bot.PlayerState->GetOffset("HeroType", false);
+
+		if (HeroTypeOffset != -1)
+			Bot.PlayerState->Get(HeroTypeOffset) = HeroType;
+
+		// Aplicar las character parts al pawn.
+		ApplyHID(Bot.Pawn, HeroType, true);
+
+		LOG_INFO(LogBots, "[CustomBot] Cosmetic loadout applied: {}", HeroType->GetPathName());
 	}
 
 	// Otorga las abilities default de jugador.

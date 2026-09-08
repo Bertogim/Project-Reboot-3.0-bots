@@ -241,6 +241,28 @@ namespace
 
 		LOG_INFO(LogBots, "[DebugBot] Found {} WeaponItemDefinitions total", All.size());
 
+		// Categorias de armas reales (preferidas) y nombres a excluir (herramientas/depuradores).
+		static const char* GunDirs[] = { "/Guns/", "/Rifle/", "/Pistol/", "/SMG/", "/Shotgun/", "/Launchers/", "/Sniper/" };
+		static const char* Excludes[] = {
+			"Pickaxe", "BuildingTools", "EditTool", "Aimlaser", "Melee", "StatDebugger",
+			"WID_StatDebugger", "Harvest_Tool", "ConsumesBuildingResource", "Trap", "Grenade",
+		};
+
+		auto IsExcluded = [](const std::string& P) {
+			for (auto* E : Excludes)
+				if (P.find(E) != std::string::npos)
+					return true;
+			return false;
+		};
+
+		auto IsGun = [](const std::string& P) {
+			for (auto* G : GunDirs)
+				if (P.find(G) != std::string::npos)
+					return true;
+			return false;
+		};
+
+		// Primera pasada: preferir paths en carpetas de armas reales (/Guns/, /Rifle/,...).
 		for (auto* Def : All)
 		{
 			if (!Def)
@@ -250,20 +272,29 @@ namespace
 
 			if (Path.find("/Athena/Items/Weapons/") == std::string::npos)
 				continue;
-			if (Path.find("Pickaxe") != std::string::npos)
+			if (IsExcluded(Path))
 				continue;
-			if (Path.find("BuildingTools") != std::string::npos)
-				continue;
-			if (Path.find("EditTool") != std::string::npos)
-				continue;
-			if (Path.find("Aimlaser") != std::string::npos)
-				continue;
-			if (Path.find("Melee") != std::string::npos)
-				continue;
-			if (Path.find("StatDebugger") != std::string::npos)
+			if (!IsGun(Path))
 				continue;
 
-			LOG_INFO(LogBots, "[DebugBot] Weapon found by scan: {}", Path);
+			LOG_INFO(LogBots, "[DebugBot] Gun weapon found by scan: {}", Path);
+			return Def;
+		}
+
+		// Segunda pasada: cualquier arma de Athena que no sea herramienta/depurador.
+		for (auto* Def : All)
+		{
+			if (!Def)
+				continue;
+
+			std::string Path = Def->GetPathName();
+
+			if (Path.find("/Athena/Items/Weapons/") == std::string::npos)
+				continue;
+			if (IsExcluded(Path))
+				continue;
+
+			LOG_INFO(LogBots, "[DebugBot] Fallback weapon found by scan: {}", Path);
 			return Def;
 		}
 

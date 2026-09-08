@@ -1,13 +1,10 @@
 name: MSBuild
 
 on:
-  push:
-    branches: ["master"]
-  pull_request:
-    branches: ["master"]
+  workflow_dispatch:
 
 env:
-  SOLUTION_FILE_PATH: .
+  SOLUTION_FILE_PATH: Project Reboot 3.0.sln
   BUILD_CONFIGURATION: Release
 
 permissions:
@@ -18,35 +15,19 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v1.0.2
-
-      - name: Restore NuGet packages
-        working-directory: ${{env.GITHUB_WORKSPACE}}
-        run: nuget restore ${{env.SOLUTION_FILE_PATH}}
+        uses: microsoft/setup-msbuild@v2
 
       - name: Build Reboot
-        working-directory: ${{env.GITHUB_WORKSPACE}}
-        run: msbuild ${{env.SOLUTION_FILE_PATH}} /t:Clean,Build /p:Configuration=Release
+        working-directory: ${{ github.workspace }}
+        run: msbuild "${{ env.SOLUTION_FILE_PATH }}" /t:Build /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x64 /m
 
       - name: Upload Artifact without ABOVE_S20
         uses: actions/upload-artifact@v4
         with:
           name: Reboot
-          path: ${{env.SOLUTION_FILE_PATH}}/x64/Release
-          if-no-files-found: warn
-          retention-days: 90
-
-      - name: Build RebootS20
-        working-directory: ${{env.GITHUB_WORKSPACE}}
-        run: msbuild ${{env.SOLUTION_FILE_PATH}} /p:AboveS20=TRUE /t:Clean,Build /p:Configuration=Release
-
-      - name: Upload Artifact with ABOVE_S20
-        uses: actions/upload-artifact@v4
-        with:
-          name: RebootS20
-          path: ${{env.SOLUTION_FILE_PATH}}/x64/Release
+          path: x64/Release
           if-no-files-found: warn
           retention-days: 90

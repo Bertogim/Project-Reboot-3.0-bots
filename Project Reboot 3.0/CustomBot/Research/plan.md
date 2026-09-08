@@ -8,9 +8,11 @@
 - Comando `debugbot`: secuencia de prueba completa del Custom Bot (sin el sistema
   antiguo). Maquina de estados (DebugBotState) + timers (GetTimeSeconds) dentro de
   CustomBot::DebugTick (registrado en el comando). Un solo debugbot activo a la vez.
-  Secuencia: spawn junto al primer jugador real -> MoveForward -> Jump -> BuildRamp
-  -> ClimbingRamp -> TurnAround 180 -> EquipPickaxe -> destroy ramp -> equip weapon
-  -> 5 disparos -> drop weapon -> wait 10s -> remove. Solo teletransporte inicial.
+  Secuencia: spawn junto al primer jugador real -> MoveForward -> BuildingRamp (grid,
+  derecha de la rampa enfrente) -> WalkToRampStart -> WalkToRampMiddle -> Jumping ->
+  BuildingFloor (1s tras saltar, mismo celda a ras de suelo) -> EquippingPickaxe ->
+  DestroyingRamp (rampa + suelo) -> EquippingWeapon -> 5 disparos -> drop weapon ->
+  wait 10s -> remove. Solo teletransporte inicial.
   Cleanup: remover de GetAlivePlayers, decrementar PlayersLeft, destruir WorldInventory/
   pawn/controller, limpiar DebugTick y estado. PlayerState queda registrado en
   GameMemberInfo (no existe API de baja; documentado como limitacion).

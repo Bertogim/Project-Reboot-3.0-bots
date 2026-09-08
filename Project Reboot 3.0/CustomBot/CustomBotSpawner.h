@@ -250,6 +250,11 @@ namespace CustomBotSpawner
 		++GameState->GetPlayersLeft();
 		GameState->OnRep_PlayersLeft();
 
+		// FIX RUNPHYS (research 08): simular el CMC en servidor SIEMPRE, para todo
+		// bot, no solo en la secuencia debug. Sin esto el pawn queda congelado.
+		CustomBotMovement::EnableServerSimulation(Bot);
+		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done");
+
 		FVector BotPos = Bot.Pawn->GetActorLocation();
 		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE pos=({:.0f},{:.0f},{:.0f}) ===",
 			BotPos.X, BotPos.Y, BotPos.Z);

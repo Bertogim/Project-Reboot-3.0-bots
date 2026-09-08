@@ -114,13 +114,42 @@ namespace CustomBotInventory
 		return true;
 	}
 
-	// Equipa el item (por su instancia UFortItem*).
+	// Equipa el item (por su instancia UFortItem*). Primaria: FortPawn:EquipWeaponDefinition
+	// directo sobre el pawn (funciona en servidor y SIN controller, requisito del fix
+	// RUNPHYS de research 08). Fallback: ServerExecuteInventoryItemHook, que REQUIERE
+	// Controller->GetPawn(); tras EnableServerSimulation el controller ya no posee pawn,
+	// asi que esa via sola no equipa nada. Verifica al final contra la definicion pedida.
 	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
 	{
 		if (!Item)
 			return false;
 
-		return EquipItemByGuid(Bot, Item->GetItemEntry()->GetItemGuid());
+		auto* Entry = Item->GetItemEntry();
+
+		if (!Entry)
+			return false;
+
+		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(Entry->GetItemDefinition());
+
+		if (WeaponDef && Bot.Pawn)
+			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
+
+		auto Verify = [&]() -> bool {
+			auto* W = Bot.IsReady() ? Bot.Pawn->GetCurrentWeapon() : nullptr;
+			auto* D = W ? W->GetWeaponData() : nullptr;
+			return D && Entry->GetItemDefinition() && D == Entry->GetItemDefinition();
+		};
+
+		if (!Verify())
+		{
+			EquipItemByGuid(Bot, Entry->GetItemGuid());
+
+			if (!Verify())
+				LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED: wanted={}",
+					Entry->GetItemDefinition()->GetPathName().c_str());
+		}
+
+		return Verify();
 	}
 
 	// Equipa el pickaxe del bot. Usa la instancia de pickaxe ya existente en el

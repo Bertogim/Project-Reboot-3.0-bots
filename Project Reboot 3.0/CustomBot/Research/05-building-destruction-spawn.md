@@ -32,6 +32,27 @@ ServerCreateBuildingActorHook (FortPlayerController.cpp:846-994):
    `BuildingActor->InitializeBuildingActor(Controller, BuildingActor, true)`,
    `BuildingActor->SetTeam(PlayerStateAthena->GetTeamIndex())`.
 
+## Grid de construccion y snap (IMPORTANTE, aplicado en CustomBotBuilding)
+- El SERVIDOR no aplica snap: spawna exactamente el BuildLoc/BuildRot que recibe; quien
+  ajusta al grid es el CLIENTE del jugador real antes de mandar el RPC. Por eso el bot
+  debe replicar ese ajuste SI mismo (no llega un paquete de cliente).
+- Funciones nativas del grid (UBuildingStructuralSupportSystem, confirmadas en
+  ObjectsDump v3.5; activadas desde BuildPiece para TODAS las builds):
+  - `K2_GetGridIndicesFromWorldLoc(WorldLoc)->(bool, OutGridIndices{X,Y})`
+  - `K2_GetWorldLocFromGridIndices(GridIndices)->(bool, OutWorldLoc)`
+  - `GetGridBox(CellIndex)->FBox` (FBox = FVector Min + FVector Max)
+  - `K2_CanAdd{Wall,Floor}ActorToGrid`, `K2_CanAddCenterCellActorToGrid` etc.
+- Props de tamano de grid en BuildingActor: `VertSnapGridSize`, `SnapGridSize`;
+  BuildingSMActor: `PlayerGridSnapSize`.
+- CustomBotBuilding.h helpers: `GridIndicesFromWorldLocation`, `CellBoxFromIndices`,
+  `SnapLocationToGrid` (X/Y -> centro de celda), `SnapYawToCardinal` (90 grados),
+  `CellCenterAhead(SSS, From, CardinalYaw, Steps) -> (bool, OutCenter)`.
+- BuildPiece ahora: snap X/Y a centro de celda + yaw a cardinal, y valida/spawnea con el
+  punt producto resultante (BuildLoc/BuildRot). Logs: `[BuildPiece] snapped loc ...`,
+  `[BuildPiece] snapped yaw ...`.
+- Orientacion de la rampa: las StairW suben hacia +X local; par colocarlas con la
+  entrada frente al bot hay que darles yaw = cardinal(hacia la que apunta el bot) + 180.
+
 ## Destruir estructuras
 - Daño real via arma (pickaxe melee) -> OnDamageServer -> BuildingActor.cpp hook.
 - `ABuildingActor::SilentDie()` / `K2_DestroyActor()`.

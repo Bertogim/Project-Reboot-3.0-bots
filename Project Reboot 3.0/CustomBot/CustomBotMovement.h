@@ -81,6 +81,39 @@ namespace CustomBotMovement
 		return Bot.Pawn->Get(CharacterMovementOffset);
 	}
 
+	// Aplica el FIX RUNPHYS (research 08): convierte al bot en un pawn sin controller
+	// con bRunPhysicsWithNoController=true para que el servidor SIMULE su CMC (la rama
+	// "sin controller" integra Velocity/Acceleration cada frame). Sin esto el pawn
+	// poseido por un PlayerController sin cliente conectado NUNCA se simula.
+	// Debe aplicarse en el spawn de TODO bot (CustomBotSpawner::SpawnCustomBot).
+	static bool EnableServerSimulation(CustomBot& Bot)
+	{
+		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
+			return false;
+
+		Bot.PlayerState->SetIsBot(false);
+		Bot.Controller->UnPossess();
+
+		bool bBitOK = false;
+
+		if (auto* CMR = GetCharacterMovement(Bot))
+		{
+			auto* Prop = CMR->GetProperty("bRunPhysicsWithNoController");
+			int Off = CMR->GetOffset("bRunPhysicsWithNoController", false);
+
+			if (Prop && Off != -1)
+			{
+				CMR->SetBitfieldValue(Off, GetFieldMask(Prop), true);
+				bBitOK = true;
+			}
+		}
+
+		LOG_WARN(LogBots, "[CustomBot] RUNPHYS-FIX: IsBot=false, pose released, bRunPhysicsWithNoController set={} (possessor={})",
+			bBitOK, Bot.Pawn->GetController() != nullptr);
+
+		return bBitOK;
+	}
+
 	// Mira hacia el punto objetivo (rota el control del pawn hacia alla).
 	static void LookAt(CustomBot& Bot, const FVector& TargetLocation)
 	{
@@ -158,6 +191,23 @@ namespace CustomBotMovement
 			LookAt(Bot, Destination);
 
 		FVector NewVelocity{ Dir.X * Speed, Dir.Y * Speed, 0.0f };
+
+		// Sincronizar velocidades maximas del CM: algunos pawns spawnean con
+		// MaxWalkSpeed=0 (visto en RealVsBot: real=550 bot=0) y el CharacterMovement
+		// no mueve nada. Se reafirma una vez (estatico) y es barato.
+		static bool bSpeedSynced = false;
+		if (!bSpeedSynced)
+		{
+			auto SetFloatIfPresent = [&](const char* Name, float Value) {
+				int Off = CharacterMovement->GetOffset(Name, false);
+				if (Off != -1) *(float*)(__int64(CharacterMovement) + Off) = Value;
+			};
+			SetFloatIfPresent("MaxWalkSpeed", WalkSpeed);
+			SetFloatIfPresent("MaxWalkSpeedCrouched", WalkSpeed);
+			SetFloatIfPresent("MaxFlySpeed", WalkSpeed);
+			SetFloatIfPresent("MaxAcceleration", 2048.0f);
+			bSpeedSynced = true;
+		}
 
 		static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
 		static auto AccelerationOffset = CharacterMovement->GetOffset("Acceleration");

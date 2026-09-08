@@ -898,6 +898,13 @@ void AFortPlayerController::ServerCreateBuildingActorHook(UObject* Context, FFra
 	if (!BuildingClass)
 		return ServerCreateBuildingActorOriginal(Context, Stack, Ret);
 
+	// Calibracion: cuando un JUGADOR REAL colocá una pieza, el cliente envia el
+	// BuildLoc/BuildRot YA ajustados al grid y a cardinales. Sirve de referencia
+	// para verificar el snap + rotacion de los bot (CustomBotBuilding::BuildPiece).
+	LOG_INFO(LogDev, "[ServerCreateBuildingActor] real placement loc=({:.0f},{:.0f},{:.0f}) rot=({:.1f},{:.1f},{:.1f}) class={}",
+		BuildLocation.X, BuildLocation.Y, BuildLocation.Z, BuildRotator.Pitch, BuildRotator.Yaw, BuildRotator.Roll,
+		BuildingClass->GetName());
+
 	auto GameState = Cast<AFortGameStateAthena, false>(Cast<AFortGameMode, false>(GetWorld()->GetGameMode())->GetGameState());
 
 	auto StructuralSupportSystem = GameState->GetStructuralSupportSystem();

@@ -65,8 +65,8 @@ teoria/research; este archivo es el "mapa mental" actual + lecciones de la pasad
    `DebugBot->DebugTick = &TickDebugBot` y `gDebugBot.Step = Spawned`.
 
 ## 4. Secuencia DebugBot (maquina de estados)
-`Spawned → MovingForward → Jumping → BuildingRamp → ClimbingRamp → Turning → EquippingPickaxe
-→ DestroyingRamp → EquippingWeapon → Shooting(×5) → DroppingWeapon → WaitingToDisappear(10s) → remove`
+`Spawned → MovingForward → BuildingRamp → WalkToRampStart → WalkToRampMiddle → Jumping → BuildingFloor →
+→ EquippingPickaxe → DestroyingRamp (rampa + suelo) → EquippingWeapon → Shooting(×5) → DroppingWeapon → WaitingToDisappear(10s) → remove`
 - Timers: `UGameplayStatics::GetTimeSeconds(GetWorld())` (detecta `T - NextActionTime >= 0`).
 - Movimientos reales: `MoveTo` (persistente, `UpdateMovement` re-aplica velocidad cada tick),
   `Jump` (`Character.Jump`), construccion real de rampa (`SelectPiece(BuildRamp)+BuildRamp`,

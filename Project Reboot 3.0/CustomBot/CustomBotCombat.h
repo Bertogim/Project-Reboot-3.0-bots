@@ -48,7 +48,10 @@ namespace CustomBotCombat
 	}
 
 	// Dispara el arma equipada activando su weapon ability via GAS.
-	// Equivalente a activar la ability primaria.
+
+	// Activa la primera spec activable del ASC (definida debajo; FireWeapon la usa).
+	static bool ActivatePrimaryAbility(CustomBot& Bot);
+
 	static bool FireWeapon(CustomBot& Bot)
 	{
 		return ActivatePrimaryAbility(Bot);

@@ -488,9 +488,13 @@ namespace
 				float After = CustomBotDestruction::GetStructureHealth(gDebugBot.RampActor);
 
 				if (!bDestroyed || After > 0.0f)
+				{
 					LOG_INFO(LogBots, "[DebugBot] ramp damage applied: {:.0f} -> {:.0f} (melee pickaxe real pendiente en Parte 2)", Before, After);
+				}
 				else
+				{
 					LOG_INFO(LogBots, "[DebugBot] Ramp destroyed: {:.0f} -> {:.0f}", Before, After);
+				}
 
 				gDebugBot.NextActionTime = T + 0.1;
 			}

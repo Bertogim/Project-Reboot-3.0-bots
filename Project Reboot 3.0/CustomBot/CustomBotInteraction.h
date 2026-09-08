@@ -67,7 +67,7 @@ namespace CustomBotInteraction
 		if (!Bot.IsReady() || !Bot.Pawn || !Pickup)
 			return false;
 
-		ServerHandlePickupHook(Bot.Pawn, Pickup, 0.40f, FVector{}, true);
+		AFortPlayerPawn::ServerHandlePickupHook(Bot.Pawn, Pickup, 0.40f, FVector{}, true);
 		return true;
 	}
 

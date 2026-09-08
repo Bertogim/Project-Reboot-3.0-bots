@@ -19,6 +19,9 @@
 
 namespace CustomBotBuilding
 {
+	// BuildPiece (definida mas abajo; BuildWall/BuildFloor/BuildRamp/BuildRoof la usan).
+	static ABuildingSMActor* BuildPiece(CustomBot& Bot, UClass* BuildingClass, const FVector& Location, const FRotator& Rotation, bool bMirrored = false);
+
 	// Tipo de pieza construible.
 	enum class EPieceType : uint8_t
 	{

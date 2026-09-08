@@ -132,7 +132,7 @@ namespace CustomBotBuilding
 	//   3. consume material (Wood/Stone/Metal segun GetResourceType)
 	//   4. SetPlayerPlaced + InitializeBuildingActor + SetTeam
 	// Devuelve el actor construido (o nullptr si fallo).
-	static ABuildingSMActor* BuildPiece(CustomBot& Bot, UClass* BuildingClass, const FVector& Location, const FRotator& Rotation, bool bMirrored = false)
+	static ABuildingSMActor* BuildPiece(CustomBot& Bot, UClass* BuildingClass, const FVector& Location, const FRotator& Rotation, bool bMirrored)
 	{
 		if (!Bot.IsReady() || !Bot.Controller || !Bot.WorldInventory)
 			return nullptr;

@@ -123,13 +123,18 @@ namespace CustomBotInventory
 		return EquipItemByGuid(Bot, Item->GetItemEntry()->GetItemGuid());
 	}
 
-	// Equipa el pickaxe del bot (lo da al inventario si no existe y lo equipa).
+	// Equipa el pickaxe del bot. Usa la instancia de pickaxe ya existente en el
+	// WorldInventory (que SetupInventory crea en el spawn); AddPickaxeToInventory()
+	// devuelve nullptr si el pickaxe ya existe, asi que no sirve para re-equipar.
 	static bool EquipPickaxe(CustomBot& Bot)
 	{
-		if (!Bot.IsReady() || !Bot.Controller)
+		if (!Bot.IsReady() || !Bot.Controller || !Bot.WorldInventory)
 			return false;
 
-		UFortItem* Pickaxe = Bot.Controller->AddPickaxeToInventory();
+		UFortItem* Pickaxe = Bot.WorldInventory->GetPickaxeInstance();
+
+		if (!Pickaxe)
+			Pickaxe = Bot.Controller->AddPickaxeToInventory();
 
 		if (!Pickaxe)
 			return false;

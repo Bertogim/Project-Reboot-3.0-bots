@@ -448,9 +448,10 @@ namespace
 		{
 		case DebugBotState::Spawned:
 		{
+			auto* WeaponData = CurrentWeapon ? CurrentWeapon->GetWeaponData() : nullptr;
 			LOG_INFO(LogBots, "[DebugBot] [Spawned] pos=({:.0f},{:.0f},{:.0f}) weapon={} moveActive={}",
 				Pos.X, Pos.Y, Pos.Z,
-				CurrentWeapon ? CurrentWeapon->GetWeaponData()->GetPathName().c_str() : "NONE",
+				WeaponData ? WeaponData->GetPathName().c_str() : (CurrentWeapon ? "UNKNOWN" : "NONE"),
 				Bot.bMoveRequestActive);
 
 			// Configurados en el comando; arranca el avance real.

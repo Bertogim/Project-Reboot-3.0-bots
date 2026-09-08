@@ -173,6 +173,9 @@ namespace CustomBotSpawner
 		LOG_INFO(LogBots, "[CustomBot] Setting up inventory...");
 		SetupInventory(Bot, GameMode);
 
+		// Marcar como listo para que las funciones IsReady() funcionen abajo.
+		Bot.bInitialized = true;
+
 		// Skin/cosmetico.
 		LOG_INFO(LogBots, "[CustomBot] Applying cosmetic loadout...");
 		ApplyRandomCosmeticLoadout(Bot);
@@ -181,8 +184,6 @@ namespace CustomBotSpawner
 		GameMode->GetAlivePlayers().Add(Bot.Controller);
 		++GameState->GetPlayersLeft();
 		GameState->OnRep_PlayersLeft();
-
-		Bot.bInitialized = true;
 
 		FVector BotPos = Bot.Pawn->GetActorLocation();
 		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE pos=({:.0f},{:.0f},{:.0f}) ===",

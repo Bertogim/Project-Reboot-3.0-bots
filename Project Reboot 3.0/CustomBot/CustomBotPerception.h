@@ -55,12 +55,16 @@ namespace CustomBotPerception
 
 	#define IS(Class) (Class && ItemDefinition->IsA(Class))
 
-		if (IS(FortEditToolItemDefinitionClass))  return EItemType::BuildingPiece;
-		if (IS(FortWeaponItemDefinitionClass))    return EItemType::Weapon;
-		if (IS(FortAmmoItemDefinitionClass))      return EItemType::Ammo;
+		// OJO: orden importa. En esta version building pieces (p.ej.
+		// BuildingItemData_Wall) heredan de FortWeaponItemDefinition, asi que
+		// hay que comprobar los tipos de construccion/edicion ANTES que Weapon,
+		// si no EquipFirstWeapon agarra el EditTool/Wall como "arma".
+		if (IS(FortBuildingItemDefinitionClass))   return EItemType::BuildingPiece;
+		if (IS(FortEditToolItemDefinitionClass))   return EItemType::BuildingPiece;
+		if (IS(FortWeaponItemDefinitionClass))     return EItemType::Weapon;
+		if (IS(FortAmmoItemDefinitionClass))       return EItemType::Ammo;
 		if (IS(FortConsumableItemDefinitionClass)) return EItemType::Consumable;
 		if (IS(FortResourceItemDefinitionClass))   return EItemType::Resource;
-		if (IS(FortBuildingItemDefinitionClass))   return EItemType::BuildingPiece;
 		if (IS(FortTrapItemDefinitionClass))       return EItemType::Trap;
 		if (IS(FortGadgetItemDefinitionClass))     return EItemType::Gadget;
 		if (IS(FortDecoItemDefinitionClass))       return EItemType::ConsumableDeco;

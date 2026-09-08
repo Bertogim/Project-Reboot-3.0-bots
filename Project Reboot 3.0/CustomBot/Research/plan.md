@@ -1,5 +1,7 @@
 # CustomBot - Plan de Implementación (Parte 1)
 
+> Mapa mental actual + lecciones del build CI: `07-debug-knowledge-compaction.md`.
+
 ## Estado: FASE 1 COMPLETADA (cuerpo/capacidades) — pendiente revisión en device
 
 ## Auditoria prompt Parte 1 (pasada de cierre)

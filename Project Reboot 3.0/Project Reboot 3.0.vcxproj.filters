@@ -298,6 +298,9 @@
     <ClCompile Include="commands.cpp">
       <Filter>Reboot\Private</Filter>
     </ClCompile>
+    <ClCompile Include="CustomBot\CustomBotDebug.cpp">
+      <Filter>CustomBot</Filter>
+    </ClCompile>
     <ClCompile Include="extra.cpp">
       <Filter>Reboot\Private</Filter>
     </ClCompile>
@@ -389,6 +392,42 @@
     </ClInclude>
     <ClInclude Include="Controller.h">
       <Filter>Engine\Source\Runtime\Engine\Classes\GameFramework</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBot.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotBuilding.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotCombat.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotDebug.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotDestruction.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotInteraction.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotInventory.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotMovement.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotPerception.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotResources.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotSpawner.h">
+      <Filter>CustomBot</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomBot\CustomBotTypes.h">
+      <Filter>CustomBot</Filter>
     </ClInclude>
     <ClInclude Include="Pawn.h">
       <Filter>Engine\Source\Runtime\Engine\Classes\GameFramework</Filter>
@@ -1222,6 +1261,9 @@
     </Filter>
     <Filter Include="Reboot\Private">
       <UniqueIdentifier>{563ca89b-be74-42a6-a995-f87ac7a532e4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CustomBot">
+      <UniqueIdentifier>{e4b9c9a1-31d0-4a2f-9c8b-1f6a37d5e214}</UniqueIdentifier>
     </Filter>
     <Filter Include="FortniteGame\Source\FortniteGame\Public\Athena\Modifiers">
       <UniqueIdentifier>{39656a6c-bfe1-4521-8652-aea0146564d6}</UniqueIdentifier>

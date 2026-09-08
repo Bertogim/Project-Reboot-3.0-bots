@@ -199,6 +199,7 @@
     <ClCompile Include="CheatManager.cpp" />
     <ClCompile Include="Class.cpp" />
     <ClCompile Include="commands.cpp" />
+    <ClCompile Include="CustomBot\CustomBotDebug.cpp" />
     <ClCompile Include="Controller.cpp" />
     <ClCompile Include="DataChannel.cpp" />
     <ClCompile Include="DataTableFunctionLibrary.cpp" />
@@ -320,6 +321,18 @@
     <ClInclude Include="commands.h" />
     <ClInclude Include="ContainerAllocationPolicies.h" />
     <ClInclude Include="Controller.h" />
+    <ClInclude Include="CustomBot\CustomBot.h" />
+    <ClInclude Include="CustomBot\CustomBotBuilding.h" />
+    <ClInclude Include="CustomBot\CustomBotCombat.h" />
+    <ClInclude Include="CustomBot\CustomBotDebug.h" />
+    <ClInclude Include="CustomBot\CustomBotDestruction.h" />
+    <ClInclude Include="CustomBot\CustomBotInteraction.h" />
+    <ClInclude Include="CustomBot\CustomBotInventory.h" />
+    <ClInclude Include="CustomBot\CustomBotMovement.h" />
+    <ClInclude Include="CustomBot\CustomBotPerception.h" />
+    <ClInclude Include="CustomBot\CustomBotResources.h" />
+    <ClInclude Include="CustomBot\CustomBotSpawner.h" />
+    <ClInclude Include="CustomBot\CustomBotTypes.h" />
     <ClInclude Include="builder.h" />
     <ClInclude Include="CurveTable.h" />
     <ClInclude Include="DataTable.h" />

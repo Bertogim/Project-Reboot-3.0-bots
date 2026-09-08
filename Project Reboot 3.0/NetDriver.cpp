@@ -11,6 +11,7 @@
 #include "AssertionMacros.h"
 #include "bots.h"
 #include "gui.h"
+#include "CustomBotSpawner.h"
 
 enum class EChannelCloseReason : uint8
 {
@@ -64,6 +65,10 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 	{
 		Bots::Tick();
 	} */
+
+	// Sistema "Season 3" (independiente del antiguo): tickea los custom bots
+	// (movimiento persistente de MoveTo, y en Parte 2 las decisiones de IA).
+	CustomBotSpawner::TickAll();
 
 	if (Globals::bStartedListening)
 	{

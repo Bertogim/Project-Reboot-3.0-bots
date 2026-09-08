@@ -2,6 +2,8 @@
 
 #include "FortAthenaAIBotSpawnerData.h"
 
+#include "CustomBot/CustomBotDebug.h"
+
 #include <map>
 #include <string>
 
@@ -1041,6 +1043,10 @@ void ServerCheatHook(AFortPlayerControllerAthena* PlayerController, FString Msg)
 
 			Pawn->TeleportTo(FVector(X, Y, Z), Pawn->GetActorRotation());
 			SendMessageToConsole(PlayerController, L"Teleported!");
+		}
+		else if (CustomBotDebug::HandleCommand(ReceivingController, Arguments, NumArgs))
+		{
+			// Comando manejado por el sistema de bot "Season 3" (CustomBotDebug.cpp).
 		}
 		else { bSendHelpMessage = true; };
 	}

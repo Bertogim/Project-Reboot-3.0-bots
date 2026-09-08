@@ -50,6 +50,12 @@ public:
 		return bMoveRequestActive && MoveState == CBT::EMovementState::BlockedPath;
 	}
 
+	// --- Hook de debug (opcional) --------------------------------------------
+	// La secuencia de prueba "debugbot" (CustomBotDebug.cpp) registra aqui una
+	// funcion que se invoca dentro de Tick() cada frame del servidor. Mantiene
+	// el nucleo de CustomBot desacoplado de la logica de la secuencia.
+	void (*DebugTick)(CustomBot& Self) = nullptr;
+
 	// --- Estado / validez ---------------------------------------------------
 
 	bool IsReady() const
@@ -114,6 +120,10 @@ public:
 	{
 		if (!IsReady() || !IsValidActor())
 			return;
+
+		// Secuencia de prueba (debugbot) si esta registrada.
+		if (DebugTick)
+			DebugTick(*this);
 
 		// Parte 2: aqui se insertaran las decisiones de IA.
 	}

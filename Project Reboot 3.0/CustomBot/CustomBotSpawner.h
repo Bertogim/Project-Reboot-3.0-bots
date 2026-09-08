@@ -21,14 +21,27 @@ namespace CustomBotSpawner
 
 	static void TickAll()
 	{
-		for (auto& Bot : AllCustomBots)
-		{
-			if (!Bot.IsValidActor())
-				continue;
+		// Marcar los bots a eliminar y borrarlos DESPUES del bucle: un bot puede
+		// marcarse como destruido mientras Tick()/UpdateMovement() ejecutan (p.ej.
+		// la secuencia debugbot), y borrar dentro del iterador las invalidaria.
+		std::vector<size_t> ToRemove;
 
-			Bot.Tick();                              // Parte 2: decisiones de IA
+		for (size_t i = 0; i < AllCustomBots.size(); ++i)
+		{
+			CustomBot& Bot = AllCustomBots[i];
+
+			if (!Bot.IsValidActor())
+			{
+				ToRemove.push_back(i);
+				continue;
+			}
+
+			Bot.Tick();                              // Parte 2 + secuencia debugbot
 			CustomBotMovement::UpdateMovement(Bot);  // pipeline de movimiento real
 		}
+
+		for (size_t i = ToRemove.size(); i-- > 0;)
+			AllCustomBots.erase(AllCustomBots.begin() + ToRemove[i]);
 	}
 
 	// Inicializa las clases de pawn/controller (una sola vez).

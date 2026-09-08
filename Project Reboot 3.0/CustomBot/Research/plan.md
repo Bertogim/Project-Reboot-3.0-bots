@@ -3,6 +3,17 @@
 ## Estado: FASE 1 COMPLETADA (cuerpo/capacidades) — pendiente revisión en device
 
 ## Auditoria prompt Parte 1 (pasada de cierre)
+- Comando `debugbot`: secuencia de prueba completa del Custom Bot (sin el sistema
+  antiguo). Maquina de estados (DebugBotState) + timers (GetTimeSeconds) dentro de
+  CustomBot::DebugTick (registrado en el comando). Un solo debugbot activo a la vez.
+  Secuencia: spawn junto al primer jugador real -> MoveForward -> Jump -> BuildRamp
+  -> ClimbingRamp -> TurnAround 180 -> EquipPickaxe -> destroy ramp -> equip weapon
+  -> 5 disparos -> drop weapon -> wait 10s -> remove. Solo teletransporte inicial.
+  Cleanup: remover de GetAlivePlayers, decrementar PlayersLeft, destruir WorldInventory/
+  pawn/controller, limpiar DebugTick y estado. PlayerState queda registrado en
+  GameMemberInfo (no existe API de baja; documentado como limitacion).
+- FindTestWeaponDefinition: rutas conocidas + fallback escaneo de GObjects (best-effort).
+- Logs spdlog con prefijo [DebugBot] en todos los pasos y errores.
 - Movement: MoveTo persistente (FMoveRequest en CustomBot) + UpdateMovement por tick
   (CustomBotSpawner::TickAll llamada desde NetDriver.cpp TickFlushHook, sin tocar Bots::Tick
   ni bots.h). Added MoveForward/MoveRight/SetRotation/SetYaw + estados Idle/Moving/Arrived/BlockedPath.

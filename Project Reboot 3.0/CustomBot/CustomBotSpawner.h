@@ -4,6 +4,8 @@
 
 #include "CustomBotMovement.h"
 
+#include "GameplayStatics.h"
+
 // CustomBot - Spawner.
 //
 // Crea instancias reales de jugador para el bot (AFortPlayerControllerAthena +
@@ -40,6 +42,16 @@ namespace CustomBotSpawner
 			{
 				ToRemove.push_back(i);
 				continue;
+			}
+
+			// Diagnostico: confirma que TickAll itera e invoca cada frame (~2s).
+			static double LastTickAllLog = 0;
+			double Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+			if (Now - LastTickAllLog >= 2.0)
+			{
+				LOG_INFO(LogBots, "[CustomBot] [tickall] count={} ready={} dbgTick={}",
+					AllCustomBots.size(), Bot.IsReady(), Bot.DebugTick != nullptr);
+				LastTickAllLog = Now;
 			}
 
 			Bot.Tick();                              // Parte 2 + secuencia debugbot

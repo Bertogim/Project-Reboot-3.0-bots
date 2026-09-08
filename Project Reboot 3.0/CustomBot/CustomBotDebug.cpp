@@ -428,6 +428,18 @@ namespace
 	// del servidor dentro de CustomBotSpawner::TickAll).
 	static void TickDebugBot(CustomBot& Bot)
 	{
+		// Diagnostico: confirma que el tick de la secuencia se invoca (cada ~2s,
+		// en cualquier estado). Si esto no aparece, el problema es que DebugTick
+		// no se esta llamando (TickAll / Bot.Tick), no la maquina de estados.
+		static double LastTickLog = 0;
+		float TT = DebugBotTime();
+		if (TT - LastTickLog >= 2.0)
+		{
+			LOG_INFO(LogBots, "[DebugBot] [tick] step={} ready={} valid={} life={}",
+				DebugBotStateName(gDebugBot.Step), Bot.IsReady(), Bot.IsValidActor(), (int)Bot.GetLifeState());
+			LastTickLog = TT;
+		}
+
 		if (gDebugBot.Step == DebugBotState::None || gDebugBot.Step == DebugBotState::Finished)
 			return;
 

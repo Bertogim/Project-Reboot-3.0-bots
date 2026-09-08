@@ -303,6 +303,7 @@
     <ClInclude Include="BinaryHeap.h" />
     <ClInclude Include="BitArray.h" />
     <ClInclude Include="botnames.h" />
+    <ClInclude Include="BuildVersion.h" />
     <ClInclude Include="bots.h" />
     <ClInclude Include="BP_IslandScripting.h" />
     <ClInclude Include="BuildingActor.h" />

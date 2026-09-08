@@ -20,9 +20,28 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      - name: Compute build version
+        id: version
+        shell: pwsh
+        run: |
+          $short = $env:GITHUB_SHA.Substring(0, 8)
+          $ver = "b$env:GITHUB_RUN_NUMBER-$short"
+          Write-Output "code=$ver" >> $env:GITHUB_OUTPUT
+          Write-Output "hash=$short" >> $env:GITHUB_OUTPUT
+
       - name: Build Reboot
         working-directory: ${{ github.workspace }}
-        run: msbuild "${{ env.SOLUTION_FILE_PATH }}" /t:Build /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x64 /m
+        run: msbuild "${{ env.SOLUTION_FILE_PATH }}" /t:Build /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=x64 "/p:AdditionalOptions=/DREBOOT_BUILD_VERSION=\"${{ steps.version.outputs.code }}\" /DREBOOT_BUILD_HASH=\"${{ steps.version.outputs.hash }}\"" /m
+
+      - name: Write version file
+        working-directory: ${{ github.workspace }}
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.code }}"
+          $h = "${{ steps.version.outputs.hash }}"
+          "build=$v" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii
+          "hash=$h" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii -Append
+          "time=$env:GITHUB_ACTOR run #$env:GITHUB_RUN_NUMBER" | Out-File -FilePath "x64/Release/version.txt" -Encoding ascii -Append
 
       - name: Upload Artifact without ABOVE_S20
         uses: actions/upload-artifact@v4

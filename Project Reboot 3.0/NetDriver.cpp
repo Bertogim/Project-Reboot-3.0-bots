@@ -70,10 +70,7 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 		bShouldDestroyAllPlayerBuilds = false;
 	}
 	
-	if (bEnableBotTick)
-	{
-		SafeBotsTick();
-	}
+	SafeBotsTick();
 
 	if (Globals::bStartedListening)
 	{

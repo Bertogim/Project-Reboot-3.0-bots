@@ -960,6 +960,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		if (AmountOfBotsToSpawn != 0)
 		{
 			Bots::SpawnBotsAtPlayerStarts(AmountOfBotsToSpawn);
+			bEnableBotTick = true;
 		}
 
 		if (std::floor(Fortnite_Version) == 5)

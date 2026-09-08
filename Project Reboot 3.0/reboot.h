@@ -245,7 +245,7 @@ inline std::vector<T*> GetAllObjectsOfClass(UClass* Class)
 			continue;
 
 		if (Object->IsA(Class))
-			Objects.push_back(Cast<T>(Object));
+			Objects.push_back(Cast<T, false>(Object));
 	}
 
 	return Objects;

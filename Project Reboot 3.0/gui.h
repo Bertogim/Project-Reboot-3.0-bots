@@ -46,6 +46,7 @@
 #include "die.h"
 #include "calendar.h"
 #include "KismetRenderingLibrary.h"
+#include "CustomBot/CustomBotDebug.h"
 
 #define GAME_TAB 1
 #define PLAYERS_TAB 2
@@ -1244,6 +1245,14 @@ static inline void MainUI()
 					ItemToGrantEveryone = "";
 					LOG_WARN(LogUI, "Invalid Item Definition!");
 				}
+			}
+
+			if (ImGui::Button("Spawn Debug Bot (test sequence)"))
+			{
+				// Secuencia completa de prueba del Custom Bot "Season 3": spawn junto
+				// al primer jugador valido, loadout, y lanza caminar/saltar/rampa/
+				// pico/disparar/tirar arma, y al final se elimina solo.
+				CustomBotDebug::StartDebugBot(Cast<AFortPlayerControllerAthena>(GetLocalPlayerController()));
 			}
 
 			auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());

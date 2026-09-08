@@ -594,6 +594,70 @@ namespace
 	}
 }
 
+// Inicia la secuencia de prueba "debugbot" (un solo debugbot activo a la vez).
+void CustomBotDebug::StartDebugBot(AFortPlayerControllerAthena* ContextPlayer)
+{
+	if (gDebugBot.Step != DebugBotState::None && gDebugBot.Step != DebugBotState::Finished)
+	{
+		SendBotMessage(ContextPlayer, L"[DebugBot] A debug bot is already running!");
+		LOG_INFO(LogBots, "[DebugBot] Start ignored: sequence already active");
+		return;
+	}
+
+	// Buscar el primer jugador valido ANTES de crear el bot.
+	AFortPlayerControllerAthena* TargetPlayer = FindFirstValidPlayer();
+
+	if (!TargetPlayer || !TargetPlayer->GetPawn())
+	{
+		SendBotMessage(ContextPlayer, L"[DebugBot] No valid player found, bot not created!");
+		LOG_INFO(LogBots, "[DebugBot] ERROR: no valid player in match, skipping spawn");
+		return;
+	}
+
+	LOG_INFO(LogBots, "[DebugBot] Found player");
+
+	APawn* TargetPawn = TargetPlayer->GetPawn();
+	FVector PlayerLoc = TargetPawn->GetActorLocation();
+	FRotator PlayerRot = TargetPawn->GetActorRotation();
+	FVector Fwd = TargetPawn->GetActorForwardVector();
+
+	// Aparicion "junto al jugador" (unico teletransporte del debugbot).
+	FVector BotSpawn = PlayerLoc + Fwd * 250.0f;
+	BotSpawn.Z += 50.0f; // no quedar dentro del jugador
+
+	FTransform SpawnTransform{};
+	SpawnTransform.Translation = BotSpawn;
+	SpawnTransform.Rotation = PlayerRot.Quaternion();
+	SpawnTransform.Scale3D = { 1, 1, 1 };
+
+	CustomBot* DebugBot = CustomBotSpawner::SpawnCustomBot(SpawnTransform);
+
+	if (!DebugBot)
+	{
+		SendBotMessage(ContextPlayer, L"[DebugBot] Failed to create custom bot!");
+		return;
+	}
+
+	DebugBot->Pawn->TeleportTo(BotSpawn, PlayerRot);
+	LOG_INFO(LogBots, "[DebugBot] Teleported to player ({}, {}, {})", BotSpawn.X, BotSpawn.Y, BotSpawn.Z);
+
+	// Arma, municion, materiales y escudo.
+	if (!DebugBotGrantLoadout(*DebugBot))
+	{
+		DebugBotRemove(*DebugBot);
+		SendBotMessage(ContextPlayer, L"[DebugBot] Loadout failed, bot removed!");
+		return;
+	}
+
+	LOG_INFO(LogBots, "[DebugBot] Spawned");
+	SendBotMessage(ContextPlayer, L"[DebugBot] Sequence started!");
+
+	// Registrar la secuencia en el bot (Tick la ejecutara cada frame).
+	gDebugBot = DebugBotContext{};
+	gDebugBot.Step = DebugBotState::Spawned;
+	DebugBot->DebugTick = &TickDebugBot;
+}
+
 // Devuelve true si Arguments[0] es un comando de CustomBot y se ejecuto.
 bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController, const std::vector<std::string>& Arguments, size_t NumArgs)
 {
@@ -623,72 +687,6 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 		auto NewBot = CustomBotSpawner::SpawnCustomBot(SpawnTransform);
 
 		SendBotMessage(PlayerController, NewBot ? L"Custom bot spawned!" : L"Failed to spawn custom bot!");
-		return true;
-	}
-
-	if (Command == "debugbot")
-	{
-		// No crear un segundo debugbot mientras la secuencia este en marcha.
-		if (gDebugBot.Step != DebugBotState::None && gDebugBot.Step != DebugBotState::Finished)
-		{
-			SendBotMessage(PlayerController, L"[DebugBot] A debug bot is already running!");
-			LOG_INFO(LogBots, "[DebugBot] Command ignored: sequence already active");
-			return true;
-		}
-
-		// Buscar el primer jugador valido ANTES de crear el bot.
-		AFortPlayerControllerAthena* TargetPlayer = FindFirstValidPlayer();
-
-		if (!TargetPlayer || !TargetPlayer->GetPawn())
-		{
-			SendBotMessage(PlayerController, L"[DebugBot] No valid player found, bot not created!");
-			LOG_INFO(LogBots, "[DebugBot] ERROR: no valid player in match, skipping spawn");
-			return true;
-		}
-
-		LOG_INFO(LogBots, "[DebugBot] Found player");
-
-		APawn* TargetPawn = TargetPlayer->GetPawn();
-		FVector PlayerLoc = TargetPawn->GetActorLocation();
-		FRotator PlayerRot = TargetPawn->GetActorRotation();
-		FVector Fwd = TargetPawn->GetActorForwardVector();
-
-		// Aparicion "junto al jugador" (unico teletransporte del debugbot).
-		FVector BotSpawn = PlayerLoc + Fwd * 250.0f;
-		BotSpawn.Z += 50.0f; // no quedar dentro del jugador
-
-		FTransform SpawnTransform{};
-		SpawnTransform.Translation = BotSpawn;
-		SpawnTransform.Rotation = PlayerRot.Quaternion();
-		SpawnTransform.Scale3D = { 1, 1, 1 };
-
-		CustomBot* DebugBot = CustomBotSpawner::SpawnCustomBot(SpawnTransform);
-
-		if (!DebugBot)
-		{
-			SendBotMessage(PlayerController, L"[DebugBot] Failed to create custom bot!");
-			return true;
-		}
-
-		DebugBot->Pawn->TeleportTo(BotSpawn, PlayerRot);
-		LOG_INFO(LogBots, "[DebugBot] Teleported to player ({}, {}, {})", BotSpawn.X, BotSpawn.Y, BotSpawn.Z);
-
-		// Arma, municion, materiales y escudo.
-		if (!DebugBotGrantLoadout(*DebugBot))
-		{
-			DebugBotRemove(*DebugBot);
-			SendBotMessage(PlayerController, L"[DebugBot] Loadout failed, bot removed!");
-			return true;
-		}
-
-		LOG_INFO(LogBots, "[DebugBot] Spawned");
-		SendBotMessage(PlayerController, L"[DebugBot] Sequence started!");
-
-		// Registrar la secuencia en el bot (Tick la ejecutara cada frame).
-		gDebugBot = DebugBotContext{};
-		gDebugBot.Step = DebugBotState::Spawned;
-		DebugBot->DebugTick = &TickDebugBot;
-
 		return true;
 	}
 

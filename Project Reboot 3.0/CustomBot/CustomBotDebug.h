@@ -13,6 +13,11 @@ class AFortPlayerControllerAthena;
 
 namespace CustomBotDebug
 {
+	// Inicia la secuencia de prueba "debugbot" (un solo debugbot activo a la vez).
+	// Busca el primer jugador valido y spawnea junto a el. ContextPlayer recibe los
+	// mensajes de chat (puede ser nullptr). Llamado desde la pestaña "Fun" de la GUI.
+	void StartDebugBot(AFortPlayerControllerAthena* ContextPlayer);
+
 	// Devuelve true si Arguments[0] es un comando de CustomBot y se ejecuto.
 	// Arguments[0] es el comando; Args empiezan en Arguments[1]. NumArgs = nº de args.
 	bool HandleCommand(AFortPlayerControllerAthena* PlayerController, const std::vector<std::string>& Arguments, size_t NumArgs);

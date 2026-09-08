@@ -136,7 +136,7 @@ static inline UObject* GetLocalPlayerController()
 template <typename T, bool bCheckType = true>
 static __forceinline T* Cast(UObject* Object)
 {
-	if (bCheckType)
+	if constexpr (bCheckType)
 	{
 		if (Object && Object->IsA(T::StaticClass()))
 		{

@@ -142,27 +142,57 @@ namespace CustomBotSpawner
 			return nullptr;
 		}
 
-		LOG_INFO(LogBots, "[CustomBot] Spawning pawn...");
-		Bot.Pawn = GetWorld()->SpawnActor<AFortPlayerPawnAthena>(
-			PawnClass,
-			SpawnTransform,
-			CreateSpawnParameters(ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn));
-
-		if (!Bot.Pawn)
-		{
-			LOG_ERROR(LogBots, "[CustomBot] Failed to spawn pawn!");
-			Bot.Controller->K2_DestroyActor();
-			AllCustomBots.pop_back();
-			return nullptr;
-		}
-
 		LOG_INFO(LogBots, "[CustomBot] Getting PlayerState...");
 		Bot.PlayerState = Cast<AFortPlayerStateAthena>(Bot.Controller->GetPlayerState());
 
 		if (!Bot.PlayerState)
 		{
 			LOG_ERROR(LogBots, "[CustomBot] Failed to get playerstate!");
-			Bot.Pawn->K2_DestroyActor();
+			Bot.Controller->K2_DestroyActor();
+			AllCustomBots.pop_back();
+			return nullptr;
+		}
+
+		// FLUJO NATIVO: materializar el pawn EXACTAMENTE como lo hace el juego para
+		// los jugadores reales (SpawnDefaultPawnForHook -> SpawnDefaultPawnAtTransform,
+		// ver GameModeBase.cpp:125 y el drop del avion en FortPlayerController.cpp:761).
+		// Replica la construccion real del PlayerPawn_Athena_C (BeginPlay nativo,
+		// registro de componentes, dormancia y tick de movimiento).
+		LOG_INFO(LogBots, "[CustomBot] Spawning pawn via native SpawnDefaultPawnAtTransform...");
+		{
+			static auto DefaultPawnClassOffset = GameMode->GetOffset("DefaultPawnClass");
+			GameMode->Get<UClass*>(DefaultPawnClassOffset) = PawnClass;
+
+			static auto SpawnDefaultPawnAtTransformFn = FindObject<UFunction>(L"/Script/Engine.GameModeBase.SpawnDefaultPawnAtTransform");
+
+			struct
+			{
+				AController* NewPlayer;                                            // (Parm, ZeroConstructor, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+				FTransform SpawnTransform;                                         // (Skipping exact layout; matches SpawnDefaultPawnAtTransform params)
+				APawn* ReturnValue;                                                // (Parm, OutParm, ZeroConstructor, ReturnParm, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
+			} AGameModeBase_SpawnDefaultPawnAtTransform_Params{ Bot.Controller, SpawnTransform };
+
+			GameMode->ProcessEvent(SpawnDefaultPawnAtTransformFn, &AGameModeBase_SpawnDefaultPawnAtTransform_Params);
+
+			Bot.Pawn = Cast<AFortPlayerPawnAthena>(AGameModeBase_SpawnDefaultPawnAtTransform_Params.ReturnValue);
+
+			auto* SpawnedRawPtr = AGameModeBase_SpawnDefaultPawnAtTransform_Params.ReturnValue;
+			LOG_INFO(LogBots, "[CustomBot] Native SpawnDefaultPawnAtTransform returned {} pawn=0x{:x}",
+				SpawnedRawPtr ? "OK" : "null", __int64(Bot.Pawn));
+		}
+
+		if (!Bot.Pawn)
+		{
+			LOG_WARN(LogBots, "[CustomBot] Native spawn failed; falling back to manual SpawnActor...");
+			Bot.Pawn = GetWorld()->SpawnActor<AFortPlayerPawnAthena>(
+				PawnClass,
+				SpawnTransform,
+				CreateSpawnParameters(ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn));
+		}
+
+		if (!Bot.Pawn)
+		{
+			LOG_ERROR(LogBots, "[CustomBot] Failed to spawn pawn!");
 			Bot.Controller->K2_DestroyActor();
 			AllCustomBots.pop_back();
 			return nullptr;

@@ -11,7 +11,7 @@
 #include "AssertionMacros.h"
 #include "bots.h"
 #include "gui.h"
-#include "CustomBotSpawner.h"
+#include "CustomBot/CustomBotSpawner.h"
 
 enum class EChannelCloseReason : uint8
 {

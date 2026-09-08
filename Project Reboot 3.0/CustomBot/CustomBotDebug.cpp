@@ -1,4 +1,4 @@
-#include "CustomBot/CustomBotDebug.h"
+#include "CustomBotDebug.h"
 
 #include "CustomBot.h"
 

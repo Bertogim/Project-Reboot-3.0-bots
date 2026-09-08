@@ -27,20 +27,34 @@ namespace CustomBotSpawner
 	static bool SetupInventory(CustomBot& Bot, AFortGameModeAthena* GameMode);
 	static void ApplyRandomCosmeticLoadout(CustomBot& Bot);
 
+	// Diagnostico: log una vez al primer invocarse y despues cada ~30 llamadas.
+	static inline bool bTickAllFirstLogDone = false;
+
 	static void TickAll()
 	{
-		// Marcar los bots a eliminar y borrarlos DESPUES del bucle: un bot puede
-		// marcarse como destruido mientras Tick()/UpdateMovement() ejecutan (p.ej.
-		// la secuencia debugbot), y borrar dentro del iterador las invalidaria.
+		static unsigned TickAllCounter = 0;
+		unsigned tc = ++TickAllCounter;
+
+		if (!bTickAllFirstLogDone)
+		{
+			LOG_INFO(LogBots, "[CustomBot] [tickall] FIRST invoke. AllCustomBots.size={}",
+				AllCustomBots.size());
+			bTickAllFirstLogDone = true;
+		}
+
+		if (tc % 30 == 0)
+		{
+			LOG_INFO(LogBots, "[CustomBot] [tickall] invoke #{} bots={}",
+				tc, AllCustomBots.size());
+		}
+
 		if (AllCustomBots.empty())
 			return;
 
+		// Marcar los bots a eliminar y borrarlos DESPUES del bucle: un bot puede
+		// marcarse como destruido mientras Tick()/UpdateMovement() ejecutan (p.ej.
+		// la secuencia debugbot), y borrar dentro del iterador las invalidaria.
 		std::vector<size_t> ToRemove;
-
-		// Diagnostico: contador de frames (robusto, no depende de timers), loguea
-		// ~una vez cada 120 llamadas (~2s a 60fps).
-		static unsigned TickAllCounter = 0;
-		unsigned tc = ++TickAllCounter;
 
 		for (size_t i = 0; i < AllCustomBots.size(); ++i)
 		{
@@ -48,17 +62,16 @@ namespace CustomBotSpawner
 
 			if (!Bot.IsValidActor())
 			{
-				if (tc % 120 == 0)
-					LOG_INFO(LogBots, "[CustomBot] [tickall] INVALID bot idx={} controller={} pawn={}, removing",
-						i, bool(Bot.Controller), bool(Bot.Pawn));
+				LOG_INFO(LogBots, "[CustomBot] [tickall] INVALID bot idx={} controller={} pawn={}, removing",
+					i, bool(Bot.Controller), bool(Bot.Pawn));
 
 				ToRemove.push_back(i);
 				continue;
 			}
 
-			if (tc % 120 == 0)
-				LOG_INFO(LogBots, "[CustomBot] [tickall] bots={} idx={} ready={} dbgTick={} life={}",
-					AllCustomBots.size(), i, Bot.IsReady(), Bot.DebugTick != nullptr, (int)Bot.GetLifeState());
+			if (tc % 30 == 0)
+				LOG_INFO(LogBots, "[CustomBot] [tickall] idx={} ready={} dbgTick={} life={}",
+					i, Bot.IsReady(), Bot.DebugTick != nullptr, (int)Bot.GetLifeState());
 
 			Bot.Tick();                              // Parte 2 + secuencia debugbot
 			CustomBotMovement::UpdateMovement(Bot);  // pipeline de movimiento real

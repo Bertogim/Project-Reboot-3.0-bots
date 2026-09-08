@@ -43,6 +43,14 @@ void UNetDriver::RemoveNetworkActor(AActor* Actor)
 
 void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 {
+	static bool bTickFlushFirstLogDone = false;
+	if (!bTickFlushFirstLogDone)
+	{
+		LOG_INFO(LogDev, "[TickFlushHook] FIRST invoke. NetDriver={}", __int64(NetDriver));
+		LOG_INFO(LogBots, "[CustomBot] [tickflush] FIRST invoke");
+		bTickFlushFirstLogDone = true;
+	}
+
 	if (bShouldDestroyAllPlayerBuilds) // i hate this
 	{
 		auto AllBuildingSMActors = UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABuildingSMActor::StaticClass());

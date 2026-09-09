@@ -101,6 +101,14 @@ namespace CustomBotAI
 		return GameState && GameState->GetGamePhase() == EAthenaGamePhase::Aircraft;
 	}
 
+	// Devuelve true si la partida esta en pre-partida (Warmup): los bots simulan
+	// un lobby activo paseando, looteando y disparandose hasta que despegue el bus.
+	static bool IsWarmupPhase()
+	{
+		auto GameState = GetGameState();
+		return GameState && GameState->GetGamePhase() == EAthenaGamePhase::Warmup;
+	}
+
 	// Devuelve true si la partida esta en fase de zonas seguras (midgame).
 	static bool IsInSafeZonesPhase()
 	{

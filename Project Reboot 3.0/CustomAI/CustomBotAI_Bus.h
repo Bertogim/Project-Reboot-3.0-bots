@@ -227,11 +227,17 @@ namespace CustomBotAIBus
 				{
 					// Aun no está montado. Si el bus ya paso (SafeZones+) no
 					// vendra a recogerlo: empezar a jugar en el suelo. Si aun
-					// estamos en Warmup, esperar a que el avion lo recoja.
+					// estamos en Warmup, simular un lobby activo mientras tanto
+					// (paseo/loot/disparos); el avion lo recogera al empezar.
 					AFortGameStateAthena* GS = CustomBotAI::GetGameState();
 					EAthenaGamePhase Phase = GS ? GS->GetGamePhase() : EAthenaGamePhase::None;
 
-					if (Phase == EAthenaGamePhase::SafeZones || Phase == EAthenaGamePhase::EndGame)
+					if (Phase == EAthenaGamePhase::Warmup)
+					{
+						Ctx.State = EBotState::Warmup;
+						Ctx.bHasLandingPoint = false;
+					}
+					else if (Phase == EAthenaGamePhase::SafeZones || Phase == EAthenaGamePhase::EndGame)
 					{
 						Ctx.State = EBotState::Looting;
 						Ctx.bHasLandingPoint = false;

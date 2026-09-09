@@ -1360,6 +1360,7 @@ static inline void MainUI()
 			ImGui::Text("Healing: %d", Counts.Healing);
 			ImGui::Text("Rotating: %d", Counts.Rotating);
 			ImGui::Text("End Game: %d", Counts.EndGame);
+			ImGui::Text("Warmup Lobby: %d", Counts.Warmup);
 			ImGui::Text("Dead: %d", Counts.Dead);
 		}
 		else if (Tab == LATEGAME_TAB)

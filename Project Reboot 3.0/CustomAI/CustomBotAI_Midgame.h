@@ -21,6 +21,7 @@ namespace CustomBotAIMidgame
 	static void BuildBarricade(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc);
 	static void DoEndGame(CustomBot& Bot, BotAIContext& Ctx);
 	static bool TryResolveBlockedPath(FVector& MoveTarget, CustomBot& Bot, BotAIContext& Ctx);
+	static void DoWarmup(CustomBot& Bot, BotAIContext& Ctx);
 
 	// --- Timers ---------------------------------------------------------------
 	static float Elapsed;
@@ -89,6 +90,165 @@ namespace CustomBotAIMidgame
 
 	// --- Acciones por estado ---------------------------------------------------
 
+	// --- Mejora de armas (Seccion 4) ------------------------------------------
+	// Slots de la quickbar de armas/consumibles (parecido a un jugador real).
+	static constexpr int kQuickbarLootSlots = 5;
+
+	// Puntuacion heuristica de un item para comparar calidad: nivel (rareza/tier)
+	// como base + bonus por categoria de arma (sniper/launcher mejor que pistola).
+	static int ItemLootScore(FFortItemEntry* Entry)
+	{
+		if (!Entry || !Entry->GetItemDefinition())
+			return 0;
+
+		auto Def = Entry->GetItemDefinition();
+		int Score = (Entry->GetLevel() > 0 ? Entry->GetLevel() : 1) * 100;
+
+		std::string Path = Def->GetPathName();
+
+		static const char* CatDirs[] = { "/Sniper/", "/Launchers/", "/Shotgun/", "/Rifle/", "/SMG/", "/Pistol/" };
+		static const int CatBonus[]  = { 600, 550, 500, 400, 300, 150 };
+
+		for (int i = 0; i < 6; ++i)
+		{
+			if (Path.find(CatDirs[i]) != std::string::npos)
+			{
+				Score += CatBonus[i];
+				break;
+			}
+		}
+
+		return Score;
+	}
+
+	// Cuenta los items que ocupan slots de "quickbar" (armas + consumibles).
+	static int QuickbarLootCount(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.WorldInventory)
+			return 0;
+
+		int Count = 0;
+		auto& ItemInstances = Bot.WorldInventory->GetItemList().GetItemInstances();
+
+		for (int i = 0; i < ItemInstances.size(); ++i)
+		{
+			UFortItem* Item = ItemInstances.at(i);
+			if (!Item)
+				continue;
+
+			auto Entry = Item->GetItemEntry();
+			if (!Entry || !Entry->GetItemDefinition())
+				continue;
+
+			auto T = CustomBotPerception::ClassifyItemDefinition(Entry->GetItemDefinition());
+			if (T == CustomBotPerception::EItemType::Weapon || T == CustomBotPerception::EItemType::Consumable)
+				++Count;
+		}
+
+		return Count;
+	}
+
+	// Devuelve el arma (Weapon) con menor puntuacion del inventario, o nullptr.
+	static UFortItem* FindWorstWeapon(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.WorldInventory)
+			return nullptr;
+
+		UFortItem* Worst = nullptr;
+		int WorstScore = 0;
+		auto& ItemInstances = Bot.WorldInventory->GetItemList().GetItemInstances();
+
+		for (int i = 0; i < ItemInstances.size(); ++i)
+		{
+			UFortItem* Item = ItemInstances.at(i);
+			if (!Item)
+				continue;
+
+			auto Entry = Item->GetItemEntry();
+			if (!Entry || !Entry->GetItemDefinition())
+				continue;
+
+			if (CustomBotPerception::ClassifyItemDefinition(Entry->GetItemDefinition())
+				!= CustomBotPerception::EItemType::Weapon)
+				continue;
+
+			int S = ItemLootScore(Entry);
+			if (!Worst || S < WorstScore)
+			{
+				WorstScore = S;
+				Worst = Item;
+			}
+		}
+
+		return Worst;
+	}
+
+	// Equipa el arma con mayor puntuacion del inventario (fortalece el swap de
+	// armas: tras recoger una mejor, cambia a ella en vez de a la primera).
+	static bool EquipBestWeapon(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.WorldInventory)
+			return false;
+
+		UFortItem* Best = nullptr;
+		int BestScore = 0;
+		auto& ItemInstances = Bot.WorldInventory->GetItemList().GetItemInstances();
+
+		for (int i = 0; i < ItemInstances.size(); ++i)
+		{
+			UFortItem* Item = ItemInstances.at(i);
+			if (!Item)
+				continue;
+
+			auto Entry = Item->GetItemEntry();
+			if (!Entry || !Entry->GetItemDefinition())
+				continue;
+
+			if (CustomBotPerception::ClassifyItemDefinition(Entry->GetItemDefinition())
+				!= CustomBotPerception::EItemType::Weapon)
+				continue;
+
+			int S = ItemLootScore(Entry);
+			if (!Best || S > BestScore)
+			{
+				BestScore = S;
+				Best = Item;
+			}
+		}
+
+		return Best ? CustomBotInventory::EquipItem(Bot, Best) : false;
+	}
+
+	// Si la quickbar esta llena y el pickup es un arma MEJOR que la peor que
+	// llevamos, soltamos la peor para hacer hueco antes de recogerlo.
+	static void TrySwapForBetterWeapon(CustomBot& Bot, AFortPickup* Pickup)
+	{
+		if (!Bot.IsReady() || !Pickup)
+			return;
+
+		auto Entry = Pickup->GetPrimaryPickupItemEntry();
+		if (!Entry || !Entry->GetItemDefinition())
+			return;
+
+		if (CustomBotPerception::ClassifyItemDefinition(Entry->GetItemDefinition())
+			!= CustomBotPerception::EItemType::Weapon)
+			return;
+
+		int NewScore = ItemLootScore(Entry);
+
+		if (QuickbarLootCount(Bot) >= kQuickbarLootSlots)
+		{
+			UFortItem* Worst = FindWorstWeapon(Bot);
+
+			if (Worst && NewScore > ItemLootScore(Worst->GetItemEntry()))
+			{
+				LOG_INFO(LogBots, "[BotAI] loot: swapping worst weapon ({}) for better pick ({})",
+					ItemLootScore(Worst->GetItemEntry()), NewScore);
+				CustomBotInventory::DropItem(Bot, Worst, 1);
+			}
+		}
+	}
+
 	// LOOT: moverse al loot / cofre mas cercano y recoger.
 	static void DoLooting(CustomBot& Bot, BotAIContext& Ctx)
 	{
@@ -125,7 +285,7 @@ namespace CustomBotAIMidgame
 
 					if (Ctx.ActionTimer <= 0.0f)
 					{
-						CustomBotInventory::EquipFirstWeapon(Bot);
+						EquipBestWeapon(Bot);
 						Ctx.ActionTimer = 0.8f;
 					}
 				}
@@ -144,13 +304,16 @@ namespace CustomBotAIMidgame
 
 			if (Bot.Pawn->GetDistanceTo(Pickup) <= CustomBotInteraction::InteractionRadius)
 			{
+				// Quickbar llena: soltar la peor arma si el pickup es mejor (Sec 4).
+				TrySwapForBetterWeapon(Bot, Pickup);
+
 				if (CustomBotInteraction::PickupItem(Bot, Pickup))
 				{
 					++Ctx.LootedItems;
 
 					if (Ctx.ActionTimer <= 0.0f)
 					{
-						CustomBotInventory::EquipFirstWeapon(Bot);
+						EquipBestWeapon(Bot);
 						Ctx.ActionTimer = 0.8f;
 					}
 				}
@@ -482,7 +645,7 @@ namespace CustomBotAIMidgame
 
 		if (!bHasWeapon)
 		{
-			CustomBotInventory::EquipFirstWeapon(Bot);
+			EquipBestWeapon(Bot);
 		}
 
 		if (bHasWeapon)
@@ -676,6 +839,16 @@ namespace CustomBotAIMidgame
 		// Timers y escaneos a intervalos (performance).
 		TickTimers(Bot, Ctx);
 
+		// Warmup: el estado se decide por la fase de juego (no por Decide). Aunque
+		// DoWarmup delegue en DoFighting/DoLooting (que cambian Ctx.State), la
+		// fase Warmup mantiene el lobby hasta que arranque el avion.
+		if (CustomBotAI::IsWarmupPhase())
+		{
+			Ctx.State = EBotState::Warmup;
+			DoWarmup(Bot, Ctx);
+			return;
+		}
+
 		if (Ctx.DecisionTimer <= 0.0f || Ctx.State == EBotState::Dead)
 		{
 			Decide(Bot, Ctx);
@@ -753,5 +926,58 @@ namespace CustomBotAIMidgame
 		}
 
 		DoRotating(Bot, Ctx, Ctx.Personality.Aggression > 0.5f);
+	}
+
+	// --- WARMUP / PRE-PARTIDA --------------------------------------------------
+	// Simula un lobby activo mientras el bus no ha arrancado: el bot pasea por la
+	// isla, recoge lo que encuentra y dispara a otros bots/jugadores que ve cerca
+	// (como los jugadores reales matando el tiempo antes de que despegue el avion).
+	static void DoWarmup(CustomBot& Bot, BotAIContext& Ctx)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return;
+
+		// Enemigo visible -> duelos casuales de warmup (dispara y construye poco).
+		AActor* Enemy = ScanForEnemy(Bot, Ctx);
+		Ctx.EnemyTarget = Enemy;
+
+		if (Enemy)
+		{
+			DoFighting(Bot, Ctx, Enemy);
+			return;
+		}
+
+		// Sin enemigos: lootear lo que encuentre o pasear por la isla.
+		AFortPickup* Pickup = CustomBotPerception::FindNearestPickup(Bot, 2500.0f);
+
+		if (Pickup)
+		{
+			if (Bot.Pawn->GetDistanceTo(Pickup) <= CustomBotInteraction::InteractionRadius)
+			{
+				if (CustomBotInteraction::PickupItem(Bot, Pickup))
+				{
+					++Ctx.LootedItems;
+
+					if (Ctx.ActionTimer <= 0.0f)
+					{
+						EquipBestWeapon(Bot);
+						Ctx.ActionTimer = 0.8f;
+					}
+				}
+			}
+			else
+			{
+				CustomBotMovement::MoveTo(Bot, Pickup->GetActorLocation(), 100.0f, true);
+			}
+
+			return;
+		}
+
+		// Si llegamos al destino y no hay loot, elegir otro punto de paseo.
+		if (!Bot.HasMoveRequest() || Bot.HasArrived())
+		{
+			FVector Wander = PickWanderTarget(Bot, Bot.Pawn->GetActorLocation());
+			CustomBotMovement::MoveTo(Bot, Wander, 150.0f, true);
+		}
 	}
 }

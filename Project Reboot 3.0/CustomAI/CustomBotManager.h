@@ -89,6 +89,7 @@ namespace CustomBotManager
 		int Healing = 0;
 		int Rotating = 0;
 		int EndGame = 0;
+		int Warmup = 0;
 		int Dead = 0;
 	};
 
@@ -123,6 +124,7 @@ namespace CustomBotManager
 			case EBotState::Healing:         ++Counts.Healing; break;
 			case EBotState::Rotating:        ++Counts.Rotating; break;
 			case EBotState::EndGame:         ++Counts.EndGame; break;
+			case EBotState::Warmup:          ++Counts.Warmup; break;
 			case EBotState::Dead:            ++Counts.Dead; break;
 			default:                         ++Counts.Dead; break;
 			}

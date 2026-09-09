@@ -46,6 +46,7 @@ enum class EBotState : uint8_t
 	Healing,          // curandose
 	Rotating,         // rotando hacia la zona segura
 	EndGame,          // endgame (pocos jugadores)
+	Warmup,           // pre-partida (lobby): pasea, lootea y dispara por diversion
 	Dead,             // eliminado
 };
 
@@ -67,6 +68,7 @@ inline const TCHAR* CustomBotStateName(EBotState State)
 	case EBotState::Healing:          return L"Healing";
 	case EBotState::Rotating:         return L"Rotating";
 	case EBotState::EndGame:          return L"End Game";
+	case EBotState::Warmup:           return L"Warmup Lobby";
 	case EBotState::Dead:             return L"Dead";
 	}
 	return L"Unknown";
@@ -302,6 +304,20 @@ namespace CustomBotAI
 		if (Ctx.State == EBotState::Dead)
 			return;
 
+		// El warmup termino: volver al flujo normal (bus si arranco el avion, o
+		// directamente al suelo si la partida paso a zonas seguras sin avion).
+		if (Ctx.State == EBotState::Warmup && !CustomBotAI::IsWarmupPhase())
+		{
+			Ctx.State = CustomBotAI::IsInAircraftPhase() ? EBotState::InBus : EBotState::Looting;
+			Ctx.bHasLandingPoint = false;
+
+			if (Ctx.State == EBotState::InBus)
+			{
+				TickBus(Bot, Ctx);
+				return;
+			}
+		}
+
 		switch (Ctx.State)
 		{
 		case EBotState::InBus:
@@ -310,6 +326,10 @@ namespace CustomBotAI
 		case EBotState::Gliding:
 		case EBotState::Landing:
 			TickBus(Bot, Ctx);
+			break;
+
+		case EBotState::Warmup:
+			TickMidgame(Bot, Ctx);
 			break;
 
 		default:

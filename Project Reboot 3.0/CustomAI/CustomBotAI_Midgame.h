@@ -932,10 +932,52 @@ namespace CustomBotAIMidgame
 	// Simula un lobby activo mientras el bus no ha arrancado: el bot pasea por la
 	// isla, recoge lo que encuentra y dispara a otros bots/jugadores que ve cerca
 	// (como los jugadores reales matando el tiempo antes de que despegue el avion).
+	//
+	// INVULNERABILIDAD DEL LOBBY: el bot tiene vida de tanque en la pre-partida.
+	// El daño se sigue aplicando de forma real (el atacante ve sus numeros y no
+	// se rompen los marcadores de daño), pero con 2000 de vida ni un snipe lo
+	// tumba de un tiro; entre frames se rellena la vida, asi que nunca muere en
+	// el lobby. Al saltar del bus (o empezar la partida) se resetea a 100/0.
+	static constexpr float kWarmupLobbyHP = 2000.0f;
+
+	// Refuerzo del lobby que se aplica CADA tick: asegura que el ejemplar tenga
+	// el tope de tanque (2000), rellena la vida a 2000 si recibio daño y mantiene
+	// el escudo a 0 (en el lobby no hay escudo). El daño se aplica de forma real
+	// (los marcadores del atacante funcionan), pero la vida nunca llega a cero.
+	static void RefillLobbyHP(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return;
+
+		Bot.Pawn->SetMaxHealth(kWarmupLobbyHP);
+
+		if (Bot.Pawn->GetHealth() < kWarmupLobbyHP)
+			Bot.Pawn->SetHealth(kWarmupLobbyHP);
+
+		if (Bot.Pawn->GetShield() != 0.0f)
+			Bot.Pawn->SetShield(0.0f);
+	}
+
+	// Vuelve a la vida normal de partida (100 de vida, 0 de escudo) al salir del
+	// lobby: se llama cuando el bus arranca o la partida pasa a zonas seguras.
+	static void ResetToMatchHP(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return;
+
+		Bot.Pawn->SetMaxHealth(100.0f);
+		Bot.Pawn->SetHealth(100.0f);
+		Bot.Pawn->SetMaxShield(100.0f);
+		Bot.Pawn->SetShield(0.0f);
+	}
+
 	static void DoWarmup(CustomBot& Bot, BotAIContext& Ctx)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
+
+		// Cada tick: vida de tanque + escudo a 0 (invulnerabilidad del lobby).
+		RefillLobbyHP(Bot);
 
 		// Enemigo visible -> duelos casuales de warmup (dispara y construye poco).
 		AActor* Enemy = ScanForEnemy(Bot, Ctx);

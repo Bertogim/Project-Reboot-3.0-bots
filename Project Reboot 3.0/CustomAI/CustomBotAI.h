@@ -308,6 +308,9 @@ namespace CustomBotAI
 		// directamente al suelo si la partida paso a zonas seguras sin avion).
 		if (Ctx.State == EBotState::Warmup && !CustomBotAI::IsWarmupPhase())
 		{
+			// Fuera del lobby: vida normal de partida (100 de vida, 0 de escudo).
+			CustomBotAIMidgame::ResetToMatchHP(Bot);
+
 			Ctx.State = CustomBotAI::IsInAircraftPhase() ? EBotState::InBus : EBotState::Looting;
 			Ctx.bHasLandingPoint = false;
 

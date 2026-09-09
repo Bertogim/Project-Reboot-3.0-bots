@@ -1131,7 +1131,10 @@ namespace CustomBotAIMidgame
 		AFortPickup* Pickup = static_cast<AFortPickup*>(Ctx.LootTarget);
 
 		if (Pickup && Pickup->IsActorBeingDestroyed())
-			Pickup = Ctx.LootTarget = nullptr;
+		{
+			Ctx.LootTarget = nullptr;
+			Pickup = nullptr;
+		}
 
 		if (Pickup)
 		{

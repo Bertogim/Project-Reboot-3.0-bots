@@ -1305,7 +1305,7 @@ static inline void MainUI()
 		}
 		else if (Tab == BOTS_TAB)
 		{
-			ImGui::Text("Custom Bot Manager (Parte 2)");
+			ImGui::Text("Custom Bot Manager");
 
 			ImGui::InputInt("Number of Bots", &CustomBotManager::DesiredBotCount);
 
@@ -1315,7 +1315,7 @@ static inline void MainUI()
 			if (CustomBotManager::DesiredBotCount > 100)
 				CustomBotManager::DesiredBotCount = 100;
 
-			ImGui::Text("Difficulty");
+			//ImGui::Text("Difficulty"); //Ya se sabe a que se refiere lo de abajo
 			int DifficultyRadio = (int)CustomBotManager::Difficulty;
 			ImGui::RadioButton("Easy", &DifficultyRadio, (int)EBotDifficulty::Easy);
 			ImGui::SameLine();
@@ -1329,6 +1329,13 @@ static inline void MainUI()
 				CustomBotManager::SpawnBots(CustomBotManager::DesiredBotCount);
 			}
 
+			ImGui::SameLine();
+
+			if (ImGui::Button("Fill to 100"))
+			{
+				CustomBotManager::FillTo100();
+			}
+
 			if (ImGui::Button("Remove All Bots"))
 			{
 				CustomBotManager::RemoveAllBots();
@@ -1336,32 +1343,65 @@ static inline void MainUI()
 
 			ImGui::Separator();
 
-			ImGui::Text("Stats");
-			ImGui::Text("Total bots: %d", CustomBotManager::GetTotalCount());
-			ImGui::Text("Alive bots: %d", CustomBotManager::GetAliveCount());
-			ImGui::Text("Dead bots: %d", CustomBotManager::GetDeadCount());
+			auto Counts = CustomBotManager::GetStateCounts();
+
+			ImGui::Text("Total: %d | Alive: %d | Dead: %d",
+				CustomBotManager::GetTotalCount(),
+				CustomBotManager::GetAliveCount(),
+				CustomBotManager::GetDeadCount());
 
 			ImGui::Separator();
 
-			auto Counts = CustomBotManager::GetStateCounts();
+			if (ImGui::BeginTable("BotStates", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+			{
+				ImGui::TableSetupColumn("State");
+				ImGui::TableSetupColumn("Count");
+				ImGui::TableSetupColumn("State2");
+				ImGui::TableSetupColumn("Count2");
+				ImGui::TableHeadersRow();
 
-			ImGui::Text("State breakdown:");
-			ImGui::Text("In Bus: %d", Counts.InBus);
-			ImGui::Text("Choosing Landing: %d", Counts.ChoosingLanding);
-			ImGui::Text("Jumping: %d", Counts.Jumping);
-			ImGui::Text("Gliding: %d", Counts.Gliding);
-			ImGui::Text("Landing: %d", Counts.Landing);
-			ImGui::Text("Looting: %d", Counts.Looting);
-			ImGui::Text("Farming: %d", Counts.Farming);
-			ImGui::Text("Exploring: %d", Counts.Exploring);
-			ImGui::Text("Searching Enemy: %d", Counts.SearchingEnemy);
-			ImGui::Text("Fighting: %d", Counts.Fighting);
-			ImGui::Text("Defending: %d", Counts.Defending);
-			ImGui::Text("Healing: %d", Counts.Healing);
-			ImGui::Text("Rotating: %d", Counts.Rotating);
-			ImGui::Text("End Game: %d", Counts.EndGame);
-			ImGui::Text("Warmup Lobby: %d", Counts.Warmup);
-			ImGui::Text("Dead: %d", Counts.Dead);
+				struct { const char* Name; int Count; } StateEntries[] = {
+					{ "In Bus",           Counts.InBus },
+					{ "Choosing Landing", Counts.ChoosingLanding },
+					{ "Jumping",          Counts.Jumping },
+					{ "Gliding",          Counts.Gliding },
+					{ "Landing",          Counts.Landing },
+					{ "Looting",          Counts.Looting },
+					{ "Farming",          Counts.Farming },
+					{ "Exploring",        Counts.Exploring },
+					{ "Searching Enemy",  Counts.SearchingEnemy },
+					{ "Fighting",         Counts.Fighting },
+					{ "Defending",        Counts.Defending },
+					{ "Healing",          Counts.Healing },
+					{ "Rotating",         Counts.Rotating },
+					{ "End Game",         Counts.EndGame },
+					{ "Warmup Lobby",     Counts.Warmup },
+					{ "Dead",             Counts.Dead },
+				};
+
+				int NumEntries = sizeof(StateEntries) / sizeof(StateEntries[0]);
+				int Half = (NumEntries + 1) / 2;
+
+				for (int i = 0; i < Half; ++i)
+				{
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::Text("%s", StateEntries[i].Name);
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Text("%d", StateEntries[i].Count);
+
+					int j = i + Half;
+					if (j < NumEntries)
+					{
+						ImGui::TableSetColumnIndex(2);
+						ImGui::Text("%s", StateEntries[j].Name);
+						ImGui::TableSetColumnIndex(3);
+						ImGui::Text("%d", StateEntries[j].Count);
+					}
+				}
+
+				ImGui::EndTable();
+			}
 		}
 		else if (Tab == LATEGAME_TAB)
 		{

@@ -200,6 +200,7 @@
     <ClCompile Include="Class.cpp" />
     <ClCompile Include="commands.cpp" />
     <ClCompile Include="CustomBot\CustomBotDebug.cpp" />
+    <ClCompile Include="CustomBot\CustomBotSEH.cpp" />
     <ClCompile Include="Controller.cpp" />
     <ClCompile Include="DataChannel.cpp" />
     <ClCompile Include="DataTableFunctionLibrary.cpp" />

@@ -13,7 +13,7 @@
 namespace CustomBotManager
 {
 	// --- Configuracion global -------------------------------------------------
-	inline int DesiredBotCount = 0;   // cuantos bots quiere el operador
+	inline int DesiredBotCount = 5;   // cuantos bots quiere el operador
 	inline EBotDifficulty Difficulty = EBotDifficulty::Normal;
 	inline EBotPersonalityType PersonalityPool = EBotPersonalityType::Random;
 	inline bool bAutoSpawnInProgress = false;
@@ -196,27 +196,37 @@ namespace CustomBotManager
 		return Bot;
 	}
 
-	// Spawnea un bot cerca del jugador local (para pruebas de UI).
+	// Spawnea un bot en un PlayerStart (respeta los puntos de spawn nativos de Fortnite).
 	static CustomBot* SpawnBotNearLocalPlayer()
 	{
-		auto LocalController = Cast<AFortPlayerControllerAthena>(GetLocalPlayerController());
+		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 
-		if (!LocalController || !LocalController->GetPawn())
+		if (!GameMode)
 		{
-			LOG_WARN(LogBots, "[BotManager] No local player to spawn near");
+			LOG_ERROR(LogBots, "[BotManager] No GameMode for spawn");
 			return nullptr;
 		}
 
-		APawn* Target = LocalController->GetPawn();
-		FVector Loc = Target->GetActorLocation();
-		FVector Fwd = Target->GetActorForwardVector();
-		FVector SpawnLoc = Loc + Fwd * (250.0f + float(std::rand() % 300));
-		SpawnLoc.Z += 50.0f;
+		// Buscar un PlayerStart existente en el mapa.
+		static auto PlayerStartClass = FindObject<UClass>(L"/Script/Engine.PlayerStart");
+		auto AllPlayerStarts = GetAllObjectsOfClass(PlayerStartClass);
 
-		return SpawnBotAt(SpawnLoc, Target->GetActorRotation());
+		if (AllPlayerStarts.empty())
+		{
+			LOG_WARN(LogBots, "[BotManager] No PlayerStarts found in map");
+			return nullptr;
+		}
+
+		// Elegir un PlayerStart aleatorio.
+		AActor* ChosenStart = (AActor*)AllPlayerStarts[std::rand() % AllPlayerStarts.size()];
+		FVector SpawnLoc = ChosenStart->GetActorLocation();
+		FRotator SpawnRot = ChosenStart->GetActorRotation();
+
+		return SpawnBotAt(SpawnLoc, SpawnRot);
 	}
 
-	// Spawnea DesiredBotCount bots (sin duplicar los ya existentes).
+	// Spawnea Count bots (sin duplicar los ya existentes).
+	// Usa Sleep() entre spawns para dar tiempo al engine a procesar cada bot.
 	static int SpawnBots(int Count)
 	{
 		int Spawned = 0;
@@ -225,9 +235,13 @@ namespace CustomBotManager
 		{
 			if (SpawnBotNearLocalPlayer())
 				++Spawned;
+			else
+				break; // si un bot falla, paramos (el engine esta saturado)
+
+			if (i < Count - 1)
+				Sleep(200); // 200ms entre spawns para no saturar el engine
 		}
 
-		DesiredBotCount = GetTotalCount();
 		LOG_INFO(LogBots, "[BotManager] Spawned {} bots (total={})", Spawned, GetTotalCount());
 		return Spawned;
 	}
@@ -263,7 +277,26 @@ namespace CustomBotManager
 			Bot.Destroy();
 			Bots.pop_back();
 		}
+	}
 
-		DesiredBotCount = 0;
+	// Rellena la partida hasta 100 jugadores (contando jugadores reales + bots).
+	static int FillTo100()
+	{
+		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+
+		if (!GameState)
+			return 0;
+
+		int CurrentTotal = GameState->GetPlayersLeft();
+		int Needed = 100 - CurrentTotal;
+
+		if (Needed <= 0)
+		{
+			LOG_INFO(LogBots, "[BotManager] Lobby already at {} players, no bots needed", CurrentTotal);
+			return 0;
+		}
+
+		LOG_INFO(LogBots, "[BotManager] FillTo100: current={}, needed={}", CurrentTotal, Needed);
+		return SpawnBots(Needed);
 	}
 }

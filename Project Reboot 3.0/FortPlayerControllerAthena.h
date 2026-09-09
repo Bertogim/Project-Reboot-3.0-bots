@@ -13,52 +13,70 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 {
 	using UFortHeroSpecialization = UObject;
 
-	static auto SpecializationsOffset = HeroDefinition->GetOffset("Specializations");
+	if (!Pawn || !HeroDefinition)
+		return;
+
+	auto SpecializationsOffset = HeroDefinition->GetOffset("Specializations", false);
+
+	if (SpecializationsOffset == -1)
+		return;
+
 	auto& Specializations = HeroDefinition->Get<TArray<TSoftObjectPtr<UFortHeroSpecialization>>>(SpecializationsOffset);
 
 	auto PlayerState = Pawn->GetPlayerState();
+
+	if (!PlayerState)
+		return;
+
+	static auto FortHeroSpecializationClass = FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization");
+	static auto CustomCharacterPartClass = FindObject<UClass>(L"/Script/FortniteGame.CustomCharacterPart");
 
 	for (int i = 0; i < Specializations.Num(); i++)
 	{
 		auto& SpecializationSoft = Specializations.at(i);
 
-		static auto FortHeroSpecializationClass = FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization");
 		auto Specialization = SpecializationSoft.Get(FortHeroSpecializationClass, true);
 
-		if (Specialization)
+		if (!Specialization)
+			continue;
+
+		auto Specialization_CharacterPartsOffset = Specialization->GetOffset("CharacterParts", false);
+
+		if (Specialization_CharacterPartsOffset == -1)
+			continue;
+
+		auto& CharacterParts = Specialization->Get<TArray<TSoftObjectPtr<UObject>>>(Specialization_CharacterPartsOffset);
+
+		if (bUseServerChoosePart)
 		{
-			static auto Specialization_CharacterPartsOffset = Specialization->GetOffset("CharacterParts");
-			auto& CharacterParts = Specialization->Get<TArray<TSoftObjectPtr<UObject>>>(Specialization_CharacterPartsOffset);
-
-			static auto CustomCharacterPartClass = FindObject<UClass>(L"/Script/FortniteGame.CustomCharacterPart");
-
-			if (bUseServerChoosePart)
-			{
-				for (int z = 0; z < CharacterParts.Num(); z++)
-				{
-					Pawn->ServerChoosePart((EFortCustomPartType)z, CharacterParts.at(z).Get(CustomCharacterPartClass, true));
-				}
-
-				continue; // hm?
-			}
-
-			bool aa;
-
-			TArray<UObject*> CharacterPartsaa;
-
 			for (int z = 0; z < CharacterParts.Num(); z++)
 			{
-				auto& CharacterPartSoft = CharacterParts.at(z, GetSoftObjectSize());
-				auto CharacterPart = CharacterPartSoft.Get(CustomCharacterPartClass, true);
+				auto Part = CharacterParts.at(z).Get(CustomCharacterPartClass, true);
 
-				CharacterPartsaa.Add(CharacterPart);
-
-				continue;
+				if (Part)
+					Pawn->ServerChoosePart((EFortCustomPartType)z, Part);
 			}
 
-			UFortKismetLibrary::ApplyCharacterCosmetics(GetWorld(), CharacterPartsaa, PlayerState, &aa);
-			CharacterPartsaa.Free();
+			continue;
 		}
+
+		bool aa;
+
+		TArray<UObject*> CharacterPartsaa;
+
+		for (int z = 0; z < CharacterParts.Num(); z++)
+		{
+			auto& CharacterPartSoft = CharacterParts.at(z, GetSoftObjectSize());
+			auto CharacterPart = CharacterPartSoft.Get(CustomCharacterPartClass, true);
+
+			if (CharacterPart)
+				CharacterPartsaa.Add(CharacterPart);
+		}
+
+		if (CharacterPartsaa.Num() > 0)
+			UFortKismetLibrary::ApplyCharacterCosmetics(GetWorld(), CharacterPartsaa, PlayerState, &aa);
+
+		CharacterPartsaa.Free();
 	}
 }
 

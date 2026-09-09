@@ -45,6 +45,7 @@ namespace CustomBotAIMidgame
 		Ctx.ScanTimer -= Elapsed;
 		Ctx.ReactTimer -= Elapsed;
 		Ctx.ActionTimer -= Elapsed;
+		Ctx.StrafeTimer -= Elapsed;
 	}
 
 	// --- Evaluacion de vida / escudo ------------------------------------------
@@ -634,10 +635,18 @@ namespace CustomBotAIMidgame
 		// Rotar/apuntar (si el bot era agresivo intenta apuntar mejor).
 		AimWithSkill(Bot, Ctx, EnemyLoc);
 
-		// Impulsos: strafe lateral para no quedarse parado (movimiento real).
+		// Impulsos: strafe LATERAL alternando direccion (no orbitar). El bot
+		// siempre mira al enemigo (AimWithSkill), asi que un strafe fijo a la
+		// derecha lo hace girar en circulo alrededor del objetivo.
 		if (!Bot.HasMoveRequest() || Bot.HasArrived())
 		{
-			CustomBotMovement::MoveRight(Bot, 0.5f);
+			if (Ctx.StrafeTimer <= 0.0f || Ctx.StrafeDir == 0)
+			{
+				Ctx.StrafeDir = (std::rand() % 2) ? -1 : 1;
+				Ctx.StrafeTimer = 1.0f + float(std::rand() % 1500) / 1000.0f;
+			}
+
+			CustomBotMovement::MoveRight(Bot, 0.5f * (float)Ctx.StrafeDir);
 		}
 
 		// Solo disparar si tenemos LOS y el enemigo esta en rango.
@@ -699,6 +708,9 @@ namespace CustomBotAIMidgame
 	}
 
 	// Construye una pared rapida de cobertura frente al enemigo.
+	// La pared se coloca en la celda del grid ADYACENTE hacia el enemigo (1 paso),
+	// con el Z del TERRENO de esa celda. Si se coloca en una posicion arbitraria
+	// (BotLoc+Dir*150) no queda en el grid y el juego la elimina al instante.
 	static void BuildBarricade(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -707,15 +719,43 @@ namespace CustomBotAIMidgame
 		FVector BotLoc = Bot.Pawn->GetActorLocation();
 		FVector Dir = CustomBotMovement::DirectionTo(BotLoc, EnemyLoc);
 
-		float Yaw = CustomBotMovement::RotationFromDirection(Dir).Yaw;
+		if (!(Dir | Dir))
+			return;
 
-		// Pared a 150 unidades hacia el enemigo desde el bot.
-		FVector WallLoc = BotLoc + Dir * 150.0f;
+		float Yaw = CustomBotMovement::RotationFromDirection(Dir).Yaw;
+		float Facing = CustomBotBuilding::SnapYawToCardinal(Yaw);
+
+		auto GS = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+		auto SSS = GS ? GS->GetStructuralSupportSystem() : nullptr;
+
+		if (!SSS)
+		{
+			LOG_WARN(LogBots, "[BotAI] barricade: no StructuralSupportSystem available");
+			return;
+		}
+
+		// Celda adyacente (1 paso) hacia el enemigo en la cardinal mas cercana.
+		FVector WallLoc{};
+		if (!CustomBotBuilding::CellCenterAhead(SSS, BotLoc, Facing, 1, WallLoc))
+		{
+			LOG_WARN(LogBots, "[BotAI] barricade: could not resolve adjacent cell");
+			return;
+		}
+
+		// Z del terreno de esa celda (la celda es una referencia vertical; el Z
+		// real del suelo lo da el trace, igual que la rampa de la secuencia debug).
+		FVector Ground = UFortKismetLibrary::FindGroundLocationAt(GetWorld(), Bot.Pawn,
+			FVector{ WallLoc.X, WallLoc.Y, 0.0f }, BotLoc.Z + 3000.0f, BotLoc.Z - 8000.0f, FName(0));
+		WallLoc.Z = Ground.Z;
 
 		auto WallClass = CustomBotBuilding::GetPieceClass(CustomBotBuilding::EPieceType::Wall);
 
 		if (WallClass)
-			CustomBotBuilding::BuildWall(Bot, WallLoc, FRotator{0.0f, Yaw, 0.0f});
+		{
+			CustomBotBuilding::BuildWall(Bot, WallLoc, FRotator{0.0f, Facing, 0.0f});
+			LOG_INFO(LogBots, "[BotAI] barricade wall at cell ({:.0f},{:.0f},{:.0f}) facing {:.0f}",
+				WallLoc.X, WallLoc.Y, WallLoc.Z, Facing);
+		}
 	}
 
 	// --- DEFENDERA / reaccionar al ser superior -------------------------------

@@ -166,6 +166,8 @@ namespace
 		bool bClimbStarted = false;       // si ya se arranco a caminar hacia la rampa
 
 		bool bRampFacingLogged = false;   // guarda la orientacion real de la rampa
+		int RampAttempts = 0;             // intentos de construir la rampa (anti-spam)
+		int MaxRampAttempts = 5;          // tope para evitar loop infinito de BuildingRamp
 	};
 
 	static DebugBotContext gDebugBot;
@@ -924,7 +926,17 @@ if (GameStateDBG)
 		{
 			if (T >= gDebugBot.NextActionTime)
 			{
-				LOG_INFO(LogBots, "[DebugBot] [BuildingRamp] pos=({:.0f},{:.0f},{:.0f})", Pos.X, Pos.Y, Pos.Z);
+				++gDebugBot.RampAttempts;
+				if (gDebugBot.RampAttempts > gDebugBot.MaxRampAttempts)
+				{
+					LOG_ERROR(LogBots, "[DebugBot] BuildingRamp: {} attempts failed, skipping to Finished", gDebugBot.RampAttempts - 1);
+					DebugBotError(Bot, "ramp build failed after max retries");
+					gDebugBot.Step = DebugBotState::Finished;
+					break;
+				}
+
+				LOG_INFO(LogBots, "[DebugBot] [BuildingRamp] pos=({:.0f},{:.0f},{:.0f}) attempt={}/{}",
+					Pos.X, Pos.Y, Pos.Z, gDebugBot.RampAttempts, gDebugBot.MaxRampAttempts);
 
 				int TotalMat = CustomBotResources::GetTotalResourceCount(Bot);
 				LOG_INFO(LogBots, "[DebugBot] Total materials: {}", TotalMat);
@@ -997,6 +1009,7 @@ if (GameStateDBG)
 				}
 
 				// Pausa de 3s antes de empezar a caminar hacia la rampa (pacing de la demo).
+				gDebugBot.RampAttempts = 0; // reset counter on success
 				gDebugBot.Step = DebugBotState::WalkToRampStart;
 				gDebugBot.PauseUntil = -1; // WalkToRampStart dispara la pausa
 				gDebugBot.bClimbStarted = false;
@@ -1687,4 +1700,36 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 	}
 
 	return false;
+}
+
+// SEH-safe bot tick: TickBotSafeSEH lives in CustomBotSEH.cpp (pure C TU).
+// BotTickCallbackImpl is the C++ callback; TickCustomBotSafe is the public API.
+
+extern "C" void TickBotSafeSEH(void (*cb)(void*), void* data);
+
+static void BotTickCallbackImpl(void* data)
+{
+	CustomBot* Bot = (CustomBot*)data;
+	if (!Bot || !Bot->IsValidActor() || !Bot->IsReady())
+		return;
+
+	CustomBotMovement::EnsureCMCActive(*Bot);
+	Bot->Tick();
+	CustomBotMovement::UpdateMovement(*Bot);
+
+	// Skin diferida: aplicar como maximo PendingSkinBudget skins por TickAll
+	// (se reinicia en CustomBotSpawner::TickAll). Todo esto corre bajo SEH.
+	if (Bot->bSkinPending && CustomBotSpawner::PendingSkinBudget > 0)
+	{
+		--CustomBotSpawner::PendingSkinBudget;
+		CustomBotMovement::ApplyPendingSkin(*Bot);
+	}
+
+	if (Bot->AI)
+		CustomBotAI::Tick(*Bot, *Bot->AI);
+}
+
+void TickCustomBotSafe(CustomBot* Bot)
+{
+	TickBotSafeSEH(BotTickCallbackImpl, Bot);
 }

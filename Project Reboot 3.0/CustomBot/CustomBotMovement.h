@@ -4,6 +4,8 @@
 
 #include "CustomBotPerception.h"
 
+#include <chrono>
+
 // CustomBot - Movimiento.
 //
 // Mueve al pawn del bot como un jugador usando el sistema de movimiento nativo
@@ -81,30 +83,44 @@ namespace CustomBotMovement
 		return Bot.Pawn->Get(CharacterMovementOffset);
 	}
 
-	// Aplica el FIX RUNPHYS (research 08): convierte al bot en un pawn sin controller
-	// con bRunPhysicsWithNoController=true para que el servidor SIMULE su CMC (la rama
-	// "sin controller" integra Velocity/Acceleration cada frame). Sin esto el pawn
-	// poseido por un PlayerController sin cliente conectado NUNCA se simula.
-	// Debe aplicarse en el spawn de TODO bot (CustomBotSpawner::SpawnCustomBot).
-	// Si Bot.bKeepPossessed esta activo (Parte 2: el bot aun va en el bus) NO se
-	// suelta la posesion: el bot necesita el controller poseido para saltar del avion.
+	// Restaura el puntero PlayerState del pawn (lo borra UnPossess). El mesh y
+	// los sistemas de cosmeticos nativos leen Pawn->GetPlayerState(); sin esto
+	// la skin de bots "sin controller" nunca se aplica (InitializeCharacterParts
+	// falla con "PlayerState: None").
+	static void RestorePawnPlayerState(CustomBot& Bot)
+	{
+		if (!Bot.Pawn || !Bot.PlayerState)
+			return;
+
+		int PSOff = Bot.Pawn->GetOffset("PlayerState", false);
+
+		if (PSOff != -1 && Bot.Pawn->Get<UObject*>(PSOff) != (UObject*)Bot.PlayerState)
+			Bot.Pawn->Get<UObject*>(PSOff) = (UObject*)Bot.PlayerState;
+	}
+
+	// Habilita la simulacion CMC en servidor para el bot (research 08).
+	// SetIsBot(false) + UnPossess + bRunPhysicsWithNoController=true.
+	// Sin ClaimLive — el handshake no es necesario para la fisica.
 	static bool EnableServerSimulation(CustomBot& Bot)
 	{
 		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
 			return false;
 
 		Bot.PlayerState->SetIsBot(false);
+		Bot.Controller->UnPossess();
 
-		if (!Bot.bKeepPossessed)
-			Bot.Controller->UnPossess();
+		// UnPossess() limpia Pawn->PlayerState (ACharacter::UnPossessed -> null).
+		// Sin el puntero el mesh no aplica la skin: AFortPlayerPawn::
+		// InitializeCharacterParts lee Pawn->GetPlayerState() y falla con
+		// "Failed to retrieve character parts. PlayerState: None". Se restaura
+		// el puntero para que el sistema de cosmeticos/tick del pawn lo vea.
+		RestorePawnPlayerState(Bot);
 
 		bool bBitOK = false;
-
 		if (auto* CMR = GetCharacterMovement(Bot))
 		{
 			auto* Prop = CMR->GetProperty("bRunPhysicsWithNoController");
 			int Off = CMR->GetOffset("bRunPhysicsWithNoController", false);
-
 			if (Prop && Off != -1)
 			{
 				CMR->SetBitfieldValue(Off, GetFieldMask(Prop), true);
@@ -112,10 +128,133 @@ namespace CustomBotMovement
 			}
 		}
 
-		LOG_WARN(LogBots, "[CustomBot] RUNPHYS-FIX: IsBot=false, pose released, bRunPhysicsWithNoController set={} (possessor={})",
-			bBitOK, Bot.Pawn->GetController() != nullptr);
+		LOG_WARN(LogBots, "[CustomBot] RUNPHYS-FIX: IsBot=false, UnPossess, bRunPhysicsWithNoController={}",
+			bBitOK);
 
 		return bBitOK;
+	}
+
+	// Forza el tick del CMC y re-aplica valores que el engine revierte.
+	// Llamar CADA TICK desde TickAll para cada bot activo.
+	// (basado en lo que hace DebugBot en MovingForward que funciona correctamente:
+	//  CLAIM-LIVE + velocidades + MovementMode Walking, reaplicados cada frame)
+	static void EnsureCMCActive(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return;
+
+		auto* CME = GetCharacterMovement(Bot);
+		if (!CME)
+			return;
+
+		__int64 CMEAddr = __int64(CME);
+
+		// Mantener el PlayerState en el pawn: la skin necesita este puntero y
+		// cualquier re-UnPossess del flujo del bus lo volveria a limpiar.
+		RestorePawnPlayerState(Bot);
+
+		// CLAIM-LIVE una sola vez por bot: replica el ServerAcknowledgePossession
+		// que envia un cliente real (el servidor exclusivo del bot nunca lo hace y
+		// Fortnite mantiene el pawn congelado sin el handshake).
+		if (!Bot.bClaimLiveDone && Bot.Controller)
+		{
+			static auto AckFn = FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession");
+			if (AckFn)
+			{
+				struct { APawn* NewPawn; } Params{};
+				Params.NewPawn = Bot.Pawn;
+				Bot.Controller->ProcessEvent(AckFn, &Params);
+			}
+
+			auto AckOff = Bot.Controller->GetOffset("AcknowledgedPawn", false);
+			if (AckOff != -1 && Bot.Controller->Get<APawn*>(AckOff) != Bot.Pawn)
+				Bot.Controller->Get<APawn*>(AckOff) = Bot.Pawn;
+
+			Bot.bClaimLiveDone = true;
+			LOG_WARN(LogBots, "[CustomBot] CLAIM-LIVE: ServerAcknowledgePossession invoked for bot");
+		}
+
+		// Forzar tick del CMC habilitado
+		static auto FnSetTick = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
+		static auto FnActivate = FindObject<UFunction>(L"/Script/Engine.ActorComponent.Activate");
+		if (FnSetTick) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnSetTick, &P); }
+		if (FnActivate) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnActivate, &P); }
+
+		// Re-aplicar velocidades que el engine revierte. MaxWalkSpeed se sube a la
+		// velocidad de sprint (900): el CMC usa GetMaxSpeed() como tope al integrar,
+		// y sin esto las peticiones MoveTo sprint (900) quedaban capadas a 600.
+		auto SetFloat = [&](const char* Name, float Value) {
+			int Off = CME->GetOffset(Name, false);
+			if (Off != -1) *(float*)(CMEAddr + Off) = Value;
+		};
+		SetFloat("MaxWalkSpeed", SprintSpeed);
+		SetFloat("MaxWalkSpeedCrouched", WalkSpeed);
+		SetFloat("MaxFlySpeed", SprintSpeed);
+		SetFloat("MaxAcceleration", 2048.0f);
+
+		// Refuerzo de Walking si el juego relega el pawn no-live a Falling
+		// (misma tecnica que el DebugBot). Se salta mientras el bot es pasajero
+		// del bus (el avion lo monta en Skydive/Falling; no tocar el modo).
+		bool bInAircraft = Bot.PlayerState && Bot.PlayerState->IsInAircraft();
+
+		if (!bInAircraft)
+		{
+			int ModeOff = CME->GetOffset("MovementMode", false);
+			if (ModeOff != -1 && *(int*)(CMEAddr + ModeOff) != 1)
+			{
+				*(int*)(CMEAddr + ModeOff) = 1;
+				int GroundOff = CME->GetOffset("GroundMovementMode", false);
+				if (GroundOff != -1) *(int*)(CMEAddr + GroundOff) = 1;
+			}
+		}
+
+		// Desbloquear gates que Fortnite pone en pawns sin cliente
+		auto SetBool = [&](const char* Name, uint8_t Value) {
+			int Off = Bot.Pawn->GetOffset(Name, false);
+			if (Off != -1) *(uint8_t*)(__int64(Bot.Pawn) + Off) = Value;
+		};
+		SetBool("bSimGravityDisabled", 0);
+		SetBool("bDisableMovementAndTurnInPlace", 0);
+		SetBool("bAllowMovement", 1);
+
+		// Los pawns simulados en servidor se replican a los clientes segun su
+		// NetUpdateFrequency. Con frecuencia baja el cliente ve a los bots
+		// avanzar a saltos y "resincronizar hacia atras" (~cada 0.1s). Subirla a
+		// ~50Hz hace que el paso se vea fluido (updates pequenos, sin bloqueo).
+		{
+			auto& NetFreq = Bot.Pawn->GetNetUpdateFrequency();
+			if (NetFreq < 50.0f)
+				NetFreq = 50.0f;
+			auto& MinNetFreq = Bot.Pawn->GetMinNetUpdateFrequency();
+			if (MinNetFreq < 50.0f)
+				MinNetFreq = 50.0f;
+		}
+
+		// Probe de smoothness (diagnostico del "resync atras"): cada 60 ticks
+		// (~2s) con MoveTo activo se loguea el desplazamiento horizontal por
+		// ventana. Si es ~velocidad*2s el servidor genera movimiento continuo y
+		// el tiron es de replicacion/cliente; si es erratico (0, 3000...), el
+		// movimiento del servidor salta y el fallo es de simulacion.
+		if (Bot.bMoveRequestActive)
+		{
+			Bot.ProbeTicks++;
+			if (Bot.ProbeTicks == 1)
+			{
+				Bot.ProbePrevLoc = Bot.Pawn->GetActorLocation();
+			}
+			else if (Bot.ProbeTicks >= 60)
+			{
+				float ProbeDist = HorizontalDistance(Bot.ProbePrevLoc, Bot.Pawn->GetActorLocation());
+				int ModeOff = CME->GetOffset("MovementMode", false);
+				int Mode = ModeOff != -1 ? *(int*)(CMEAddr + ModeOff) : -1;
+				static auto VelOff = CME->GetOffset("Velocity", false);
+				float VZ = VelOff != -1 ? CME->Get<FVector>(VelOff).Z : 0.0f;
+				LOG_INFO(LogBots, "[CustomBot] [mprobe] moved {:.0f}u / 60 ticks (mode={}, vz={:.1f})",
+					ProbeDist, Mode, VZ);
+				Bot.ProbePrevLoc = Bot.Pawn->GetActorLocation();
+				Bot.ProbeTicks = 0;
+			}
+		}
 	}
 
 	// Mira hacia el punto objetivo (rota el control del pawn hacia alla).
@@ -132,7 +271,36 @@ namespace CustomBotMovement
 		}
 	}
 
-	// Rota el pawn (y su control) hacia una rotacion concreta.
+	// Aplica la visualizacion DIFERIDA de la skin (mesh rebuild + replicacion).
+	// El spawn deja el bot con bSkinPending=true; el tick del servidor lo aplica
+	// con un presupuesto de ~2 skins por TickAll (CustomBotSpawner::PendingSkinBudget)
+	// para no saturar el async loader en rafagas de spawns. Se invoca DENTRO del
+	// SEH de TickCustomBotSafe, asi un fallo de cosmetico no tira el servidor.
+	static void ApplyPendingSkin(CustomBot& Bot)
+	{
+		if (!Bot.bSkinPending || !Bot.Pawn || !Bot.PlayerState)
+			return;
+
+		Bot.bSkinPending = false;
+
+		auto T0 = std::chrono::steady_clock::now();
+
+		static auto UpdateVizFn = FindObject<UFunction>(L"/Script/FortniteGame.FortKismetLibrary.UpdatePlayerCustomCharacterPartsVisualization");
+		if (UpdateVizFn)
+		{
+			auto PS = (AFortPlayerState*)Bot.PlayerState;
+			UFortKismetLibrary::StaticClass()->ProcessEvent(UpdateVizFn, &PS);
+		}
+
+		Bot.PlayerState->ForceNetUpdate();
+		Bot.Pawn->ForceNetUpdate();
+
+		auto T1 = std::chrono::steady_clock::now();
+		LOG_INFO(LogBots, "[CustomBot] deferred skin applied in {}ms",
+			(int)std::chrono::duration_cast<std::chrono::milliseconds>(T1 - T0).count());
+	}
+
+	// Rota el pawn (y su control) hacia la direccion de movimiento.
 	static void SetRotation(CustomBot& Bot, const FRotator& Rotation)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -196,23 +364,6 @@ namespace CustomBotMovement
 
 		FVector NewVelocity{ Dir.X * Speed, Dir.Y * Speed, 0.0f };
 
-		// Sincronizar velocidades maximas del CM: algunos pawns spawnean con
-		// MaxWalkSpeed=0 (visto en RealVsBot: real=550 bot=0) y el CharacterMovement
-		// no mueve nada. Se reafirma una vez (estatico) y es barato.
-		static bool bSpeedSynced = false;
-		if (!bSpeedSynced)
-		{
-			auto SetFloatIfPresent = [&](const char* Name, float Value) {
-				int Off = CharacterMovement->GetOffset(Name, false);
-				if (Off != -1) *(float*)(__int64(CharacterMovement) + Off) = Value;
-			};
-			SetFloatIfPresent("MaxWalkSpeed", WalkSpeed);
-			SetFloatIfPresent("MaxWalkSpeedCrouched", WalkSpeed);
-			SetFloatIfPresent("MaxFlySpeed", WalkSpeed);
-			SetFloatIfPresent("MaxAcceleration", 2048.0f);
-			bSpeedSynced = true;
-		}
-
 		static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
 		static auto AccelerationOffset = CharacterMovement->GetOffset("Acceleration");
 		FVector& CharacterVelocity = CharacterMovement->Get<FVector>(VelocityOffset);
@@ -240,6 +391,7 @@ namespace CustomBotMovement
 
 		Bot.MoveRequest.Destination = Destination;
 		Bot.MoveRequest.AcceptanceRadius = AcceptanceRadius;
+		Bot.MoveRequest.MoveSpeed = bSprint ? SprintSpeed : WalkSpeed;
 		Bot.MoveRequest.bStopOnArrival = true;
 		Bot.bMoveRequestActive = true;
 		Bot.MoveState = CBT::EMovementState::Moving;
@@ -280,7 +432,7 @@ namespace CustomBotMovement
 			? CBT::EMovementState::Moving
 			: CBT::EMovementState::BlockedPath;
 
-		ApplyMoveVelocity(Bot, Destination, WalkSpeed, true);
+		ApplyMoveVelocity(Bot, Destination, Bot.MoveRequest.MoveSpeed, true);
 	}
 
 	// Movimiento por eje tipo input jugador: mover hacia delante/atras.

@@ -60,6 +60,7 @@ namespace CBT
 		FVector Destination{};     // posicion objetivo
 		FVector Start{};           // posicion desde donde se origino (opcional)
 		float AcceptanceRadius = 100.0f; // distancia para considerarlo "llegado"
+		float MoveSpeed = 600.0f;  // velocidad de re-aplicacion (Walk/Sprint original)
 		bool bStopOnArrival = true;
 	};
 

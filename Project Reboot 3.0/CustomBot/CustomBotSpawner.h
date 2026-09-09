@@ -3,10 +3,13 @@
 #include "CustomBot.h"
 
 #include "CustomBotMovement.h"
+#include "CustomBotDebug.h"
 
 #include "GameplayStatics.h"
 
 #include "../CustomAI/CustomBotAI.h"
+
+#include <chrono>
 
 // CustomBot - Spawner.
 //
@@ -17,6 +20,10 @@
 
 namespace CustomBotSpawner
 {
+	// Envolturas SEH (definidas en CustomBotSEH.cpp, TU pure-C). Necesarias para
+	// proteger el spawn: el __try no puede vivir en este header.
+	extern "C" int SpawnBotSafeSEH(void (*cb)(void*), void* data);
+	extern "C" void TickBotSafeSEH(void (*cb)(void*), void* data);
 	// Todos los bots custom vivos, para tickearlos desde el game loop.
 	// IMPORTANTE: inline SIN `static` (linkage externo). `static inline` en un
 	// header a scope de namespace crea UNA COPIA POR TU; SpawnCustomBot (desde
@@ -36,10 +43,19 @@ namespace CustomBotSpawner
 	// Diagnostico: log una vez al primer invocarse y despues cada ~30 llamadas.
 	inline bool bTickAllFirstLogDone = false;
 
+	// Presupuesto de skins pendientes por TickAll (se reinicia en cada tick): el
+	// rebuild de mesh + replicacion de la skin se reparte como maximo 2 por tick
+	// para que una rafaga de 5-22 bots no sature el loader/replicacion (causa del
+	// hitch ~1s + crash al spawnear en rafaga).
+	inline int PendingSkinBudget = 0;
+
 	static void TickAll()
 	{
 		static unsigned TickAllCounter = 0;
 		unsigned tc = ++TickAllCounter;
+
+		// Reparto de skins diferidas: 2 como maximo por tick.
+		PendingSkinBudget = 2;
 
 		if (!bTickAllFirstLogDone)
 		{
@@ -57,9 +73,6 @@ namespace CustomBotSpawner
 		if (AllCustomBots.empty())
 			return;
 
-		// Marcar los bots a eliminar y borrarlos DESPUES del bucle: un bot puede
-		// marcarse como destruido mientras Tick()/UpdateMovement() ejecutan (p.ej.
-		// la secuencia debugbot), y borrar dentro del iterador las invalidaria.
 		std::vector<size_t> ToRemove;
 
 		for (size_t i = 0; i < AllCustomBots.size(); ++i)
@@ -71,24 +84,13 @@ namespace CustomBotSpawner
 				LOG_INFO(LogBots, "[CustomBot] [tickall] INVALID bot idx={} controller={} pawn={}, removing",
 					i, bool(Bot.Controller), bool(Bot.Pawn));
 
-				// Libera el pawn/controller y el contexto de IA (Parte 2). El bot
-				// se borra del vector al final del loop (indices en ToRemove).
 				Bot.Destroy();
 				ToRemove.push_back(i);
 				continue;
 			}
 
-			if (tc % 30 == 0)
-				LOG_INFO(LogBots, "[CustomBot] [tickall] idx={} ready={} dbgTick={} life={}",
-					i, Bot.IsReady(), Bot.DebugTick != nullptr, (int)Bot.GetLifeState());
-
-			Bot.Tick();                              // Parte 2 + secuencia debugbot
-			CustomBotMovement::UpdateMovement(Bot);  // pipeline de movimiento real
-
-			// IA autonoma (Parte 2): decide y actua segun la maquina de estados.
-			// El contexto (Bot.AI) lo crea CustomBotManager::InitializeAI al spawnear.
-			if (Bot.AI)
-				CustomBotAI::Tick(Bot, *Bot.AI);
+			// SEH protection per-bot: si un bot crashea, lo saltamos sin matar el juego
+			TickCustomBotSafe(&Bot);
 		}
 
 		for (size_t i = ToRemove.size(); i-- > 0;)
@@ -116,10 +118,19 @@ namespace CustomBotSpawner
 		return InitializeClasses();
 	}
 
-	// Spawna un bot custom en SpawnTransform y lo devuelve (o nullptr si falla).
-	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator = nullptr)
+	// Etapa actual del spawn (diagnostico): la envuelve el SEH de SpawnCustomBot
+	// para saber EXACTAMENTE donde cayo un bot si algo crashea.
+	inline const char* gSpawnStage = "none";
+
+	// Spawna un bot custom en SpawnTransform. Envuelto en SEH (SpawnBotSafeSEH):
+	// si un paso crashea se limpia el bot a medio construir y se devuelve nullptr.
+	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator = nullptr);
+
+	// Implementacion real del spawn (la envuelve el SEH de arriba).
+	static CustomBot* SpawnCustomBotInner(const FTransform& SpawnTransform, AActor* InSpawnLocator)
 	{
 		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot start ===");
+		gSpawnStage = "setup";
 
 		if (!IsReadyToSpawn())
 		{
@@ -138,11 +149,13 @@ namespace CustomBotSpawner
 
 		// Crea la entidad en el contenedor global.
 		AllCustomBots.emplace_back();
+		gSpawnStage = "emplace";
 		CustomBot& Bot = AllCustomBots.back();
 
 		// Orden de spawn correcto (ver bots.h Initialize): controller, luego pawn,
 		// luego recuperar el playerstate de la posesion del controller.
 		LOG_INFO(LogBots, "[CustomBot] Spawning controller...");
+		gSpawnStage = "spawn-controller";
 		Bot.Controller = GetWorld()->SpawnActor<AFortPlayerControllerAthena>(ControllerClass);
 
 		if (!Bot.Controller)
@@ -153,6 +166,7 @@ namespace CustomBotSpawner
 		}
 
 		LOG_INFO(LogBots, "[CustomBot] Getting PlayerState...");
+		gSpawnStage = "playerstate";
 		Bot.PlayerState = Cast<AFortPlayerStateAthena>(Bot.Controller->GetPlayerState());
 
 		if (!Bot.PlayerState)
@@ -169,7 +183,10 @@ namespace CustomBotSpawner
 		// Replica la construccion real del PlayerPawn_Athena_C (BeginPlay nativo,
 		// registro de componentes, dormancia y tick de movimiento).
 		LOG_INFO(LogBots, "[CustomBot] Spawning pawn via native SpawnDefaultPawnAtTransform...");
+		gSpawnStage = "spawn-pawn";
 		{
+			auto TSpawn0 = std::chrono::steady_clock::now();
+
 			static auto DefaultPawnClassOffset = GameMode->GetOffset("DefaultPawnClass");
 			GameMode->Get<UClass*>(DefaultPawnClassOffset) = PawnClass;
 
@@ -183,6 +200,10 @@ namespace CustomBotSpawner
 			} AGameModeBase_SpawnDefaultPawnAtTransform_Params{ Bot.Controller, SpawnTransform };
 
 			GameMode->ProcessEvent(SpawnDefaultPawnAtTransformFn, &AGameModeBase_SpawnDefaultPawnAtTransform_Params);
+
+			auto TSpawn1 = std::chrono::steady_clock::now();
+			LOG_INFO(LogBots, "[CustomBot] Native spawn took {}ms",
+				(int)std::chrono::duration_cast<std::chrono::milliseconds>(TSpawn1 - TSpawn0).count());
 
 			Bot.Pawn = Cast<AFortPlayerPawnAthena>(AGameModeBase_SpawnDefaultPawnAtTransform_Params.ReturnValue);
 
@@ -251,7 +272,8 @@ namespace CustomBotSpawner
 		// Marcar como listo para que las funciones IsReady() funcionen abajo.
 		Bot.bInitialized = true;
 
-		// Skin/cosmetico.
+		// Skin/cosmetico: ApplyHID con bUseServerChoosePart=true (ServerChoosePart).
+		gSpawnStage = "cosmetics";
 		LOG_INFO(LogBots, "[CustomBot] Applying cosmetic loadout...");
 		ApplyRandomCosmeticLoadout(Bot);
 
@@ -260,15 +282,103 @@ namespace CustomBotSpawner
 		++GameState->GetPlayersLeft();
 		GameState->OnRep_PlayersLeft();
 
-		// FIX RUNPHYS (research 08): simular el CMC en servidor SIEMPRE, para todo
-		// bot, no solo en la secuencia debug. Sin esto el pawn queda congelado.
+		// FIX RUNPHYS: SetIsBot(false) + UnPossess + bRunPhysicsWithNoController.
+		gSpawnStage = "sim";
 		CustomBotMovement::EnableServerSimulation(Bot);
 		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done");
+
+		// La visualizacion del mesh (rebuild de character parts + replicacion) se
+		// DIFIERTE al tick del servidor: una rafaga de bots aplicando la skin
+		// sincrona en el spawn satura el async loader ("Flushing async loaders" +
+		// hitch ~1s) y provoca el crash al spawnear en rafaga. Se procesa como
+		// maximo 2 skins por tick (CustomBotMovement::ApplyPendingSkin).
+		Bot.bSkinPending = true;
+		LOG_INFO(LogBots, "[CustomBot] skin pending (deferred to tick)");
+
+		// Verificar que el pawn sigue vivo tras toda la inicializacion.
+		if (!Bot.Pawn || Bot.Pawn->IsActorBeingDestroyed())
+		{
+			LOG_ERROR(LogBots, "[CustomBot] Pawn became invalid after initialization, aborting bot");
+			Bot.Destroy();
+			AllCustomBots.pop_back();
+			return nullptr;
+		}
 
 		FVector BotPos = Bot.Pawn->GetActorLocation();
 		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE pos=({:.0f},{:.0f},{:.0f}) ===",
 			BotPos.X, BotPos.Y, BotPos.Z);
+		gSpawnStage = "done";
 		return &AllCustomBots.back();
+	}
+
+	// --- Envoltura SEH del spawn --------------------------------------------
+	// SpawnCustomBot llama al inner DENTRO de SpawnBotSafeSEH (pure-C, CustomBotSEH.cpp).
+	// Si un paso del spawn crashea, se limpia el bot a medio construir y se
+	// devuelve nullptr en lugar de tumbar el servidor (igual que el tick, que ya
+	// esta protegido con TickCustomBotSafe). gSpawnStage dice la etapa exacta.
+
+	struct SpawnCtx
+	{
+		FTransform Transform;
+		AActor* Locator = nullptr;
+		CustomBot* Result = nullptr;
+	};
+
+	static void SpawnCustomBotSehCallback(void* data)
+	{
+		auto* Ctx = (SpawnCtx*)data;
+		Ctx->Result = SpawnCustomBotInner(Ctx->Transform, Ctx->Locator);
+	}
+
+	// Limpieza de un bot a medio construir tras un crash en el spawn. Se invoca
+	// bajo SEH (TickBotSafeSEH) para no morir de nuevo limpiando.
+	static void FailSpawnCleanupCallback(void* data)
+	{
+		CustomBot* B = (CustomBot*)data;
+
+		if (B->Controller)
+		{
+			B->Controller->K2_DestroyActor();
+			B->Controller = nullptr;
+		}
+
+		if (B->Pawn)
+		{
+			B->Pawn->K2_DestroyActor();
+			B->Pawn = nullptr;
+		}
+
+		if (B->WorldInventory)
+		{
+			B->WorldInventory->K2_DestroyActor();
+			B->WorldInventory = nullptr;
+		}
+
+		B->PlayerState = nullptr;
+		B->bInitialized = false;
+	}
+
+	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator)
+	{
+		SpawnCtx Ctx;
+		Ctx.Transform = SpawnTransform;
+		Ctx.Locator = InSpawnLocator;
+
+		if (!SpawnBotSafeSEH(SpawnCustomBotSehCallback, &Ctx))
+		{
+			if (!AllCustomBots.empty())
+			{
+				CustomBot& FailedBot = AllCustomBots.back();
+				TickBotSafeSEH(FailSpawnCleanupCallback, &FailedBot);
+				AllCustomBots.pop_back();
+			}
+
+			LOG_ERROR(LogBots, "[CustomBot] [SEH] SpawnCustomBot CRASH at stage '{}' — bot removed",
+				gSpawnStage ? gSpawnStage : "?");
+			return nullptr;
+		}
+
+		return Ctx.Result;
 	}
 
 	// Asigna un nombre aleatorio al bot.
@@ -296,11 +406,10 @@ namespace CustomBotSpawner
 		Bot.PlayerState->OnRep_PlayerName();
 	}
 
-	// Aplica una skin aleatoria al bot (replica PickRandomLoadout + ApplyCosmeticLoadout
-	// del sistema antiguo usa ApplyHID con ServerChoosePart=true, que solo procesa la
-	// primera specialization. El sistema real del jugador usa ApplyCID con
-	// bUseServerChoosePart=false → ApplyCharacterCosmetics que procesa TODAS las
-	// specializations. Replicamos ese flujo aqui.
+	// Aplica una skin aleatoria al bot. Replica lo que hace el sistema antiguo
+	// (FortServerBotManagerAthena::SpawnBotHook): HeroDefinition del CID ->
+	// ApplyHID con bUseServerChoosePart=true (ServerChoosePart por parte). Es la
+	// unica via que muestra skin sin depender del loadout MCP del controller.
 	static void ApplyRandomCosmeticLoadout(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn || !Bot.PlayerState)
@@ -364,6 +473,25 @@ namespace CustomBotSpawner
 
 		LOG_INFO(LogBots, "[CustomBot] Applying cosmetic: {}", HeroType->GetPathName());
 
+		// Validar que el HeroType tiene specializations antes de usarlo.
+		auto SpecOffset = HeroType->GetOffset("Specializations", false);
+
+		if (SpecOffset == -1)
+		{
+			LOG_WARN(LogBots, "[CustomBot] HeroType has no Specializations offset, skipping cosmetic");
+			return;
+		}
+
+		auto& Specs = HeroType->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset);
+
+		if (Specs.Num() == 0)
+		{
+			LOG_WARN(LogBots, "[CustomBot] HeroType has 0 specializations, skipping cosmetic");
+			return;
+		}
+
+		LOG_INFO(LogBots, "[CustomBot] HeroType has {} specializations", Specs.Num());
+
 		// Guardar en PlayerState (como hace el sistema antiguo).
 		static auto HeroTypeOffset = Bot.PlayerState->GetOffset("HeroType", false);
 
@@ -377,11 +505,18 @@ namespace CustomBotSpawner
 			LOG_WARN(LogBots, "[CustomBot] HeroType offset not found on PlayerState, skipping PS set");
 		}
 
-		// Aplicar character parts usando bUseServerChoosePart=false (como el jugador real).
-		// Esto usa ApplyCharacterCosmetics que procesa TODAS las specializations.
-		ApplyHID(Bot.Pawn, HeroType, false);
-
-		LOG_INFO(LogBots, "[CustomBot] ApplyHID completed (bUseServerChoosePart=false)");
+		// Aplicar las character parts con bUseServerChoosePart=true (via
+		// ServerChoosePart), EXACTAMENTE como el sistema antiguo que si muestra
+		// la skin (FortServerBotManagerAthena::SpawnBotHook). La via false
+		// (ApplyCharacterCosmetics) depende de que el hero se resuelva desde el
+		// loadout MCP del controller; los bots no tienen AthenaProfile y el juego
+		// registra "Failed to find hero ... HeroId: (empty)" y deja partes por
+		// defecto. ServerChoosePart registra cada parte directamente en el pawn.
+		auto Tg0 = std::chrono::steady_clock::now();
+		ApplyHID(Bot.Pawn, HeroType, true);
+		auto Tg1 = std::chrono::steady_clock::now();
+		LOG_INFO(LogBots, "[CustomBot] ApplyHID completed (bUseServerChoosePart=true) in {}ms",
+			(int)std::chrono::duration_cast<std::chrono::milliseconds>(Tg1 - Tg0).count());
 	}
 
 	// Otorga las abilities default de jugador.

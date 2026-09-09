@@ -55,6 +55,24 @@ public:
 	// de saltar para que la caida/planeo los gestione la simulacion real.
 	bool bKeepPossessed = false;
 
+	// Handshake CLAIM-LIVE ya enviado (ServerAcknowledgePossession). El debug bot
+	// lo hace al entrar en MovingForward; aqui se fuerza UNA sola vez por bot en
+	// CustomBotMovement::EnsureCMCActive (mismo efecto para todo bot normal).
+	bool bClaimLiveDone = false;
+
+	// --- Probe de movimiento (diagnostico) ----------------------------------
+	// CustomBotMovement::EnsureCMCActive registra cada ventana de ~60 ticks el
+	// desplazamiento horizontal mientras hay MoveTo activo (log [mprobe]), para
+	// distinguir entre tirones del servidor y de la replicacion del cliente.
+	unsigned ProbeTicks = 0;
+	FVector ProbePrevLoc{};
+
+	//--- Skin diferida ------------------------------------------------------
+	// El rebuild de mesh + replicacion de la skin se aplaza del spawn al tick
+	// (CustomBotMovement::ApplyPendingSkin, max 2 por TickAll) para que una
+	// rafaga de spawns no sature el async loader y tumbe el servidor.
+	bool bSkinPending = false;
+
 	bool HasMoveRequest() const
 	{
 		return bMoveRequestActive;

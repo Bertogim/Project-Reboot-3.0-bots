@@ -148,6 +148,8 @@ struct BotAIContext
 	float ScanTimer = 0.0f;
 	float ReactTimer = 0.0f;   // retraso de reaccion humano
 	float ActionTimer = 0.0f;  // cooldown entre acciones de combate
+	float StrafeTimer = 0.0f;  // cambia la direccion del strafe cada X segundos
+	int StrafeDir = 1;         // +1 derecha / -1 izquierda (evita orbitar)
 
 	// Battle bus / glider
 	float JumpDelay = 0.0f;    // momento (tiempo) en que decide saltar

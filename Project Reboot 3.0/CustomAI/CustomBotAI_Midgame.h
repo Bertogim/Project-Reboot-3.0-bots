@@ -21,6 +21,7 @@ namespace CustomBotAIMidgame
 	static void BuildBarricade(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc);
 	static void DoEndGame(CustomBot& Bot, BotAIContext& Ctx);
 	static bool TryResolveBlockedPath(FVector& MoveTarget, CustomBot& Bot, BotAIContext& Ctx);
+	static void RefillLobbyHP(CustomBot& Bot);
 
 	// Rango cuerpo a cuerpo del pico (alcance de swing). Lo usan tanto el
 	// combate normal sin armas como los duelos de warmup.

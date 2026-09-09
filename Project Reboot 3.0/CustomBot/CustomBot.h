@@ -23,6 +23,9 @@
 // el motor de decisiones; CustomBotSpawner lo crea en el spawn y lo destruye.
 struct BotAIContext;
 
+class AFortPickup;
+class ABuildingContainer;
+
 class CustomBot
 {
 public:
@@ -72,6 +75,38 @@ public:
 	// (CustomBotMovement::ApplyPendingSkin, max 2 por TickAll) para que una
 	// rafaga de spawns no sature el async loader y tumbe el servidor.
 	bool bSkinPending = false;
+
+	// --- Percepcion cacheada (bots pesados) --------------------------------
+	// Los barridos UGameplayStatics:GetAllActorsOfClass sobre el mundo entero
+	// son lo mas caro del bot (DoLooting hacia 4+ por frame; con 10 bots el
+	// servidor perdia ticks -> movimiento lento/a saltos). El primer finder de
+	// cada bucket (loot/jugadores/obstaculos) refresca su cache una vez cada
+	// ScanCooldown y el resto de finders del mismo bucket lo reutilizan sin
+	// volver a barrer el mundo. Lo gestiona CustomBotPerception.
+	float LootScanTime = -1.0f;
+	float PlayerScanTime = -1.0f;
+	float ObstacleScanTime = -1.0f;
+
+	// Radio con el que se refresco cada cache: si una llamada pide mas alcance
+	// que el radio cacheado, se fuerza un refresco inmediato.
+	float LootScanRadius = 0.0f;
+	float PlayerScanRadius = 0.0f;
+	float ObstacleScanRadius = 0.0f;
+
+	AFortPickup* CachedNearestWeapon = nullptr;
+	AFortPickup* CachedNearestConsumable = nullptr;
+	AFortPickup* CachedNearestPickup = nullptr;
+	ABuildingContainer* CachedNearestContainer = nullptr;
+	AActor* CachedNearestEnemy = nullptr;
+	AActor* CachedNearestAlly = nullptr;
+	AActor* CachedNearestObstacle = nullptr;
+	CBT::EObstacleType CachedObstacleType = CBT::EObstacleType::None;
+
+	// Throttle de la LOS de UpdateMovement: la trace LineTraceSingle es mas
+	// barata que un barrido de clase pero se hacía por tick con 10 bots; aqui
+	// el estado BlockedPath se refresca como mucho cada ~0.25s por bot.
+	float MoveLOSTime = -1.0f;
+	bool bMoveLOSBlocked = false;
 
 	bool HasMoveRequest() const
 	{

@@ -156,9 +156,117 @@ namespace CustomBotPerception
 		return Nearest;
 	}
 
+	// --- Cache de barridos (bots pesados) -----------------------------------
+	// Los barridos GetActorsOfClass sobre el mundo entero son lo mas caro del
+	// bot (DoLooting hacia 4+ por frame; con 10 bots el servidor perdia ticks
+	// -> movimiento lento/a saltos). Cada bucket (loot/jugadores/obstaculos)
+	// refresca su cache UNA vez por ScanCooldown y el resto de finders del mismo
+	// bucket (que miran los MISMOS actores del mundo) lo reutilizan sin volver a
+	// barrer. Los refreshes viven en CustomBot (LootScanTime/...).
+
+	inline constexpr float ScanCooldown = 0.35f;
+
+	static float BotTime()
+	{
+		return UGameplayStatics::GetTimeSeconds(GetWorld());
+	}
+
+	// Pickup en cache utilizable (no destruido entre refrescos).
+	static AFortPickup* UsablePickup(AFortPickup* Pickup)
+	{
+		return (Pickup && !Pickup->IsActorBeingDestroyed()) ? Pickup : nullptr;
+	}
+
+	// Refresca el cache de loot (pickups + cofres) si expiro. Con UN barrido de
+	// FortPickup se clasifican todas las tipos de pickup en la misma pasada, y
+	// con otro los cofres sin abrir. Antes eran 4+ barridos por frame.
+	static void RefreshLootCache(CustomBot& Bot, float Radius)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return;
+
+		if (Bot.LootScanTime > 0.0f && Radius <= Bot.LootScanRadius && BotTime() - Bot.LootScanTime < ScanCooldown)
+			return;
+
+		Bot.LootScanTime = BotTime();
+		Bot.LootScanRadius = Radius;
+
+		// Pickups: un solo barrido, clasificando todos en una pasada.
+		Bot.CachedNearestWeapon = nullptr;
+		Bot.CachedNearestConsumable = nullptr;
+		Bot.CachedNearestPickup = nullptr;
+
+		static auto FortPickupClass = FindObject<UClass>(L"/Script/FortniteGame.FortPickup");
+		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, FortPickupClass, Radius);
+
+		for (int i = 0; i < All.Num(); ++i)
+		{
+			auto Pickup = Cast<AFortPickup>(All.at(i));
+
+			if (!Pickup || Pickup->IsActorBeingDestroyed())
+				continue;
+
+			float D = DistanceToActor(Bot, Pickup);
+
+			if (D <= Radius && (!Bot.CachedNearestPickup || D < DistanceToActor(Bot, Bot.CachedNearestPickup)))
+				Bot.CachedNearestPickup = Pickup;
+
+			EItemType Type = GetPickupItemType(Pickup);
+
+			if (Type == EItemType::Weapon && D <= Radius && (!Bot.CachedNearestWeapon || D < DistanceToActor(Bot, Bot.CachedNearestWeapon)))
+				Bot.CachedNearestWeapon = Pickup;
+
+			if (Type == EItemType::Consumable && D <= Radius && (!Bot.CachedNearestConsumable || D < DistanceToActor(Bot, Bot.CachedNearestConsumable)))
+				Bot.CachedNearestConsumable = Pickup;
+		}
+
+		All.FreeEngine();
+
+		// Cofres: un solo barrido.
+		Bot.CachedNearestContainer = nullptr;
+
+		static auto BuildingContainerClass = FindObject<UClass>(L"/Script/FortniteGame.BuildingContainer");
+		TArray<AActor*> AllContainers = GetAllActorsOfClassWithin(Bot, BuildingContainerClass, Radius);
+
+		for (int i = 0; i < AllContainers.Num(); ++i)
+		{
+			auto Container = Cast<ABuildingContainer>(AllContainers.at(i));
+
+			if (!Container || Container->IsActorBeingDestroyed() || Container->IsAlreadySearched())
+				continue;
+
+			float D = DistanceToActor(Bot, Container);
+
+			if (D <= Radius && (!Bot.CachedNearestContainer || D < DistanceToActor(Bot, Bot.CachedNearestContainer)))
+				Bot.CachedNearestContainer = Container;
+		}
+
+		AllContainers.FreeEngine();
+	}
+
 	// Pickup (loot en el suelo) mas cercano, opcionalmente filtrando por tipo de item.
 	static AFortPickup* FindNearestPickup(CustomBot& Bot, float Radius, EItemType ItemTypeFilter = EItemType::Other, bool bAnyType = true)
 	{
+		// Tipos usados por la IA: leen el cache de loot (un barrido cada cooldown).
+		if (bAnyType)
+		{
+			RefreshLootCache(Bot, Radius);
+			return UsablePickup(Bot.CachedNearestPickup);
+		}
+
+		if (ItemTypeFilter == EItemType::Weapon)
+		{
+			RefreshLootCache(Bot, Radius);
+			return UsablePickup(Bot.CachedNearestWeapon);
+		}
+
+		if (ItemTypeFilter == EItemType::Consumable)
+		{
+			RefreshLootCache(Bot, Radius);
+			return UsablePickup(Bot.CachedNearestConsumable);
+		}
+
+		// Filtros poco usados (Ammo/Resource/...): barrido directo sin cache.
 		static auto FortPickupClass = FindObject<UClass>(L"/Script/FortniteGame.FortPickup");
 		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, FortPickupClass, Radius);
 
@@ -192,35 +300,13 @@ namespace CustomBotPerception
 	// Cofre (BuildingContainer) sin abrir mas cercano dentro del radio.
 	static ABuildingContainer* FindNearestUnopenedContainer(CustomBot& Bot, float Radius)
 	{
-		static auto BuildingContainerClass = FindObject<UClass>(L"/Script/FortniteGame.BuildingContainer");
-		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, BuildingContainerClass, Radius);
+		RefreshLootCache(Bot, Radius);
 
-		ABuildingContainer* Nearest = nullptr;
-		float NearestDist = Radius;
-		FVector BotLocation = Bot.Pawn->GetActorLocation();
+		if (Bot.CachedNearestContainer &&
+			(Bot.CachedNearestContainer->IsActorBeingDestroyed() || Bot.CachedNearestContainer->IsAlreadySearched()))
+			Bot.CachedNearestContainer = nullptr;
 
-		for (int i = 0; i < All.Num(); ++i)
-		{
-			auto Container = Cast<ABuildingContainer>(All.at(i));
-
-			if (!Container || Container->IsActorBeingDestroyed())
-				continue;
-
-			// Skip si ya fue abierto (bAlreadySearched).
-			if (Container->IsAlreadySearched())
-				continue;
-
-			float D = DistanceToActor(Bot, Container);
-
-			if (D <= NearestDist)
-			{
-				NearestDist = D;
-				Nearest = Container;
-			}
-		}
-
-		All.FreeEngine();
-		return Nearest;
+		return Bot.CachedNearestContainer;
 	}
 
 	// Jugador (AFortPlayerPawn / AFortPlayerPawnAthena) mas cercano dentro del radio.
@@ -250,7 +336,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Nearest;
 	}
 
@@ -421,20 +507,23 @@ namespace CustomBotPerception
 		return CBT::EObstacleType::WorldObject;
 	}
 
-	// Estructura/obstaculo (ABuildingSMActor o ABuildingFoundation) mas cercano
-	// dentro del radio, con su tipo clasificado.
-	static AActor* FindNearestObstacle(CustomBot& Bot, float Radius, CBT::EObstacleType& OutType)
+	// Refresca el cache de obstaculos (BuildingSMActor) si expiro.
+	static void RefreshObstacleCache(CustomBot& Bot, float Radius)
 	{
-		OutType = CBT::EObstacleType::None;
-
 		if (!Bot.IsReady() || !Bot.Pawn)
-			return nullptr;
+			return;
+
+		if (Bot.ObstacleScanTime > 0.0f && Radius <= Bot.ObstacleScanRadius && BotTime() - Bot.ObstacleScanTime < ScanCooldown)
+			return;
+
+		Bot.ObstacleScanTime = BotTime();
+		Bot.ObstacleScanRadius = Radius;
+
+		Bot.CachedNearestObstacle = nullptr;
+		Bot.CachedObstacleType = CBT::EObstacleType::None;
 
 		static auto BuildingSMActorClass = FindObject<UClass>(L"/Script/FortniteGame.BuildingSMActor");
 		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, BuildingSMActorClass, Radius);
-
-		AActor* Nearest = nullptr;
-		float NearestDist = Radius;
 
 		for (int i = 0; i < All.Num(); ++i)
 		{
@@ -445,19 +534,27 @@ namespace CustomBotPerception
 
 			float D = DistanceToActor(Bot, Actor);
 
-			if (D <= NearestDist)
+			if (D <= Radius && (!Bot.CachedNearestObstacle || D < DistanceToActor(Bot, Bot.CachedNearestObstacle)))
 			{
-				NearestDist = D;
-				Nearest = Actor;
+				Bot.CachedNearestObstacle = Actor;
+				Bot.CachedObstacleType = ClassifyObstacle(Bot, Actor);
 			}
 		}
 
 		All.FreeEngine();
+	}
 
-		if (Nearest)
-			OutType = ClassifyObstacle(Bot, Nearest);
+	// Estructura/obstaculo (ABuildingSMActor o ABuildingFoundation) mas cercano
+	// dentro del radio, con su tipo clasificado.
+	static AActor* FindNearestObstacle(CustomBot& Bot, float Radius, CBT::EObstacleType& OutType)
+	{
+		RefreshObstacleCache(Bot, Radius);
 
-		return Nearest;
+		if (Bot.CachedNearestObstacle && Bot.CachedNearestObstacle->IsActorBeingDestroyed())
+			Bot.CachedNearestObstacle = nullptr;
+
+		OutType = Bot.CachedObstacleType;
+		return Bot.CachedNearestObstacle;
 	}
 
 	// Devuelve true si el camino directo hacia TargetLocation esta bloqueado.
@@ -503,50 +600,24 @@ namespace CustomBotPerception
 
 	// --- Jugadores / bots cercanos (con relacion de equipo) --------------------
 
-	static AActor* FindNearestEnemy(CustomBot& Bot, float Radius)
+	// Refresca el cache de jugadores (FortPlayerPawn) si expiro. UN barrido
+	// clasifica en la misma pasada aliados y enemigos.
+	static void RefreshPlayerCache(CustomBot& Bot, float Radius)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn || !Bot.PlayerState)
-			return nullptr;
+			return;
+
+		if (Bot.PlayerScanTime > 0.0f && Radius <= Bot.PlayerScanRadius && BotTime() - Bot.PlayerScanTime < ScanCooldown)
+			return;
+
+		Bot.PlayerScanTime = BotTime();
+		Bot.PlayerScanRadius = Radius;
+
+		Bot.CachedNearestEnemy = nullptr;
+		Bot.CachedNearestAlly = nullptr;
 
 		static auto FortPlayerPawnClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerPawn");
 		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, FortPlayerPawnClass, Radius);
-
-		AActor* Nearest = nullptr;
-		float NearestDist = Radius;
-
-		for (int i = 0; i < All.Num(); ++i)
-		{
-			AActor* Actor = All.at(i);
-
-			if (!Actor || Actor == Bot.Pawn || Actor->IsActorBeingDestroyed())
-				continue;
-
-			if (!IsEnemy(Bot, GetPlayerStateOf(Actor)))
-				continue;
-
-			float D = DistanceToActor(Bot, Actor);
-
-			if (D <= NearestDist)
-			{
-				NearestDist = D;
-				Nearest = Actor;
-			}
-		}
-
-		All.FreeEngine();
-		return Nearest;
-	}
-
-	static AActor* FindNearestAlly(CustomBot& Bot, float Radius)
-	{
-		if (!Bot.IsReady() || !Bot.Pawn || !Bot.PlayerState)
-			return nullptr;
-
-		static auto FortPlayerPawnClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerPawn");
-		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, FortPlayerPawnClass, Radius);
-
-		AActor* Nearest = nullptr;
-		float NearestDist = Radius;
 
 		for (int i = 0; i < All.Num(); ++i)
 		{
@@ -557,20 +628,42 @@ namespace CustomBotPerception
 
 			auto PlayerState = GetPlayerStateOf(Actor);
 
-			if (!PlayerState || PlayerState == Bot.PlayerState || !IsAlly(Bot, PlayerState))
+			if (!PlayerState || PlayerState == Bot.PlayerState)
 				continue;
 
 			float D = DistanceToActor(Bot, Actor);
 
-			if (D <= NearestDist)
-			{
-				NearestDist = D;
-				Nearest = Actor;
-			}
+			if (D > Radius)
+				continue;
+
+			if (IsEnemy(Bot, PlayerState) && (!Bot.CachedNearestEnemy || D < DistanceToActor(Bot, Bot.CachedNearestEnemy)))
+				Bot.CachedNearestEnemy = Actor;
+
+			if (IsAlly(Bot, PlayerState) && (!Bot.CachedNearestAlly || D < DistanceToActor(Bot, Bot.CachedNearestAlly)))
+				Bot.CachedNearestAlly = Actor;
 		}
 
 		All.FreeEngine();
-		return Nearest;
+	}
+
+	static AActor* FindNearestEnemy(CustomBot& Bot, float Radius)
+	{
+		RefreshPlayerCache(Bot, Radius);
+
+		if (Bot.CachedNearestEnemy && Bot.CachedNearestEnemy->IsActorBeingDestroyed())
+			Bot.CachedNearestEnemy = nullptr;
+
+		return Bot.CachedNearestEnemy;
+	}
+
+	static AActor* FindNearestAlly(CustomBot& Bot, float Radius)
+	{
+		RefreshPlayerCache(Bot, Radius);
+
+		if (Bot.CachedNearestAlly && Bot.CachedNearestAlly->IsActorBeingDestroyed())
+			Bot.CachedNearestAlly = nullptr;
+
+		return Bot.CachedNearestAlly;
 	}
 
 	static bool IsAlly(CustomBot& Bot, AFortPlayerStateAthena* Other)

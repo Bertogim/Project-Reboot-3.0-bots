@@ -1,0 +1,114 @@
+Fortnite Version 3.500000
+
+[Enviado espacial] /Game/Athena/Items/Cosmetics/Characters/CID_080_Athena_Commando_M_Space.CID_080_Athena_Commando_M_Space
+[Dev_TestAsset] /Game/Athena/Items/Cosmetics/Characters/Dev_TestAsset.Dev_TestAsset
+[Personaje aleatorio] /Game/Athena/Items/Cosmetics/Characters/CID_Random.CID_Random
+[Codificada] /Game/Athena/Items/Cosmetics/Characters/CID_110_Athena_Commando_F_CircuitBreaker.CID_110_Athena_Commando_F_CircuitBreaker
+[Tomatoide] /Game/Athena/Items/Cosmetics/Characters/CID_109_Athena_Commando_M_Pizza.CID_109_Athena_Commando_M_Pizza
+[Leviatán] /Game/Athena/Items/Cosmetics/Characters/CID_108_Athena_Commando_M_Fishhead.CID_108_Athena_Commando_M_Fishhead
+[Dinoperaciones especiales] /Game/Athena/Items/Cosmetics/Characters/CID_107_Athena_Commando_F_PajamaParty.CID_107_Athena_Commando_F_PajamaParty
+[Taxista] /Game/Athena/Items/Cosmetics/Characters/CID_106_Athena_Commando_F_Taxi.CID_106_Athena_Commando_F_Taxi
+[Vanguardia oscura] /Game/Athena/Items/Cosmetics/Characters/CID_105_Athena_Commando_F_SpaceBlack.CID_105_Athena_Commando_F_SpaceBlack
+[Coneja peleadora] /Game/Athena/Items/Cosmetics/Characters/CID_104_Athena_Commando_F_Bunny.CID_104_Athena_Commando_F_Bunny
+[Conejo asaltante] /Game/Athena/Items/Cosmetics/Characters/CID_103_Athena_Commando_M_Bunny.CID_103_Athena_Commando_M_Bunny
+[Cuervo] /Game/Athena/Items/Cosmetics/Characters/CID_102_Athena_Commando_M_Raven.CID_102_Athena_Commando_M_Raven
+[Operación a medianoche] /Game/Athena/Items/Cosmetics/Characters/CID_101_Athena_Commando_M_Stealth.CID_101_Athena_Commando_M_Stealth
+[Perro de guerra] /Game/Athena/Items/Cosmetics/Characters/CID_100_Athena_Commando_M_CuChulainn.CID_100_Athena_Commando_M_CuChulainn
+[Guerrera de las Tierras Altas] /Game/Athena/Items/Cosmetics/Characters/CID_099_Athena_Commando_F_Scathach.CID_099_Athena_Commando_F_Scathach
+[Sargento del trébol verde] /Game/Athena/Items/Cosmetics/Characters/CID_098_Athena_Commando_F_StPatty.CID_098_Athena_Commando_F_StPatty
+[Acorde potente] /Game/Athena/Items/Cosmetics/Characters/CID_097_Athena_Commando_F_RockerPunk.CID_097_Athena_Commando_F_RockerPunk
+[Líder del equipo rosa] /Game/Athena/Items/Cosmetics/Characters/CID_096_Athena_Commando_F_Founder.CID_096_Athena_Commando_F_Founder
+[Pinturas de guerra] /Game/Athena/Items/Cosmetics/Characters/CID_095_Athena_Commando_M_Founder.CID_095_Athena_Commando_M_Founder
+[Quemarruedas] /Game/Athena/Items/Cosmetics/Characters/CID_094_Athena_Commando_M_Rider.CID_094_Athena_Commando_M_Rider
+[Rex] /Game/Athena/Items/Cosmetics/Characters/CID_093_Athena_Commando_M_Dinosaur.CID_093_Athena_Commando_M_Dinosaur
+[Ariete brillante] /Game/Athena/Items/Cosmetics/Characters/CID_092_Athena_Commando_F_RedShirt.CID_092_Athena_Commando_F_RedShirt
+[Ariete radiante] /Game/Athena/Items/Cosmetics/Characters/CID_091_Athena_Commando_M_RedShirt.CID_091_Athena_Commando_M_RedShirt
+[Agente rebelde] /Game/Athena/Items/Cosmetics/Characters/CID_090_Athena_Commando_M_Tactical.CID_090_Athena_Commando_M_Tactical
+[Havoc] /Game/Athena/Items/Cosmetics/Characters/CID_089_Athena_Commando_M_RetroGrey.CID_089_Athena_Commando_M_RetroGrey
+[Viajero oscuro] /Game/Athena/Items/Cosmetics/Characters/CID_088_Athena_Commando_M_SpaceBlack.CID_088_Athena_Commando_M_SpaceBlack
+[Defensora escarlata] /Game/Athena/Items/Cosmetics/Characters/CID_087_Athena_Commando_F_RedSilk.CID_087_Athena_Commando_F_RedSilk
+[Explorador escarlata] /Game/Athena/Items/Cosmetics/Characters/CID_086_Athena_Commando_M_RedSilk.CID_086_Athena_Commando_M_RedSilk
+[Subcomandante] /Game/Athena/Items/Cosmetics/Characters/CID_085_Athena_Commando_M_Twitch.CID_085_Athena_Commando_M_Twitch
+[Señor Muerte] /Game/Athena/Items/Cosmetics/Characters/CID_084_Athena_Commando_M_Assassin.CID_084_Athena_Commando_M_Assassin
+[Agente de élite] /Game/Athena/Items/Cosmetics/Characters/CID_083_Athena_Commando_F_Tactical.CID_083_Athena_Commando_F_Tactical
+[Señor del óxido] /Game/Athena/Items/Cosmetics/Characters/CID_082_Athena_Commando_M_Scavenger.CID_082_Athena_Commando_M_Scavenger
+[Lunática] /Game/Athena/Items/Cosmetics/Characters/CID_081_Athena_Commando_F_Space.CID_081_Athena_Commando_F_Space
+[Especialista en reconocimiento de torres] /Game/Athena/Items/Cosmetics/Characters/CID_079_Athena_Commando_F_Camo.CID_079_Athena_Commando_F_Camo
+[Soldado asalto de altura] /Game/Athena/Items/Cosmetics/Characters/CID_078_Athena_Commando_M_Camo.CID_078_Athena_Commando_M_Camo
+[Hiperión] /Game/Athena/Items/Cosmetics/Characters/CID_077_Athena_Commando_M_Sup.CID_077_Athena_Commando_M_Sup
+[Astrea] /Game/Athena/Items/Cosmetics/Characters/CID_076_Athena_Commando_F_Sup.CID_076_Athena_Commando_F_Sup
+[Agente estratega] /Game/Athena/Items/Cosmetics/Characters/CID_075_Athena_Commando_F_Stripe.CID_075_Athena_Commando_F_Stripe
+[Exploradora selvática] /Game/Athena/Items/Cosmetics/Characters/CID_074_Athena_Commando_F_Stripe.CID_074_Athena_Commando_F_Stripe
+[Operaciones especiales esnórquel] /Game/Athena/Items/Cosmetics/Characters/CID_073_Athena_Commando_F_Scuba.CID_073_Athena_Commando_F_Scuba
+[Sargento de gala] /Game/Athena/Items/Cosmetics/Characters/CID_072_Athena_Commando_M_Scout.CID_072_Athena_Commando_M_Scout
+[Wukong] /Game/Athena/Items/Cosmetics/Characters/CID_071_Athena_Commando_M_Wukong.CID_071_Athena_Commando_M_Wukong
+[Montaraz amoroso] /Game/Athena/Items/Cosmetics/Characters/CID_070_Athena_Commando_M_Cupid.CID_070_Athena_Commando_M_Cupid
+[Líder del equipo arrumacos] /Game/Athena/Items/Cosmetics/Characters/CID_069_Athena_Commando_F_PinkBear.CID_069_Athena_Commando_F_PinkBear
+[Maestra del esquí (COREA)] /Game/Athena/Items/Cosmetics/Characters/CID_068_Athena_Commando_F_SkiGirl_KOR.CID_068_Athena_Commando_F_SkiGirl_KOR
+[Maestra del esquí (CHINA)] /Game/Athena/Items/Cosmetics/Characters/CID_067_Athena_Commando_F_SkiGirl_CHN.CID_067_Athena_Commando_F_SkiGirl_CHN
+[Maestra del esquí (ALEMANIA)] /Game/Athena/Items/Cosmetics/Characters/CID_066_Athena_Commando_F_SkiGirl_GER.CID_066_Athena_Commando_F_SkiGirl_GER
+[Maestra del esquí (FRANCIA)] /Game/Athena/Items/Cosmetics/Characters/CID_065_Athena_Commando_F_SkiGirl_FRA.CID_065_Athena_Commando_F_SkiGirl_FRA
+[Maestra del esquí (REINO UNIDO)] /Game/Athena/Items/Cosmetics/Characters/CID_064_Athena_Commando_F_SkiGirl_GBR.CID_064_Athena_Commando_F_SkiGirl_GBR
+[Maestra del esquí (CANADÁ)] /Game/Athena/Items/Cosmetics/Characters/CID_063_Athena_Commando_F_SkiGirl_CAN.CID_063_Athena_Commando_F_SkiGirl_CAN
+[Maestra del esquí (EE. UU.)] /Game/Athena/Items/Cosmetics/Characters/CID_062_Athena_Commando_F_SkiGirl_USA.CID_062_Athena_Commando_F_SkiGirl_USA
+[Maestra del esquí] /Game/Athena/Items/Cosmetics/Characters/CID_061_Athena_Commando_F_SkiGirl.CID_061_Athena_Commando_F_SkiGirl
+[As alpino (COREA)] /Game/Athena/Items/Cosmetics/Characters/CID_060_Athena_Commando_M_SkiDude_KOR.CID_060_Athena_Commando_M_SkiDude_KOR
+[As alpino (CHINA)] /Game/Athena/Items/Cosmetics/Characters/CID_059_Athena_Commando_M_SkiDude_CHN.CID_059_Athena_Commando_M_SkiDude_CHN
+[As alpino (ALEMANIA)] /Game/Athena/Items/Cosmetics/Characters/CID_058_Athena_Commando_M_SkiDude_GER.CID_058_Athena_Commando_M_SkiDude_GER
+[As alpino (FRANCIA)] /Game/Athena/Items/Cosmetics/Characters/CID_057_Athena_Commando_M_SkiDude_FRA.CID_057_Athena_Commando_M_SkiDude_FRA
+[As alpino (REINO UNIDO)] /Game/Athena/Items/Cosmetics/Characters/CID_056_Athena_Commando_M_SkiDude_GBR.CID_056_Athena_Commando_M_SkiDude_GBR
+[As alpino (CANADÁ)] /Game/Athena/Items/Cosmetics/Characters/CID_055_Athena_Commando_M_SkiDude_CAN.CID_055_Athena_Commando_M_SkiDude_CAN
+[As alpino (EE. UU.)] /Game/Athena/Items/Cosmetics/Characters/CID_054_Athena_Commando_M_SkiDude_USA.CID_054_Athena_Commando_M_SkiDude_USA
+[As alpino] /Game/Athena/Items/Cosmetics/Characters/CID_053_Athena_Commando_M_SkiDude.CID_053_Athena_Commando_M_SkiDude
+[Líder del equipo azul] /Game/Athena/Items/Cosmetics/Characters/CID_052_Athena_Commando_F_PSBlue.CID_052_Athena_Commando_F_PSBlue
+[Nombre en clave E.L.F.O.] /Game/Athena/Items/Cosmetics/Characters/CID_051_Athena_Commando_M_HolidayElf.CID_051_Athena_Commando_M_HolidayElf
+[Cascanueces] /Game/Athena/Items/Cosmetics/Characters/CID_050_Athena_Commando_M_HolidayNutcracker.CID_050_Athena_Commando_M_HolidayNutcracker
+[Saqueador dulce] /Game/Athena/Items/Cosmetics/Characters/CID_049_Athena_Commando_M_HolidayGingerbread.CID_049_Athena_Commando_M_HolidayGingerbread
+[Artillera de jengibre] /Game/Athena/Items/Cosmetics/Characters/CID_048_Athena_Commando_F_HolidayGingerbread.CID_048_Athena_Commando_F_HolidayGingerbread
+[Asaltante nariz de reno] /Game/Athena/Items/Cosmetics/Characters/CID_047_Athena_Commando_F_HolidayReindeer.CID_047_Athena_Commando_F_HolidayReindeer
+[Operaciones especiales ponche] /Game/Athena/Items/Cosmetics/Characters/CID_046_Athena_Commando_F_HolidaySweater.CID_046_Athena_Commando_F_HolidaySweater
+[Montaraz navideño] /Game/Athena/Items/Cosmetics/Characters/CID_045_Athena_Commando_M_HolidaySweater.CID_045_Athena_Commando_M_HolidaySweater
+[Bombardera brillante] /Game/Athena/Items/Cosmetics/Characters/CID_044_Athena_Commando_F_SciPop.CID_044_Athena_Commando_F_SciPop
+[Operaciones especiales sombría] /Game/Athena/Items/Cosmetics/Characters/CID_043_Athena_Commando_F_Stealth.CID_043_Athena_Commando_F_Stealth
+[Rompecircuitos] /Game/Athena/Items/Cosmetics/Characters/CID_042_Athena_Commando_M_Cyberpunk.CID_042_Athena_Commando_M_Cyberpunk
+[Dominadora] /Game/Athena/Items/Cosmetics/Characters/CID_041_Athena_Commando_F_District.CID_041_Athena_Commando_F_District
+[Devastador] /Game/Athena/Items/Cosmetics/Characters/CID_040_Athena_Commando_M_District.CID_040_Athena_Commando_M_District
+[Especialista en destellos] /Game/Athena/Items/Cosmetics/Characters/CID_039_Athena_Commando_F_Disco.CID_039_Athena_Commando_F_Disco
+[Operaciones especiales funky] /Game/Athena/Items/Cosmetics/Characters/CID_038_Athena_Commando_M_Disco.CID_038_Athena_Commando_M_Disco
+[Asesina ártica] /Game/Athena/Items/Cosmetics/Characters/CID_037_Athena_Commando_F_WinterCamo.CID_037_Athena_Commando_F_WinterCamo
+[Cero absoluto] /Game/Athena/Items/Cosmetics/Characters/CID_036_Athena_Commando_M_WinterCamo.CID_036_Athena_Commando_M_WinterCamo
+[Caballero negro] /Game/Athena/Items/Cosmetics/Characters/CID_035_Athena_Commando_M_Medieval.CID_035_Athena_Commando_M_Medieval
+[Dama roja] /Game/Athena/Items/Cosmetics/Characters/CID_034_Athena_Commando_F_Medieval.CID_034_Athena_Commando_F_Medieval
+[Dama real] /Game/Athena/Items/Cosmetics/Characters/CID_033_Athena_Commando_F_Medieval.CID_033_Athena_Commando_F_Medieval
+[Escudero azul] /Game/Athena/Items/Cosmetics/Characters/CID_032_Athena_Commando_M_Medieval.CID_032_Athena_Commando_M_Medieval
+[Velociraptor] /Game/Athena/Items/Cosmetics/Characters/CID_031_Athena_Commando_M_Retro.CID_031_Athena_Commando_M_Retro
+[Soldado calavera ] /Game/Athena/Items/Cosmetics/Characters/CID_030_Athena_Commando_M_Halloween.CID_030_Athena_Commando_M_Halloween
+[Demonio militar] /Game/Athena/Items/Cosmetics/Characters/CID_029_Athena_Commando_F_Halloween.CID_029_Athena_Commando_F_Halloween
+[Asaltante renegada] /Game/Athena/Items/Cosmetics/Characters/CID_028_Athena_Commando_F.CID_028_Athena_Commando_F
+[Especialista en supervivencia] /Game/Athena/Items/Cosmetics/Characters/CID_027_Athena_Commando_F.CID_027_Athena_Commando_F
+[Forajido] /Game/Athena/Items/Cosmetics/Characters/CID_026_Athena_Commando_M.CID_026_Athena_Commando_M
+[Especialista en el primer golpe] /Game/Athena/Items/Cosmetics/Characters/CID_025_Athena_Commando_M.CID_025_Athena_Commando_M
+[Especialista en reconocimiento] /Game/Athena/Items/Cosmetics/Characters/CID_024_Athena_Commando_F.CID_024_Athena_Commando_F
+[Experto en munición] /Game/Athena/Items/Cosmetics/Characters/CID_023_Athena_Commando_F.CID_023_Athena_Commando_F
+[Experto en reconocimiento] /Game/Athena/Items/Cosmetics/Characters/CID_022_Athena_Commando_F.CID_022_Athena_Commando_F
+[Peleador] /Game/Athena/Items/Cosmetics/Characters/CID_021_Athena_Commando_F.CID_021_Athena_Commando_F
+[Fuerzas especiales] /Game/Athena/Items/Cosmetics/Characters/CID_020_Athena_Commando_M.CID_020_Athena_Commando_M
+[Infiltrado] /Game/Athena/Items/Cosmetics/Characters/CID_019_Athena_Commando_M.CID_019_Athena_Commando_M
+[Explorador de reconocimiento] /Game/Athena/Items/Cosmetics/Characters/CID_018_Athena_Commando_M.CID_018_Athena_Commando_M
+[Soldado de asalto aéreo] /Game/Athena/Items/Cosmetics/Characters/CID_017_Athena_Commando_M.CID_017_Athena_Commando_M
+[Comando] /Game/Athena/Items/Cosmetics/Characters/CID_016_Athena_Commando_F.CID_016_Athena_Commando_F
+[Militar de asalto] /Game/Athena/Items/Cosmetics/Characters/CID_015_Athena_Commando_F.CID_015_Athena_Commando_F
+[Descubridor] /Game/Athena/Items/Cosmetics/Characters/CID_014_Athena_Commando_F.CID_014_Athena_Commando_F
+[Renegada] /Game/Athena/Items/Cosmetics/Characters/CID_013_Athena_Commando_F.CID_013_Athena_Commando_F
+[Militar   ] /Game/Athena/Items/Cosmetics/Characters/CID_012_Athena_Commando_M.CID_012_Athena_Commando_M
+[Explorador] /Game/Athena/Items/Cosmetics/Characters/CID_011_Athena_Commando_M.CID_011_Athena_Commando_M
+[Asaltador] /Game/Athena/Items/Cosmetics/Characters/CID_010_Athena_Commando_M.CID_010_Athena_Commando_M
+[Rastreador] /Game/Athena/Items/Cosmetics/Characters/CID_009_Athena_Commando_M.CID_009_Athena_Commando_M
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_008_Athena_Commando_M_Default.CID_008_Athena_Commando_M_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_007_Athena_Commando_M_Default.CID_007_Athena_Commando_M_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_006_Athena_Commando_M_Default.CID_006_Athena_Commando_M_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_005_Athena_Commando_M_Default.CID_005_Athena_Commando_M_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_004_Athena_Commando_F_Default.CID_004_Athena_Commando_F_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_003_Athena_Commando_F_Default.CID_003_Athena_Commando_F_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_002_Athena_Commando_F_Default.CID_002_Athena_Commando_F_Default
+[Reclutar] /Game/Athena/Items/Cosmetics/Characters/CID_001_Athena_Commando_F_Default.CID_001_Athena_Commando_F_Default

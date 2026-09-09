@@ -1,0 +1,24 @@
+Fortnite Version 3.500000
+
+[Oro macizo v2 (escuadrones)] /Game/Athena/Playlists/SolidGold/Playlist_SolidGold_Squads.Playlist_SolidGold_Squads
+[Oro macizo v2 (solo)] /Game/Athena/Playlists/SolidGold/Playlist_SolidGold_Solo.Playlist_SolidGold_Solo
+[Tiroteo del tirador v2 (en solitario)] /Game/Athena/Playlists/Snipers/Playlist_Snipers_Solo.Playlist_Snipers_Solo
+[Tiroteo del tirador v2 (dúos)] /Game/Athena/Playlists/Snipers/Playlist_Snipers_Duos.Playlist_Snipers_Duos
+[Tiroteo del tirador v2 (escuadrones)] /Game/Athena/Playlists/Snipers/Playlist_Snipers.Playlist_Snipers
+[Suministro en el cielo (escuadrones)] /Game/Athena/Playlists/SkySupply/Playlist_SkySupply_Squads.Playlist_SkySupply_Squads
+[Suministro en el cielo (dúos)] /Game/Athena/Playlists/SkySupply/Playlist_SkySupply_Duos.Playlist_SkySupply_Duos
+[Suministro en el cielo (en solitario)] /Game/Athena/Playlists/SkySupply/Playlist_SkySupply.Playlist_SkySupply
+[Escuadrones] /Game/Athena/Playlists/Playlist_DefaultSquad.Playlist_DefaultSquad
+[En solitario] /Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo
+[Dúos] /Game/Athena/Playlists/Playlist_DefaultDuo.Playlist_DefaultDuo
+[Patio de juegos] /Game/Athena/Playlists/Playground/Playlist_Playground.Playlist_Playground
+[Impacto (escuadrones)] /Game/Athena/Playlists/Impact/Playlist_Impact_Squads.Playlist_Impact_Squads
+[Impacto (en solitario)] /Game/Athena/Playlists/Impact/Playlist_Impact_Solo.Playlist_Impact_Solo
+[Impacto (dúos)] /Game/Athena/Playlists/Impact/Playlist_Impact_Duos.Playlist_Impact_Duos
+[Explosivos mejores v2 (escuadrones)] /Game/Athena/Playlists/HighExplosives/Playlist_HighExplosives_Squads.Playlist_HighExplosives_Squads
+[Explosivos mejores v2 (en solitario)] /Game/Athena/Playlists/HighExplosives/Playlist_HighExplosives_Solo.Playlist_HighExplosives_Solo
+[¡Asalto relámpago! (Escuadrones)] /Game/Athena/Playlists/Blitz/Playlist_Blitz_Squads.Playlist_Blitz_Squads
+[¡Asalto relámpago! (En solitario)] /Game/Athena/Playlists/Blitz/Playlist_Blitz_Solo.Playlist_Blitz_Solo
+[¡Asalto relámpago! (Dúos)] /Game/Athena/Playlists/Blitz/Playlist_Blitz_Duos.Playlist_Blitz_Duos
+[Equipos de 20] /Game/Athena/Playlists/5x20/Playlist_5x20.Playlist_5x20
+[50 CONTRA 50 v2] /Game/Athena/Playlists/50v50/Playlist_50v50.Playlist_50v50

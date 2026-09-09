@@ -301,12 +301,63 @@ namespace CustomBotMovement
 	}
 
 	// Rota el pawn (y su control) hacia la direccion de movimiento.
+	// Rota la CAMARA nativamente, NUNCA con TeleportTo: TeleportTo marca
+	// bJustTeleported en el CharacterMovement (parte la fisica simulada del frame)
+	// y en el cliente cada replicacion se ve como un snap (saltos/botecitos).
+	// La rotacion nativa es la que leen las weapon abilities (GetBaseAimRotation)
+	// y la que replica el CMC en cada move.
+	// Funciones verificadas en Dump/ObjectsDump.txt:
+	//   /Script/Engine.Controller.SetControlRotation
+	//   /Script/Engine.SceneComponent.K2_SetWorldRotation
 	static void SetRotation(CustomBot& Bot, const FRotator& Rotation)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
 
-		Bot.Pawn->TeleportTo(Bot.Pawn->GetActorLocation(), Rotation);
+		// 1. Camara del controlador (SetControlRotation) -> direccion de disparo.
+		if (Bot.Controller)
+		{
+			static auto SetControlRotationFn = FindObject<UFunction>(L"/Script/Engine.Controller.SetControlRotation");
+
+			if (SetControlRotationFn)
+			{
+				static auto NewRotationOffset = FindOffsetStruct("/Script/Engine.Controller.SetControlRotation", "NewRotation");
+
+				auto Params = Alloc(SetControlRotationFn->GetPropertiesSize());
+
+				*(FRotator*)(__int64(Params) + NewRotationOffset) = Rotation;
+
+				Bot.Controller->ProcessEvent(SetControlRotationFn, Params);
+
+				VirtualFree(Params, 0, MEM_RELEASE);
+			}
+		}
+
+		// 2. Pawn (RootComponent = capsule) con rotacion nativa no-teleport.
+		static auto RootComponentOffset = Bot.Pawn->GetOffset("RootComponent");
+		auto Root = (UObject*)Bot.Pawn->Get(RootComponentOffset);
+
+		if (!Root)
+			return;
+
+		static auto K2_SetWorldRotationFn = FindObject<UFunction>(L"/Script/Engine.SceneComponent.K2_SetWorldRotation");
+
+		if (K2_SetWorldRotationFn)
+		{
+			static auto NewRotationOffset = FindOffsetStruct("/Script/Engine.SceneComponent.K2_SetWorldRotation", "NewRotation");
+			static auto bSweepOffset = FindOffsetStruct("/Script/Engine.SceneComponent.K2_SetWorldRotation", "bSweep");
+			static auto bTeleportOffset = FindOffsetStruct("/Script/Engine.SceneComponent.K2_SetWorldRotation", "bTeleport");
+
+			auto Params = Alloc(K2_SetWorldRotationFn->GetPropertiesSize());
+
+			*(FRotator*)(__int64(Params) + NewRotationOffset) = Rotation;
+			*(bool*)(__int64(Params) + bSweepOffset) = false;
+			*(bool*)(__int64(Params) + bTeleportOffset) = false; // NO teleport: la fisica sigue intacta
+
+			Root->ProcessEvent(K2_SetWorldRotationFn, Params);
+
+			VirtualFree(Params, 0, MEM_RELEASE);
+		}
 	}
 
 	// Rota el pawn al yaw dado (mantiene pitch/roll actuales).
@@ -426,11 +477,18 @@ namespace CustomBotMovement
 			return;
 		}
 
-		// Informacion para la futura IA: si el camino directo esta bloqueado
-		// (estructuras, montanas...), se marca BlockedPath sin detener el avance.
-		Bot.MoveState = CustomBotPerception::HasLineOfSight(Bot, Destination)
-			? CBT::EMovementState::Moving
-			: CBT::EMovementState::BlockedPath;
+		// La LOS se refresca como mucho cada ~0.25s: LineTraceSingle por tick con
+		// varios bots pesa (los barridos de clase ya estan cacheados en
+		// CustomBotPerception). Mientras tanto se usa el ultimo estado.
+		if (Bot.MoveLOSTime < 0.0f || CustomBotPerception::BotTime() - Bot.MoveLOSTime >= 0.25f)
+		{
+			Bot.MoveLOSTime = CustomBotPerception::BotTime();
+			Bot.bMoveLOSBlocked = !CustomBotPerception::HasLineOfSight(Bot, Destination);
+		}
+
+		Bot.MoveState = Bot.bMoveLOSBlocked
+			? CBT::EMovementState::BlockedPath
+			: CBT::EMovementState::Moving;
 
 		ApplyMoveVelocity(Bot, Destination, Bot.MoveRequest.MoveSpeed, true);
 	}

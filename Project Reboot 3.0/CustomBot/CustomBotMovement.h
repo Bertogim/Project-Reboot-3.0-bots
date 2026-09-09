@@ -451,7 +451,9 @@ namespace CustomBotMovement
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
 
-		if (Bot.MoveRequest.Destination != Destination)
+		if (Bot.MoveRequest.Destination.X != Destination.X
+			|| Bot.MoveRequest.Destination.Y != Destination.Y
+			|| Bot.MoveRequest.Destination.Z != Destination.Z)
 		{
 			ClearPath(Bot);
 			Bot.PathQueryTime = -1.0f;

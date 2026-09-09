@@ -4,7 +4,11 @@
 
 #include "CustomBotPerception.h"
 
+#include "CustomBotPathfinding.h"
+#include "CustomBotDoors.h"
+
 #include <chrono>
+#include <utility>
 
 // CustomBot - Movimiento.
 //
@@ -28,6 +32,10 @@ namespace CustomBotMovement
 	// Rota el pawn (y su control) hacia una rotacion concreta. (definida debajo;
 	// LookAt la usa antes de su definicion).
 	static void SetRotation(CustomBot& Bot, const FRotator& Rotation);
+
+	// Limpia la ruta navmesh cacheada del bot (definida abajo; MoveTo la usa
+	// antes de su definicion).
+	static void ClearPath(CustomBot& Bot);
 
 	// Devuelve la direccion normalizada desde From hacia To.
 	// Si From==To devuelve zero. La normalizacion se hace a mano porque FVector
@@ -435,10 +443,19 @@ namespace CustomBotMovement
 	// Almacena la peticion de movimiento en el bot: mientras este activa,
 	// UpdateMovement() la re-aplica cada tick (llamado desde TickAll).
 	// Si llegamos a AcceptanceRadius, la peticion marca el estado Arrived.
+	// TODO-PATH: si cambia el destino se invalida la ruta navmesh (la polilinea
+	// cacheada solo vale para el destino para el que se consulto) y se fuerza
+	// una re-consulta (PathQueryTime=-1) al moverte a un punto nuevo.
 	static void MoveTo(CustomBot& Bot, const FVector& Destination, float AcceptanceRadius = 100.0f, bool bSprint = false, bool bRotateTowardsMove = true)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
+
+		if (Bot.MoveRequest.Destination != Destination)
+		{
+			ClearPath(Bot);
+			Bot.PathQueryTime = -1.0f;
+		}
 
 		Bot.MoveRequest.Destination = Destination;
 		Bot.MoveRequest.AcceptanceRadius = AcceptanceRadius;
@@ -450,11 +467,58 @@ namespace CustomBotMovement
 		ApplyMoveVelocity(Bot, Destination, bSprint ? SprintSpeed : WalkSpeed, bRotateTowardsMove);
 	}
 
+	// Limpia la ruta navmesh cacheada del bot (cambio de destino / agotada).
+	// NOTA: NO resetea PathQueryTime; asi la re-consulta respeta el cooldown y
+	// no se pide el navmesh cada frame cuando la polilinea se agota (la recta
+	// final hacia el destino no necesita re-consulta).
+	static void ClearPath(CustomBot& Bot)
+	{
+		Bot.PathWaypoints.clear();
+		Bot.PathIndex = 0;
+		Bot.bPathFollowBlocked = false;
+	}
+
+	// (Re)consulta la ruta hacia FinalDest con throttle (PathQueryCooldown).
+	// Primero navmesh (QueryPath) y si no hay, ruta puerta-a-puerta
+	// (RouteThroughDoors, "loot -> puertas -> ... -> bot"). La polilinea se
+	// guarda en Bot.PathWaypoints para que UpdateMovement la recorra.
+	static void RefreshPath(CustomBot& Bot, const FVector& FinalDest)
+	{
+		float Now = CustomBotPerception::BotTime();
+
+		if (Bot.PathQueryTime > 0.0f && Now - Bot.PathQueryTime < CustomBot::PathQueryCooldown)
+			return;
+
+		Bot.PathQueryTime = Now;
+		Bot.PathIndex = 0;
+		Bot.PathWaypoints.clear();
+		Bot.bPathFollowBlocked = false;
+
+		std::vector<FVector> Points;
+
+		if (CustomBotPathfinding::QueryPath(Bot.Pawn->GetActorLocation(), FinalDest, Points))
+		{
+			Bot.PathWaypoints = std::move(Points);
+			return;
+		}
+
+		// TODO-PATH (ruta puertas): fallback cuando el navmesh no encuentra
+		// camino (interiores de edificios / POIs). Encadena puertas desde el
+		// destino hacia el bot para abrirse camino dentro de una casa.
+		if (CustomBotPathfinding::RouteThroughDoors(Bot, FinalDest, Points))
+			Bot.PathWaypoints = std::move(Points);
+	}
+
 	// Tick de movimiento: consume la peticion activa cada frame del servidor.
 	//   1. si llegamos al radio de aceptacion -> Arrived (y velocidad a cero)
-	//   2. si la LOS hacia el destino esta bloqueada -> BlockedPath (informativo;
-	//      la velocidad sigue aplicandose para no detener el avance)
-	//   3. si no -> Moving y re-aplica la velocidad hacia el destino
+	//   2. si hay una puerta cerrada delante bloqueando -> abrirla nativamente
+	//   3. si el pathfinding esta ON y hay ruta navmesh -> seguir la polilinea
+	//      (con re-consulta ciclica vía RefreshPath)
+	//   4. si no -> linea recta (fallback): LOS bloqueada marca BlockedPath
+	//      (la velocidad sigue aplicandose; el desatascado lo hace CustomBotBreak)
+	// TODO-PATH: el bloqueo de la LOS y la ruta conviven: aunque sigas un
+	// waypoint, si la LOS esta bloqueada se marca BlockedPath y el
+	// CustomBotBreak (fallback) entra a abrir puertas / romper obstaculos.
 	static void UpdateMovement(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -464,8 +528,9 @@ namespace CustomBotMovement
 			return;
 
 		const FVector& Destination = Bot.MoveRequest.Destination;
+		FVector BotLoc = Bot.Pawn->GetActorLocation();
 
-		if (HorizontalDistance(Bot.Pawn->GetActorLocation(), Destination) <= Bot.MoveRequest.AcceptanceRadius)
+		if (HorizontalDistance(BotLoc, Destination) <= Bot.MoveRequest.AcceptanceRadius)
 		{
 			if (auto CharacterMovement = GetCharacterMovement(Bot))
 			{
@@ -473,6 +538,7 @@ namespace CustomBotMovement
 				CharacterMovement->Get<FVector>(VelocityOffset) = FVector{};
 			}
 
+			ClearPath(Bot);
 			Bot.MoveState = CBT::EMovementState::Arrived;
 			return;
 		}
@@ -484,6 +550,49 @@ namespace CustomBotMovement
 		{
 			Bot.MoveLOSTime = CustomBotPerception::BotTime();
 			Bot.bMoveLOSBlocked = !CustomBotPerception::HasLineOfSight(Bot, Destination);
+		}
+
+		// TODO-PATH (puertas): si el camino directo esta bloqueado y hay una
+		// puerta cerrada enfrente, abrirla nativamente y seguir avanzando.
+		if (Bot.bMoveLOSBlocked)
+			CustomBotDoors::TryOpenDoorInFront(Bot);
+
+		// TODO-PATH (navmesh): sigue la polilinea de waypoints si existe. La
+		// ruta se consulta (o re-consulta) con throttle en RefreshPath. Con el
+		// checkbox de la UI en off (bCustomBotPathfinding=false) se salta todo
+		// este bloque y se va en linea recta (lo barato para PC malos).
+		if (bCustomBotPathfinding)
+		{
+			if (Bot.PathWaypoints.empty())
+				RefreshPath(Bot, Destination);
+
+			if (!Bot.PathWaypoints.empty() && Bot.PathIndex < (int)Bot.PathWaypoints.size())
+			{
+				const FVector& Waypoint = Bot.PathWaypoints[Bot.PathIndex];
+
+				if (HorizontalDistance(BotLoc, Waypoint) <= CustomBot::PathWaypointAcceptance)
+				{
+					// Waypoint alcanzado: avanzar al siguiente (o acabar).
+					++Bot.PathIndex;
+
+					if (Bot.PathIndex >= (int)Bot.PathWaypoints.size())
+					{
+						ClearPath(Bot); // fuera de la polilinea -> recta final
+					}
+				}
+
+				if (!Bot.PathWaypoints.empty() && Bot.PathIndex < (int)Bot.PathWaypoints.size())
+				{
+					const FVector& Target = Bot.PathWaypoints[Bot.PathIndex];
+
+					Bot.MoveState = Bot.bMoveLOSBlocked
+						? CBT::EMovementState::BlockedPath
+						: CBT::EMovementState::Moving;
+
+					ApplyMoveVelocity(Bot, Target, Bot.MoveRequest.MoveSpeed, true);
+					return;
+				}
+			}
 		}
 
 		Bot.MoveState = Bot.bMoveLOSBlocked

@@ -40,6 +40,10 @@
 #include "FortGadgetItemDefinition.h"
 #include "FortWeaponItemDefinition.h"
 #include "events.h"
+
+// TODO-PATH: los bots custom leen el toggle bCustomBotPathfinding (definido en
+// CustomBotTypes.h) para decidir si consultar el navmesh o ir en linea recta.
+#include "CustomBot/CustomBotTypes.h"
 #include "FortAthenaMutator_Heist.h"
 #include "BGA.h"
 #include "vendingmachine.h"
@@ -334,6 +338,11 @@ static inline void StaticUI()
 	ImGui::InputInt("Shield/Health for siphon", &AmountOfHealthSiphon);
 
 	ImGui::Checkbox("Enable Developer Mode", &Globals::bDeveloperMode);
+
+	// TODO-PATH: activar/desactivar el pathfinding (navmesh) de los bots custom.
+	// Off = linea recta + desatascado fisico (por PC malos). On = ruta navmesh
+	// con fallbacks (puertas / romper con pico).
+	ImGui::Checkbox("Pathfinding de bots (navmesh)", &bCustomBotPathfinding);
 
 	if (Globals::bDeveloperMode)
 	{

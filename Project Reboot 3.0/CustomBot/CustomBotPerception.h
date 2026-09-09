@@ -93,6 +93,66 @@ namespace CustomBotPerception
 		return Bot.Pawn->GetDistanceTo(Actor);
 	}
 
+	// Puntuacion heuristica de VALOR de un pickup suelto (para elegir el que
+	// "mas le renta" coger, no solo el mas cercano): nivel (tier) del item +
+	// bonus por categoria de arma (sniper/launcher > pistola) y por consumible
+	// (pocion de escudo > medkit > vendas). Mismo estilo que el ItemLootScore
+	// de la IA (CustomBotAI_Midgame). TODO-PATH: si en el futuro el bot llena
+	// la quickbar por calidad + distancia, migrar aqui una puntuacion comun.
+	static int LootValueScore(AFortPickup* Pickup)
+	{
+		if (!Pickup)
+			return 0;
+
+		auto Entry = Pickup->GetPrimaryPickupItemEntry();
+
+		if (!Entry)
+			return 0;
+
+		auto Def = Entry->GetItemDefinition();
+
+		if (!Def)
+			return 0;
+
+		int Score = (Entry->GetLevel() > 0 ? Entry->GetLevel() : 1) * 100;
+
+		std::string Path = Def->GetPathName();
+
+		static const char* CatDirs[] = { "/Sniper/", "/Launchers/", "/Shotgun/", "/Rifle/", "/SMG/", "/Pistol/" };
+		static const int CatBonus[] = { 600, 550, 500, 400, 300, 150 };
+
+		for (int i = 0; i < 6; ++i)
+		{
+			if (Path.find(CatDirs[i]) != std::string::npos)
+			{
+				Score += CatBonus[i];
+				break;
+			}
+		}
+
+		if (Path.find("ShieldPotion") != std::string::npos || Path.find("Shield") != std::string::npos)
+			Score += 450;
+		else if (Path.find("Medkit") != std::string::npos || Path.find("MedKit") != std::string::npos)
+			Score += 350;
+		else if (Path.find("Bandage") != std::string::npos)
+			Score += 200;
+
+		return Score;
+	}
+
+	// Compara dos pickups candidatos: primero por valor (LootValueScore), con
+	// empate gana el mas cercano.
+	static bool IsBetterPickup(CustomBot& Bot, AFortPickup* Cand, AFortPickup* Cur)
+	{
+		int CandScore = LootValueScore(Cand);
+		int CurScore = Cur ? LootValueScore(Cur) : 0;
+
+		if (CandScore != CurScore)
+			return CandScore > CurScore;
+
+		return !Cur || DistanceToActor(Bot, Cand) < DistanceToActor(Bot, Cur);
+	}
+
 	// Barrido: obtiene una clase de actor dentro del radio alrededor del bot.
 	// Devuelve la TArray de actores de esa clase (sin filtrar por distancia).
 	static TArray<AActor*> GetAllActorsOfClassWithin(CustomBot& Bot, UClass* ActorClass, float Radius)
@@ -213,10 +273,13 @@ namespace CustomBotPerception
 
 			EItemType Type = GetPickupItemType(Pickup);
 
-			if (Type == EItemType::Weapon && D <= Radius && (!Bot.CachedNearestWeapon || D < DistanceToActor(Bot, Bot.CachedNearestWeapon)))
+			// TODO-PATH (elegir el loot que "mas vale"): ya no se guarda solo el
+			// mas cercano sino el de mejor LootValueScore (tier + categoria), con
+			// la distancia como desempate.
+			if (Type == EItemType::Weapon && D <= Radius && IsBetterPickup(Bot, Pickup, Bot.CachedNearestWeapon))
 				Bot.CachedNearestWeapon = Pickup;
 
-			if (Type == EItemType::Consumable && D <= Radius && (!Bot.CachedNearestConsumable || D < DistanceToActor(Bot, Bot.CachedNearestConsumable)))
+			if (Type == EItemType::Consumable && D <= Radius && IsBetterPickup(Bot, Pickup, Bot.CachedNearestConsumable))
 				Bot.CachedNearestConsumable = Pickup;
 		}
 

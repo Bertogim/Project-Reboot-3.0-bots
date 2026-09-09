@@ -2,6 +2,15 @@
 
 #include "reboot.h"
 
+// TODO-PATH: toggle global de pathfinding (navmesh) para los bots custom.
+// Lo gestiona el checkbox "Pathfinding de bots (navmesh)" en gui.h (StaticUI).
+// true  = los bots consultan el navmesh del mundo y siguen la ruta de
+//         waypoints (cuando el mapa lo tiene); si no hay ruta, caen al
+//         fallback lineal. false = siempre linea recta + desatascado fisico
+//         (retroceder/saltar/romper). Por defecto ON para bots inteligentes;
+//         matarlo en la UI solo si se corre en un PC malo.
+inline bool bCustomBotPathfinding = true;
+
 // CustomBotTypes - Tipos compartidos entre los modulos del sistema de bot "Season 3".
 // Parte 1: SOLO cuerpo/capacidades (sin decisiones de IA). Estos tipos estan
 // diseñados para que los modulos de movimiento/percepcion/inventario/combate/etc.

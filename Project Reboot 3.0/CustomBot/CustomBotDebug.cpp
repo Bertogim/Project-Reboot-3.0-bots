@@ -11,6 +11,7 @@
 #include "CustomBotBuilding.h"
 #include "CustomBotDestruction.h"
 #include "CustomBotInteraction.h"
+#include "CustomBotBreak.h"
 
 #include "FortItem.h"
 #include "BuildingSMActor.h"
@@ -1716,6 +1717,12 @@ static void BotTickCallbackImpl(void* data)
 	CustomBotMovement::EnsureCMCActive(*Bot);
 	Bot->Tick();
 	CustomBotMovement::UpdateMovement(*Bot);
+
+	// TODO-PATH (fallback sin ruta): desatascado fisico (retroceder 2m +
+	// carrerilla 1m + salto + romper con pico) cuando el bot lleva >umbral
+	// bloqueado en linea recta. Nota: corre DESPUES de UpdateMovement, por lo
+	// que solo re-apunta el move si la secuencia lo necesita.
+	CustomBotBreak::TickUnstuck(*Bot);
 
 	// Skin diferida: aplicar como maximo PendingSkinBudget skins por TickAll
 	// (se reinicia en CustomBotSpawner::TickAll). Todo esto corre bajo SEH.

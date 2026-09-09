@@ -8,6 +8,8 @@
 #include "FortInventory.h"
 #include "AbilitySystemComponent.h"
 
+#include <vector>
+
 // CustomBot - Entidad orquestadora del bot "Season 3".
 //
 // El bot es un JUGADOR REAL: AFortPlayerControllerAthena + AFortPlayerPawnAthena,
@@ -107,6 +109,30 @@ public:
 	// el estado BlockedPath se refresca como mucho cada ~0.25s por bot.
 	float MoveLOSTime = -1.0f;
 	bool bMoveLOSBlocked = false;
+
+	// --- Pathfinding (navmesh) ----------------------------------------------
+	// Ruta calculada por CustomBotPathfinding::QueryPath para el destino del
+	// MoveTo activo. UpdateMovement recorre los waypoints en vez de ir en linea
+	// recta. Se invalida al cambiar de destino (MoveTo) o al agotarse la
+	// polilinea. TODO-PATH: el cooldown de re-consulta evita FindPath* por frame.
+	std::vector<FVector> PathWaypoints;
+	int PathIndex = 0;
+	float PathQueryTime = -1.0f;
+	bool bPathFollowBlocked = false; // LOS hacia el waypoint actual bloqueada
+	static constexpr float PathQueryCooldown = 2.0f;      // re-consulta navmesh (s)
+	static constexpr float PathWaypointAcceptance = 220.0f; // radio de llegada por waypoint
+
+	// --- Desatascado fisico (fallback sin pathfinding) ---------------------
+	// Maquina de estados del fallback "retrocede 2m + carrerilla 1m + salto +
+	// romper con pico" cuando el bot se queda bloqueado en linea recta. La
+	// maneja CustomBotBreak::TickUnstuck (tick del servidor, tras UpdateMovement).
+	int UnstickStage = 0;       // 0 inactivo | 1 retroceder | 2 carrerilla | 3 saltar | 4 romper
+	float UnstickTime = -1.0f;  // BotTime del ultimo cambio de etapa
+	float BlockedSince = -1.0f; // BotTime en que se detecto el bloqueo persistente
+	FVector UnstickGoal{};      // destino original del move (se restaura al terminar)
+	FVector UnstickRefLoc{};    // posicion de referencia de la etapa
+	int UnstickSwings = 0;      // golpes de pico dados en la etapa "romper"
+	int UnstickFails = 0;       // ciclos de desatascado fallidos consecutivos (tope)
 
 	bool HasMoveRequest() const
 	{

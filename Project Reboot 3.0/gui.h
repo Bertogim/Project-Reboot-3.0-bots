@@ -47,6 +47,7 @@
 #include "calendar.h"
 #include "KismetRenderingLibrary.h"
 #include "CustomBot/CustomBotDebug.h"
+#include "CustomAI/CustomBotManager.h"
 
 #define GAME_TAB 1
 #define PLAYERS_TAB 2
@@ -63,6 +64,7 @@
 #define DEBUGLOG_TAB 13
 #define SETTINGS_TAB 14
 #define CREDITS_TAB 15
+#define BOTS_TAB 16
 
 #define MAIN_PLAYERTAB 1
 #define INVENTORY_PLAYERTAB 2
@@ -429,6 +431,14 @@ static inline void MainTabs()
 		if (ImGui::BeginTabItem("Fun"))
 		{
 			Tab = FUN_TAB;
+			PlayerTab = -1;
+			bInformationTab = false;
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Bots"))
+		{
+			Tab = BOTS_TAB;
 			PlayerTab = -1;
 			bInformationTab = false;
 			ImGui::EndTabItem();
@@ -1292,6 +1302,65 @@ static inline void MainUI()
 					}
 				}
 			}
+		}
+		else if (Tab == BOTS_TAB)
+		{
+			ImGui::Text("Custom Bot Manager (Parte 2)");
+
+			ImGui::InputInt("Number of Bots", &CustomBotManager::DesiredBotCount);
+
+			if (CustomBotManager::DesiredBotCount < 0)
+				CustomBotManager::DesiredBotCount = 0;
+
+			if (CustomBotManager::DesiredBotCount > 100)
+				CustomBotManager::DesiredBotCount = 100;
+
+			ImGui::Text("Difficulty");
+			int DifficultyRadio = (int)CustomBotManager::Difficulty;
+			ImGui::RadioButton("Easy", &DifficultyRadio, (int)EBotDifficulty::Easy);
+			ImGui::SameLine();
+			ImGui::RadioButton("Normal", &DifficultyRadio, (int)EBotDifficulty::Normal);
+			ImGui::SameLine();
+			ImGui::RadioButton("Hard", &DifficultyRadio, (int)EBotDifficulty::Hard);
+			CustomBotManager::Difficulty = (EBotDifficulty)DifficultyRadio;
+
+			if (ImGui::Button("Spawn Bots"))
+			{
+				CustomBotManager::SpawnBots(CustomBotManager::DesiredBotCount);
+			}
+
+			if (ImGui::Button("Remove All Bots"))
+			{
+				CustomBotManager::RemoveAllBots();
+			}
+
+			ImGui::Separator();
+
+			ImGui::Text("Stats");
+			ImGui::Text("Total bots: %d", CustomBotManager::GetTotalCount());
+			ImGui::Text("Alive bots: %d", CustomBotManager::GetAliveCount());
+			ImGui::Text("Dead bots: %d", CustomBotManager::GetDeadCount());
+
+			ImGui::Separator();
+
+			auto Counts = CustomBotManager::GetStateCounts();
+
+			ImGui::Text("State breakdown:");
+			ImGui::Text("In Bus: %d", Counts.InBus);
+			ImGui::Text("Choosing Landing: %d", Counts.ChoosingLanding);
+			ImGui::Text("Jumping: %d", Counts.Jumping);
+			ImGui::Text("Gliding: %d", Counts.Gliding);
+			ImGui::Text("Landing: %d", Counts.Landing);
+			ImGui::Text("Looting: %d", Counts.Looting);
+			ImGui::Text("Farming: %d", Counts.Farming);
+			ImGui::Text("Exploring: %d", Counts.Exploring);
+			ImGui::Text("Searching Enemy: %d", Counts.SearchingEnemy);
+			ImGui::Text("Fighting: %d", Counts.Fighting);
+			ImGui::Text("Defending: %d", Counts.Defending);
+			ImGui::Text("Healing: %d", Counts.Healing);
+			ImGui::Text("Rotating: %d", Counts.Rotating);
+			ImGui::Text("End Game: %d", Counts.EndGame);
+			ImGui::Text("Dead: %d", Counts.Dead);
 		}
 		else if (Tab == LATEGAME_TAB)
 		{

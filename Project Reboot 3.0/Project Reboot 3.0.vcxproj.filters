@@ -429,6 +429,21 @@
     <ClInclude Include="CustomBot\CustomBotTypes.h">
       <Filter>CustomBot</Filter>
     </ClInclude>
+    <ClInclude Include="CustomAI\CustomBotAI.h">
+      <Filter>CustomAI</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomAI\CustomBotAI_Bus.h">
+      <Filter>CustomAI</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomAI\CustomBotAI_Midgame.h">
+      <Filter>CustomAI</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomAI\CustomBotAI_SafeZone.h">
+      <Filter>CustomAI</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomAI\CustomBotManager.h">
+      <Filter>CustomAI</Filter>
+    </ClInclude>
     <ClInclude Include="Pawn.h">
       <Filter>Engine\Source\Runtime\Engine\Classes\GameFramework</Filter>
     </ClInclude>
@@ -1264,6 +1279,9 @@
     </Filter>
     <Filter Include="CustomBot">
       <UniqueIdentifier>{e4b9c9a1-31d0-4a2f-9c8b-1f6a37d5e214}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CustomAI">
+      <UniqueIdentifier>{a3f8d2c4-17b5-4f0e-9d12-7c3b26e8f901}</UniqueIdentifier>
     </Filter>
     <Filter Include="FortniteGame\Source\FortniteGame\Public\Athena\Modifiers">
       <UniqueIdentifier>{39656a6c-bfe1-4521-8652-aea0146564d6}</UniqueIdentifier>

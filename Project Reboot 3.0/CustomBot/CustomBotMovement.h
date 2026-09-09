@@ -86,13 +86,17 @@ namespace CustomBotMovement
 	// "sin controller" integra Velocity/Acceleration cada frame). Sin esto el pawn
 	// poseido por un PlayerController sin cliente conectado NUNCA se simula.
 	// Debe aplicarse en el spawn de TODO bot (CustomBotSpawner::SpawnCustomBot).
+	// Si Bot.bKeepPossessed esta activo (Parte 2: el bot aun va en el bus) NO se
+	// suelta la posesion: el bot necesita el controller poseido para saltar del avion.
 	static bool EnableServerSimulation(CustomBot& Bot)
 	{
 		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
 			return false;
 
 		Bot.PlayerState->SetIsBot(false);
-		Bot.Controller->UnPossess();
+
+		if (!Bot.bKeepPossessed)
+			Bot.Controller->UnPossess();
 
 		bool bBitOK = false;
 

@@ -18,6 +18,11 @@
 // Los modulos (Movement/Perception/Inventory/Combat/Building/Destruction/
 // Resources/Interaction/Spawner) operan sobre una instancia de CustomBot.
 
+// Forward: contexto de IA de Parte 2 (definido en CustomAI/CustomBotAI.h).
+// Se mantiene como puntero para no acoplar fuertemente los modulos del cuerpo con
+// el motor de decisiones; CustomBotSpawner lo crea en el spawn y lo destruye.
+struct BotAIContext;
+
 class CustomBot
 {
 public:
@@ -34,6 +39,21 @@ public:
 	CBT::FMoveRequest MoveRequest;
 	CBT::EMovementState MoveState = CBT::EMovementState::Idle;
 	bool bMoveRequestActive = false;
+
+	// --- Contexto de IA (Parte 2) --------------------------------------------
+	// Motor de decisiones autonomas (estado, personalidad, objetivo actual, etc).
+	// Es un puntero opaco (forward declaration) para que los modulos de capacidad
+	// (Movement/Perception/...) no dependan del motor de IA. Lo gestiona el
+	// CustomBotSpawner en el spawn/destruccion del bot.
+	BotAIContext* AI = nullptr;
+
+	// --- Posesion (Parte 2) ---------------------------------------------------
+	// Cuando es true, el bot se mantiene POSEIDO durante la fase de bus para
+	// poder saltar del avion. Cuando es false, CustomBotMovement::EnableServerSimulation
+	// aplica el RUNPHYS: UnPossess + bRunPhysicsWithNoController (el servidor simula
+	// el CMC "sin controller"). El bot en el bus desactiva este bool justo despues
+	// de saltar para que la caida/planeo los gestione la simulacion real.
+	bool bKeepPossessed = false;
 
 	bool HasMoveRequest() const
 	{
@@ -146,5 +166,14 @@ public:
 		PlayerState = nullptr;
 		WorldInventory = nullptr;
 		bInitialized = false;
+
+		// La IA se libera aqui porque el bot deja de existir. Sera un
+		// memory-leak si se crea y no se destruye; SpawnCustomBot lo crea y
+		// solo se invoca Destroy() cuando el bot se elimina (TickAll).
+		if (AI)
+		{
+			delete AI;
+			AI = nullptr;
+		}
 	}
 };

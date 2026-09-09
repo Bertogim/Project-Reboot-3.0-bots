@@ -6,6 +6,8 @@
 
 #include "GameplayStatics.h"
 
+#include "../CustomAI/CustomBotAI.h"
+
 // CustomBot - Spawner.
 //
 // Crea instancias reales de jugador para el bot (AFortPlayerControllerAthena +
@@ -69,6 +71,9 @@ namespace CustomBotSpawner
 				LOG_INFO(LogBots, "[CustomBot] [tickall] INVALID bot idx={} controller={} pawn={}, removing",
 					i, bool(Bot.Controller), bool(Bot.Pawn));
 
+				// Libera el pawn/controller y el contexto de IA (Parte 2). El bot
+				// se borra del vector al final del loop (indices en ToRemove).
+				Bot.Destroy();
 				ToRemove.push_back(i);
 				continue;
 			}
@@ -79,6 +84,11 @@ namespace CustomBotSpawner
 
 			Bot.Tick();                              // Parte 2 + secuencia debugbot
 			CustomBotMovement::UpdateMovement(Bot);  // pipeline de movimiento real
+
+			// IA autonoma (Parte 2): decide y actua segun la maquina de estados.
+			// El contexto (Bot.AI) lo crea CustomBotManager::InitializeAI al spawnear.
+			if (Bot.AI)
+				CustomBotAI::Tick(Bot, *Bot.AI);
 		}
 
 		for (size_t i = ToRemove.size(); i-- > 0;)

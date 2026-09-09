@@ -334,6 +334,11 @@
     <ClInclude Include="CustomBot\CustomBotResources.h" />
     <ClInclude Include="CustomBot\CustomBotSpawner.h" />
     <ClInclude Include="CustomBot\CustomBotTypes.h" />
+    <ClInclude Include="CustomAI\CustomBotAI.h" />
+    <ClInclude Include="CustomAI\CustomBotAI_Bus.h" />
+    <ClInclude Include="CustomAI\CustomBotAI_Midgame.h" />
+    <ClInclude Include="CustomAI\CustomBotAI_SafeZone.h" />
+    <ClInclude Include="CustomAI\CustomBotManager.h" />
     <ClInclude Include="builder.h" />
     <ClInclude Include="CurveTable.h" />
     <ClInclude Include="DataTable.h" />

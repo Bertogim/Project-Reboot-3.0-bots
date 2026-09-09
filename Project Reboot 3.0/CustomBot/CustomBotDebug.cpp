@@ -970,7 +970,7 @@ if (GameStateDBG)
 					break;
 				}
 				FVector RampGround = UFortKismetLibrary::FindGroundLocationAt(GetWorld(), Bot.Pawn,
-					FVector{ RampLoc.X, RampLoc.Y, 0.0f }, Pos.Z + 2000.0f, Pos.Z - 5000.0f, FName("BOT_BUILD"));
+					FVector{ RampLoc.X, RampLoc.Y, 0.0f }, Pos.Z + 2000.0f, Pos.Z - 5000.0f, FName(0));
 				RampLoc.Z = RampGround.Z;
 				LOG_INFO(LogBots, "[DebugBot] BuildRamp (cell ahead, yaw {:.1f}) at ({:.0f},{:.0f},{:.0f}) groundZ={:.0f}",
 					RampRot.Yaw, RampLoc.X, RampLoc.Y, RampLoc.Z, RampGround.Z);

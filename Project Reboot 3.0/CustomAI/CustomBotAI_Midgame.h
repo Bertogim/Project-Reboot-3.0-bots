@@ -302,7 +302,7 @@ namespace CustomBotAIMidgame
 			ProbeLoc.Z = BotLoc.Z;
 
 			FVector ProbeGround = UFortKismetLibrary::FindGroundLocationAt(GetWorld(), Bot.Pawn,
-				FVector{ ProbeLoc.X, ProbeLoc.Y, 0.0f }, BotLoc.Z + 3000.0f, BotLoc.Z - 8000.0f, FName("BOT_BUILD"));
+				FVector{ ProbeLoc.X, ProbeLoc.Y, 0.0f }, BotLoc.Z + 3000.0f, BotLoc.Z - 8000.0f, FName(0));
 
 			float Rise = ProbeGround.Z - BotLoc.Z;
 
@@ -328,7 +328,7 @@ namespace CustomBotAIMidgame
 					if (SSS && CustomBotBuilding::CellCenterAhead(SSS, BotLoc, Facing, 1, RampLoc))
 					{
 						FVector RampGround = UFortKismetLibrary::FindGroundLocationAt(GetWorld(), Bot.Pawn,
-							FVector{ RampLoc.X, RampLoc.Y, 0.0f }, BotLoc.Z + 3000.0f, BotLoc.Z - 8000.0f, FName("BOT_BUILD"));
+							FVector{ RampLoc.X, RampLoc.Y, 0.0f }, BotLoc.Z + 3000.0f, BotLoc.Z - 8000.0f, FName(0));
 						RampLoc.Z = RampGround.Z;
 
 						CustomBotBuilding::BuildRamp(Bot, RampLoc, RampRot);

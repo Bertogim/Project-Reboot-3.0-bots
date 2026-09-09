@@ -1128,9 +1128,9 @@ namespace CustomBotAIMidgame
 			Ctx.EnemyTarget = nullptr;
 
 		// Sin enemigos: lootear lo que encuentre o pasear por la isla.
-		AFortPickup* Pickup = Ctx.LootTarget;
+		AFortPickup* Pickup = static_cast<AFortPickup*>(Ctx.LootTarget);
 
-		if (Pickup && (Pickup->IsActorBeingDestroyed() || Pickup->GetRootComponent() == nullptr))
+		if (Pickup && Pickup->IsActorBeingDestroyed())
 			Pickup = Ctx.LootTarget = nullptr;
 
 		if (Pickup)

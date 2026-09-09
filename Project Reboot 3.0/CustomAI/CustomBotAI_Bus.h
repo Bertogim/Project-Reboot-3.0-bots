@@ -267,8 +267,9 @@ namespace CustomBotAIBus
 
 			if (Ctx.JumpDelay <= 0.0f)
 			{
-				// Entre 3 y 12 segundos tras empezar a volar.
-				float Delta = 3.0f + float(std::rand() % 90) / 10.0f;
+				// Saltar ~15 segundos tras arrancar a volar (con variacion ligera
+				// para que no salten todos a la vez).
+				float Delta = 15.0f + float(std::rand() % 20) / 10.0f;
 				Ctx.JumpDelay = UGameplayStatics::GetTimeSeconds(GetWorld()) + Delta;
 			}
 

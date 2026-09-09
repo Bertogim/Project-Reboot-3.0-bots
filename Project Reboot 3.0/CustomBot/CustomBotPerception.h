@@ -119,7 +119,7 @@ namespace CustomBotPerception
 				Result.Add(Actor);
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Result;
 	}
 
@@ -152,7 +152,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Nearest;
 	}
 
@@ -185,7 +185,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Nearest;
 	}
 
@@ -219,7 +219,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Nearest;
 	}
 
@@ -274,7 +274,7 @@ namespace CustomBotPerception
 
 		FHitResult* OutHit = nullptr;
 
-		return UKismetSystemLibrary::LineTraceSingle(
+		bool bHit = UKismetSystemLibrary::LineTraceSingle(
 			GetWorld(),
 			Start,
 			End,
@@ -287,6 +287,9 @@ namespace CustomBotPerception
 			FLinearColor(0, 1, 0, 1),
 			0.0f,
 			&OutHit);
+
+		ActorsToIgnore.FreeEngine();
+		return bHit;
 	}
 
 	// Devuelve true si hay un obstaculo bloqueante directo hacia TargetLocation.
@@ -449,7 +452,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 
 		if (Nearest)
 			OutType = ClassifyObstacle(Bot, Nearest);
@@ -530,7 +533,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Nearest;
 	}
 
@@ -566,7 +569,7 @@ namespace CustomBotPerception
 			}
 		}
 
-		All.Free();
+		All.FreeEngine();
 		return Nearest;
 	}
 

@@ -316,7 +316,7 @@ namespace CustomBotBuilding
 		if (!BuildingActor)
 		{
 			LOG_INFO(LogBots, "[BuildPiece] gate=spawn failed loc=({:.0f},{:.0f},{:.0f}) class={}", BuildLoc.X, BuildLoc.Y, BuildLoc.Z, ClassName);
-			ExistingBuildings.Free();
+			ExistingBuildings.FreeEngine();
 			return nullptr;
 		}
 
@@ -333,7 +333,7 @@ namespace CustomBotBuilding
 
 			if (!MatInstance || MatInstance->GetItemEntry()->GetCount() < MaterialCost)
 			{
-				ExistingBuildings.Free();
+				ExistingBuildings.FreeEngine();
 				BuildingActor->SilentDie();
 				return nullptr;
 			}
@@ -357,7 +357,7 @@ namespace CustomBotBuilding
 			ExistingBuilding->K2_DestroyActor();
 		}
 
-		ExistingBuildings.Free();
+		ExistingBuildings.FreeEngine();
 
 		BuildingActor->SetPlayerPlaced(true);
 		BuildingActor->InitializeBuildingActor(Bot.Controller, BuildingActor, true);

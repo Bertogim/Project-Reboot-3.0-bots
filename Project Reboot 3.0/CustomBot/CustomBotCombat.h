@@ -25,6 +25,29 @@ namespace CustomBotCombat
 		return Weapon != nullptr;
 	}
 
+	// Devuelve true si el arma equipada es el PICAXE (harvest tool) del bot.
+	// El pico hereda de FortWeaponItemDefinition, asi que IsWeaponEquipped()
+	// devuelve true tambien con el pico; con este check se distingue "melee"
+	// de un arma real (con municion).
+	static bool IsPickaxeEquipped(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn || !Bot.WorldInventory)
+			return false;
+
+		auto* Weapon = Bot.Pawn->GetCurrentWeapon();
+
+		if (!Weapon)
+			return false;
+
+		auto* Pickaxe = Bot.WorldInventory->GetPickaxeInstance();
+
+		if (!Pickaxe || !Pickaxe->GetItemEntry())
+			return false;
+
+		auto* WeaponDef = Weapon->GetWeaponData();
+		return WeaponDef && WeaponDef == Pickaxe->GetItemEntry()->GetItemDefinition();
+	}
+
 	// Municion actual del arma equipada.
 	static int GetCurrentAmmo(CustomBot& Bot)
 	{

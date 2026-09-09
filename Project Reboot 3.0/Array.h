@@ -398,6 +398,21 @@ public:
 		ArrayMax = 0;
 	}
 
+	// Libera el buffer usando el ASIGNADOR REAL del juego (FMemory::Realloc,
+	// el mismo que usa Reserve/Add). A diferencia de Free(), esto SI devuelve la
+	// memoria (Free() con VirtualFree + MEM_RELEASE y tamano != 0 falla siempre,
+	// asi que no libera nada). Solo debe usarse con arrays cuyo Data fue alocado
+	// con FMemory::Realloc (OutActors de GetAllActorsOfClass, Result locales).
+	void FreeEngine(SizeType Size = sizeof(InElementType))
+	{
+		if (Data)
+			FMemory::Free(Data);
+
+		Data = nullptr;
+		ArrayNum = 0;
+		ArrayMax = 0;
+	}
+
 	bool Remove(const int Index, size_t Size = sizeof(InElementType))
 	{
 		// return false;

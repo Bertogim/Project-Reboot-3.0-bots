@@ -21,7 +21,6 @@ namespace CustomBotAIMidgame
 	static void BuildBarricade(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc);
 	static void DoEndGame(CustomBot& Bot, BotAIContext& Ctx);
 	static bool TryResolveBlockedPath(FVector& MoveTarget, CustomBot& Bot, BotAIContext& Ctx);
-	static void DoWarmup(CustomBot& Bot, BotAIContext& Ctx);
 
 	// Rango cuerpo a cuerpo del pico (alcance de swing). Lo usan tanto el
 	// combate normal sin armas como los duelos de warmup.
@@ -702,10 +701,22 @@ namespace CustomBotAIMidgame
 		}
 		else
 		{
-			// SIN ARMAS: cuerpo a cuerpo con el pico. Acercarse y golpear
-			// (nada de orbitar al enemigo: se planta en rango de melee).
+			// SIN ARMAS (solo pico/melee): si el enemigo lleva un arma real
+			// (de fuego), HUIR: pelear el pico contra un arma es suicida. Si el
+			// enemigo tambien va de melee, se planta y golpea (o persigue en
+			// linea recta); nunca orbitar.
 			CustomBotCombat::StopFiring(Bot);
 			Ctx.bIsFiring = false;
+
+			if (CustomBotCombat::EnemyHasRealWeapon(Enemy))
+			{
+				FVector BotLoc = Bot.Pawn->GetActorLocation();
+				FVector Away = BotLoc + CustomBotMovement::DirectionTo(EnemyLoc, BotLoc) * 1500.0f;
+
+				CustomBotMovement::LookAt(Bot, EnemyLoc);
+				CustomBotMovement::MoveTo(Bot, Away, 100.0f, true, false);
+				return;
+			}
 
 			float Dist = Bot.Pawn->GetDistanceTo(Enemy);
 
@@ -911,15 +922,14 @@ namespace CustomBotAIMidgame
 		// Timers y escaneos a intervalos (performance).
 		TickTimers(Bot, Ctx);
 
-		// Warmup: el estado se decide por la fase de juego (no por Decide). Aunque
-		// DoWarmup delegue en DoFighting/DoLooting (que cambian Ctx.State), la
-		// fase Warmup mantiene el lobby hasta que arranque el avion.
-		if (CustomBotAI::IsWarmupPhase())
-		{
-			Ctx.State = EBotState::Warmup;
-			DoWarmup(Bot, Ctx);
-			return;
-		}
+		// Warmup (lobby): los bots se comportan EXACTAMENTE igual que en una
+		// partida normal (Decide + estados: loot, combate, paseo...). No hay
+		// logica especifica de warmup. Unica diferencia: vida de tanque en el
+		// lobby para que no mueran antes de despegar el avion.
+		bool bWarmup = CustomBotAI::IsWarmupPhase();
+
+		if (bWarmup)
+			RefillLobbyHP(Bot);
 
 		if (Ctx.DecisionTimer <= 0.0f || Ctx.State == EBotState::Dead)
 		{
@@ -944,6 +954,12 @@ namespace CustomBotAIMidgame
 			DoExploring(Bot, Ctx);
 			break;
 		}
+
+		// En warmup se capea el estado a Warmup cada tick para que el Tick
+		// maestro detecte el fin de la fase (estado Warmup + !IsWarmupPhase) y
+		// haga el ResetToMatchHP + transicion al bus.
+		if (bWarmup)
+			Ctx.State = EBotState::Warmup;
 	}
 
 	// --- Wander helper ---------------------------------------------------------
@@ -1000,10 +1016,12 @@ namespace CustomBotAIMidgame
 		DoRotating(Bot, Ctx, Ctx.Personality.Aggression > 0.5f);
 	}
 
-	// --- WARMUP / PRE-PARTIDA --------------------------------------------------
-	// Simula un lobby activo mientras el bus no ha arrancado: el bot pasea por la
-	// isla, recoge lo que encuentra y dispara a otros bots/jugadores que ve cerca
-	// (como los jugadores reales matando el tiempo antes de que despegue el avion).
+	// --- PRE-PARTIDA (WARMUP / LOBBY) -------------------------------------------
+	// Durante el lobby los bots se comportan EXACTAMENTE igual que en una partida
+	// (Decide + estados: loot, combate, paseo) para que se vean activos antes de
+	// despegar el avion. No hay logica especifica de warmup; el combate con el
+	// pico y la huida cuando el enemigo tiene arma son logica GENERAL de
+	// DoFighting. Unica diferencia con la partida real:
 	//
 	// INVULNERABILIDAD DEL LOBBY: el bot tiene vida de tanque en la pre-partida.
 	// El daño se sigue aplicando de forma real (el atacante ve sus numeros y no
@@ -1011,60 +1029,6 @@ namespace CustomBotAIMidgame
 	// tumba de un tiro; entre frames se rellena la vida, asi que nunca muere en
 	// el lobby. Al saltar del bus (o empezar la partida) se resetea a 100/0.
 	static constexpr float kWarmupLobbyHP = 2000.0f;
-
-	// COMBATE DE WARMUP: los bots NO orbitan al jugador (el DoFighting hace
-	// strafe lateral en circulo constante). Aqui:
-	//   - defensivo (Aggression < 0.4): HUYE del enemigo cercano,
-	//   - agresivo: se acerca y ataca cuerpo a cuerpo con el pico (o contra
-	//     otros bots), manteniendo la distancia de swing en vez de rodear.
-	static void DoWarmupFight(CustomBot& Bot, BotAIContext& Ctx, AActor* Enemy)
-	{
-		if (!Enemy || Enemy->IsActorBeingDestroyed())
-		{
-			Ctx.EnemyTarget = nullptr;
-			CustomBotCombat::StopFiring(Bot);
-			Ctx.bIsFiring = false;
-			Ctx.State = EBotState::Warmup;
-			return;
-		}
-
-		FVector EnemyLoc = Enemy->GetActorLocation();
-		float Dist = Bot.Pawn->GetDistanceTo(Enemy);
-		FVector BotLoc = Bot.Pawn->GetActorLocation();
-
-		// Personalidad defensiva: no se enfrenta, se aleja del enemigo.
-		if (Ctx.Personality.Aggression < 0.4f)
-		{
-			FVector Away = BotLoc + CustomBotMovement::DirectionTo(EnemyLoc, BotLoc) * 1500.0f;
-
-			CustomBotMovement::LookAt(Bot, EnemyLoc);
-			CustomBotMovement::MoveTo(Bot, Away, 100.0f, true, false);
-			return;
-		}
-
-		// Agresivo: mirar siempre al enemigo.
-		CustomBotMovement::LookAt(Bot, EnemyLoc);
-
-		if (Dist <= kMeleeRange)
-		{
-			// Cuerpo a cuerpo: plantarse y golpear con el pico.
-			CustomBotMovement::StopMovement(Bot);
-
-			if (Ctx.ActionTimer <= 0.0f)
-			{
-				CustomBotInventory::EquipPickaxe(Bot);
-				CustomBotCombat::FireWeapon(Bot); // swing del pico
-				Ctx.ActionTimer = 0.35f;
-			}
-
-			Ctx.State = EBotState::Warmup;
-			return;
-		}
-
-		// Lejos: acercarse hasta quedar en rango de melee (nunca orbitar).
-		if (!Bot.HasMoveRequest() || Bot.HasArrived())
-			CustomBotMovement::MoveTo(Bot, EnemyLoc, kMeleeRange * 0.4f, true, false);
-	}
 
 	// Refuerzo del lobby que se aplica CADA tick: asegura que el ejemplar tenga
 	// el tope de tanque (2000), rellena la vida a 2000 si recibio daño y mantiene
@@ -1095,75 +1059,5 @@ namespace CustomBotAIMidgame
 		Bot.Pawn->SetHealth(100.0f);
 		Bot.Pawn->SetMaxShield(100.0f);
 		Bot.Pawn->SetShield(0.0f);
-	}
-
-	static void DoWarmup(CustomBot& Bot, BotAIContext& Ctx)
-	{
-		if (!Bot.IsReady() || !Bot.Pawn)
-			return;
-
-		// Cada tick: vida de tanque + escudo a 0 (invulnerabilidad del lobby).
-		RefillLobbyHP(Bot);
-
-		// Escaneo de enemigos y loot a intervalos (ScanTimer), no cada frame
-		// (el GetAllActorsOfClass de cada barrido aloca + filtra arrays).
-		if (Ctx.ScanTimer <= 0.0f)
-		{
-			Ctx.EnemyTarget = ScanForEnemy(Bot, Ctx);
-			Ctx.LootTarget = CustomBotPerception::FindNearestPickup(Bot, 2500.0f);
-			Ctx.ScanTimer = 0.25f;
-		}
-
-		AActor* Enemy = Ctx.EnemyTarget;
-
-		if (Enemy && !Enemy->IsActorBeingDestroyed())
-		{
-			// Warmup: pelear cuerpo a cuerpo con el pico (o huir si es
-			// defensivo), nunca orbitar al jugador.
-			DoWarmupFight(Bot, Ctx, Enemy);
-			return;
-		}
-
-		if (Enemy)
-			Ctx.EnemyTarget = nullptr;
-
-		// Sin enemigos: lootear lo que encuentre o pasear por la isla.
-		AFortPickup* Pickup = static_cast<AFortPickup*>(Ctx.LootTarget);
-
-		if (Pickup && Pickup->IsActorBeingDestroyed())
-		{
-			Ctx.LootTarget = nullptr;
-			Pickup = nullptr;
-		}
-
-		if (Pickup)
-		{
-			if (Bot.Pawn->GetDistanceTo(Pickup) <= CustomBotInteraction::InteractionRadius)
-			{
-				if (CustomBotInteraction::PickupItem(Bot, Pickup))
-				{
-					++Ctx.LootedItems;
-
-					if (Ctx.ActionTimer <= 0.0f)
-					{
-						EquipBestWeapon(Bot);
-						Ctx.ActionTimer = 0.8f;
-					}
-				}
-			}
-			else
-			{
-				CustomBotMovement::MoveTo(Bot, Pickup->GetActorLocation(), 100.0f, true);
-			}
-
-			return;
-		}
-
-		// Si llegamos al destino y no hay loot, elegir otro punto de paseo.
-		if (!Bot.HasMoveRequest() || Bot.HasArrived())
-		{
-			FVector Wander = PickWanderTarget(Bot, Bot.Pawn->GetActorLocation());
-			CustomBotMovement::MoveTo(Bot, Wander, 150.0f, true);
-		}
 	}
 }

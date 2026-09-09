@@ -25,13 +25,13 @@ namespace CustomBotCombat
 		return Weapon != nullptr;
 	}
 
-	// Devuelve true si el arma equipada es el PICAXE (harvest tool) del bot.
+	// Devuelve true si el arma equipada es el PICAXE (harvest tool del bot).
 	// El pico hereda de FortWeaponItemDefinition, asi que IsWeaponEquipped()
 	// devuelve true tambien con el pico; con este check se distingue "melee"
-	// de un arma real (con municion).
+	// (pico/cuerpo a cuerpo) de un arma real (de fuego, con municion).
 	static bool IsPickaxeEquipped(CustomBot& Bot)
 	{
-		if (!Bot.IsReady() || !Bot.Pawn || !Bot.WorldInventory)
+		if (!Bot.IsReady() || !Bot.Pawn)
 			return false;
 
 		auto* Weapon = Bot.Pawn->GetCurrentWeapon();
@@ -39,13 +39,40 @@ namespace CustomBotCombat
 		if (!Weapon)
 			return false;
 
-		auto* Pickaxe = Bot.WorldInventory->GetPickaxeInstance();
+		auto* WeaponDef = Weapon->GetWeaponData();
 
-		if (!Pickaxe || !Pickaxe->GetItemEntry())
+		if (!WeaponDef)
+			return false;
+
+		static auto FortWeaponMeleeItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortWeaponMeleeItemDefinition");
+		return FortWeaponMeleeItemDefinitionClass && WeaponDef->IsA(FortWeaponMeleeItemDefinitionClass);
+	}
+
+	// Devuelve true si Enemy (cualquier pawn enemigo) tiene un arma REAL
+	// equipada (de fuego). El pico/melee NO cuenta: aunque tambien es un
+	// FortWeapon, es cuerpo a cuerpo y no puede dispararte desde lejos.
+	static bool EnemyHasRealWeapon(AActor* Enemy)
+	{
+		if (!Enemy)
+			return false;
+
+		auto* Pawn = Cast<AFortPlayerPawn>(Enemy);
+
+		if (!Pawn)
+			return false;
+
+		auto* Weapon = Pawn->GetCurrentWeapon();
+
+		if (!Weapon)
 			return false;
 
 		auto* WeaponDef = Weapon->GetWeaponData();
-		return WeaponDef && WeaponDef == Pickaxe->GetItemEntry()->GetItemDefinition();
+
+		if (!WeaponDef)
+			return false;
+
+		static auto FortWeaponMeleeItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortWeaponMeleeItemDefinition");
+		return FortWeaponMeleeItemDefinitionClass && !WeaponDef->IsA(FortWeaponMeleeItemDefinitionClass);
 	}
 
 	// Municion actual del arma equipada.

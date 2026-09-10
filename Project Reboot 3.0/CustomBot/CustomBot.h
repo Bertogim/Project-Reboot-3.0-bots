@@ -65,6 +65,18 @@ public:
 	// CustomBotMovement::EnsureCMCActive (mismo efecto para todo bot normal).
 	bool bClaimLiveDone = false;
 
+	// CMC inicializado una sola vez: ProcessEvent (SetComponentTickEnabled,
+	// Activate) y ServerAcknowledgePossession solo se ejecutan en el primer
+	// tick de EnsureCMCActive. Antes se ejecutaban CADA tick x CADA bot (15
+	// bots x 2 ProcessEvent x 60 tps = 1800 ProcessEvent/s), re-triggering
+	// la re-evaluacion nativa de character parts -> mesh re-loading infinito.
+	bool bCMCInitialized = false;
+
+	// Contador para throttlear RestorePawnPlayerState (cada 30 ticks en vez
+	// de cada tick). El write directo al pointer de PlayerState re-triggera
+	// OnRep_PlayerState -> InitializeCharacterParts -> FortCustomizationAssetLoader.
+	unsigned RestorePSCounter = 0;
+
 	// --- Probe de movimiento (diagnostico) ----------------------------------
 	// CustomBotMovement::EnsureCMCActive registra cada ventana de ~60 ticks el
 	// desplazamiento horizontal mientras hay MoveTo activo (log [mprobe]), para

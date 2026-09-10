@@ -11,7 +11,11 @@
 
 #include <chrono>
 
-// CustomBot - Spawner.
+// DBLOCK: GetProcessMemoryInfo para el diagnostico de RAM del proceso.
+#ifndef PSAPI_VERSION
+#define PSAPI_VERSION 1
+#endif
+#include <psapi.h>
 //
 // Crea instancias reales de jugador para el bot (AFortPlayerControllerAthena +
 // AFortPlayerPawnAthena), replicando el patron de PlayerBot::Initialize del
@@ -49,6 +53,9 @@ namespace CustomBotSpawner
 	// hitch ~1s + crash al spawnear en rafaga).
 	inline int PendingSkinBudget = 0;
 
+	// Diagnostico de RAM + conteo UObjects (definido debajo; TickAll lo llama).
+	static void LogMemDiag(unsigned TickCount);
+
 	static void TickAll()
 	{
 		static unsigned TickAllCounter = 0;
@@ -69,6 +76,9 @@ namespace CustomBotSpawner
 			LOG_INFO(LogBots, "[CustomBot] [tickall] invoke #{} bots={}",
 				tc, AllCustomBots.size());
 		}
+
+		// Diagnostico de leak (RAM + conteo UObjects) cada ~30s.
+		LogMemDiag(tc);
 
 		if (AllCustomBots.empty())
 			return;
@@ -95,6 +105,83 @@ namespace CustomBotSpawner
 
 		for (size_t i = ToRemove.size(); i-- > 0;)
 			AllCustomBots.erase(AllCustomBots.begin() + ToRemove[i]);
+	}
+
+	// Diagnostico de RAM + conteo de UObjects por clase (UNA sola pasada sobre
+	// el object array). Llama a LogMemDiag cada ~300 invocaciones (~5s a 60tps).
+	// Objetivo: ver que clase de objeto crece sin parar (el leak) y cuanta RAM
+	// consume el proceso real del server.
+	static void LogMemDiag(unsigned TickCount)
+	{
+		static unsigned LastDiagTick = 0;
+		if (TickCount - LastDiagTick < 300)
+			return;
+		LastDiagTick = TickCount;
+
+		// RAM del proceso (working set + private bytes).
+		PROCESS_MEMORY_COUNTERS PMC;
+		memset(&PMC, 0, sizeof(PMC));
+		PMC.cb = sizeof(PMC);
+		if (GetProcessMemoryInfo(GetCurrentProcess(), &PMC, sizeof(PMC)))
+		{
+			LOG_INFO(LogBots, "[memdiag] WS={:.0f}MB Private={:.0f}MB PageFaults={}",
+				(double)PMC.WorkingSetSize / (1024.0 * 1024.0),
+				(double)PMC.PagefileUsage / (1024.0 * 1024.0),
+				(unsigned long long)PMC.PageFaultCount);
+		}
+
+		// Conteo por clase en una pasada. Nombre de clase -> subcadena a buscar.
+		struct ClassCount { const char* Sub; int Count = 0; };
+		ClassCount Counts[] = {
+			{ "FortPickup" }, { "BuildingContainer" }, { "BuildingWall" },
+			{ "FortPlayerPawn" }, { "FortPlayerController" }, { "FortPlayerState" },
+			{ "FortInventory" }, { "FortWeapon" }, { "AbilitySystemComponent" },
+			{ "SkeletalMeshComponent" }, { "NavigationPath" }, { "AthenaNavSystem" },
+			{ "FortCustomizationAssetLoader" }, { "FortCharacterPart" },
+			{ "BuildingSMActor" }, { "FortGameStateAthena" }, { "UWorld" },
+		};
+
+		int TotalUObjects = 0;
+		int NumCounts = sizeof(Counts) / sizeof(Counts[0]);
+
+		auto ObjectNum = ChunkedObjects ? ChunkedObjects->Num() : UnchunkedObjects ? UnchunkedObjects->Num() : 0;
+
+		for (int i = 0; i < ObjectNum; i++)
+		{
+			auto Object = GetObjectByIndex(i);
+
+			if (!Object)
+				continue;
+
+			TotalUObjects++;
+
+			auto* Cls = Object->ClassPrivate;
+			if (!Cls)
+				continue;
+
+			// FName -> string corta (usa buffer stack, sin heap alloc).
+			char ClsBuf[128];
+			Cls->GetName().copy(ClsBuf, sizeof(ClsBuf) - 1);
+			ClsBuf[Cls->GetName().size()] = '\0';
+
+			for (int c = 0; c < NumCounts; ++c)
+			{
+				if (strstr(ClsBuf, Counts[c].Sub))
+				{
+					Counts[c].Count++;
+					break;
+				}
+			}
+		}
+
+		std::string Diag = std::format("total={}", TotalUObjects);
+		for (int c = 0; c < NumCounts; ++c)
+		{
+			if (Counts[c].Count > 0)
+				Diag += std::format(" | {}={}", Counts[c].Sub, Counts[c].Count);
+		}
+
+		LOG_INFO(LogBots, "[memdiag] UObjects {}", Diag);
 	}
 
 	// Inicializa las clases de pawn/controller (una sola vez).
@@ -127,7 +214,14 @@ namespace CustomBotSpawner
 	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator = nullptr);
 
 	// Implementacion real del spawn (la envuelve el SEH de arriba).
-	static CustomBot* SpawnCustomBotInner(const FTransform& SpawnTransform, AActor* InSpawnLocator)
+	// IMPORTANTE: el bot se construye en `OutBot` (stack/Ctx) y SOLO se commitea
+	// a AllCustomBots al final, ya 100% inicializado. Antes se hacia
+	// `AllCustomBots.emplace_back()` al inicio y cada tick del engine (TickAll)
+	// veia el bot a medio construir (controller=false pawn=false), lo marcaba
+	// INVALID y lo borraba, dejando una referencia colgante en este spawn ->
+	// crash SEH + bots desapareciendo. Construyendolo fuera del vector, TickAll
+	// nunca llega a verlo hasta que esta listo.
+	static CustomBot* SpawnCustomBotInner(const FTransform& SpawnTransform, AActor* InSpawnLocator, CustomBot& OutBot)
 	{
 		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot start ===");
 		gSpawnStage = "setup";
@@ -147,10 +241,9 @@ namespace CustomBotSpawner
 			return nullptr;
 		}
 
-		// Crea la entidad en el contenedor global.
-		AllCustomBots.emplace_back();
+		// Construir la entidad como variable local (AUN no en AllCustomBots).
 		gSpawnStage = "emplace";
-		CustomBot& Bot = AllCustomBots.back();
+		CustomBot& Bot = OutBot;
 
 		// Orden de spawn correcto (ver bots.h Initialize): controller, luego pawn,
 		// luego recuperar el playerstate de la posesion del controller.
@@ -161,7 +254,6 @@ namespace CustomBotSpawner
 		if (!Bot.Controller)
 		{
 			LOG_ERROR(LogBots, "[CustomBot] Failed to spawn controller!");
-			AllCustomBots.pop_back();
 			return nullptr;
 		}
 
@@ -173,7 +265,6 @@ namespace CustomBotSpawner
 		{
 			LOG_ERROR(LogBots, "[CustomBot] Failed to get playerstate!");
 			Bot.Controller->K2_DestroyActor();
-			AllCustomBots.pop_back();
 			return nullptr;
 		}
 
@@ -225,7 +316,6 @@ namespace CustomBotSpawner
 		{
 			LOG_ERROR(LogBots, "[CustomBot] Failed to spawn pawn!");
 			Bot.Controller->K2_DestroyActor();
-			AllCustomBots.pop_back();
 			return nullptr;
 		}
 
@@ -300,7 +390,6 @@ namespace CustomBotSpawner
 		{
 			LOG_ERROR(LogBots, "[CustomBot] Pawn became invalid after initialization, aborting bot");
 			Bot.Destroy();
-			AllCustomBots.pop_back();
 			return nullptr;
 		}
 
@@ -308,6 +397,10 @@ namespace CustomBotSpawner
 		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE pos=({:.0f},{:.0f},{:.0f}) ===",
 			BotPos.X, BotPos.Y, BotPos.Z);
 		gSpawnStage = "done";
+
+		// Commit al contenedor global SOLO aqui, ya 100% inicializado: a partir
+		// de este punto TickAll lo ve y puede tickearlo, pero nunca a medio spawn.
+		AllCustomBots.emplace_back(std::move(Bot));
 		return &AllCustomBots.back();
 	}
 
@@ -322,12 +415,13 @@ namespace CustomBotSpawner
 		FTransform Transform;
 		AActor* Locator = nullptr;
 		CustomBot* Result = nullptr;
+		CustomBot Bot;   // bot a medio construir (commit al vector al final)
 	};
 
 	static void SpawnCustomBotSehCallback(void* data)
 	{
 		auto* Ctx = (SpawnCtx*)data;
-		Ctx->Result = SpawnCustomBotInner(Ctx->Transform, Ctx->Locator);
+		Ctx->Result = SpawnCustomBotInner(Ctx->Transform, Ctx->Locator, Ctx->Bot);
 	}
 
 	// Limpieza de un bot a medio construir tras un crash en el spawn. Se invoca
@@ -366,12 +460,9 @@ namespace CustomBotSpawner
 
 		if (!SpawnBotSafeSEH(SpawnCustomBotSehCallback, &Ctx))
 		{
-			if (!AllCustomBots.empty())
-			{
-				CustomBot& FailedBot = AllCustomBots.back();
-				TickBotSafeSEH(FailSpawnCleanupCallback, &FailedBot);
-				AllCustomBots.pop_back();
-			}
+			// Limpiar el bot a medio construir (aun NO esta en AllCustomBots,
+			// por eso se limpia Ctx.Bot directamente en lugar de back()).
+			TickBotSafeSEH(FailSpawnCleanupCallback, &Ctx.Bot);
 
 			LOG_ERROR(LogBots, "[CustomBot] [SEH] SpawnCustomBot CRASH at stage '{}' — bot removed",
 				gSpawnStage ? gSpawnStage : "?");

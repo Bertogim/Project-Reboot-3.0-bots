@@ -146,6 +146,16 @@ namespace CustomBotMovement
 	// Llamar CADA TICK desde TickAll para cada bot activo.
 	// (basado en lo que hace DebugBot en MovingForward que funciona correctamente:
 	//  CLAIM-LIVE + velocidades + MovementMode Walking, reaplicados cada frame)
+	//
+	// OPTIMIZACION: las operaciones "una sola vez" (ProcessEvent de
+	// SetComponentTickEnabled/Activate, CLAIM-LIVE) se ejecutan solo en el
+	// primer tick (bCMCInitialized). Antes se ejecutaban CADA tick x CADA bot
+	// (15 bots x 2 ProcessEvent x 60 tps = 1800 ProcessEvent/s), lo que
+	// re-triggeraba la re-evaluacion nativa de character parts en el pawn
+	// -> FortCustomizationAssetLoader re-cargaba meshes/skins continuamente.
+	// RestorePawnPlayerState se throttlea a cada 30 ticks (~0.5s) por la
+	// misma razon: el write directo al pointer PlayerState puede triggerar
+	// OnRep_PlayerState -> InitializeCharacterParts -> mesh reload.
 	static void EnsureCMCActive(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -157,37 +167,56 @@ namespace CustomBotMovement
 
 		__int64 CMEAddr = __int64(CME);
 
-		// Mantener el PlayerState en el pawn: la skin necesita este puntero y
-		// cualquier re-UnPossess del flujo del bus lo volveria a limpiar.
-		RestorePawnPlayerState(Bot);
-
-		// CLAIM-LIVE una sola vez por bot: replica el ServerAcknowledgePossession
-		// que envia un cliente real (el servidor exclusivo del bot nunca lo hace y
-		// Fortnite mantiene el pawn congelado sin el handshake).
-		if (!Bot.bClaimLiveDone && Bot.Controller)
+		// --- Tick 1: inicializacion una sola vez por bot ---
+		if (!Bot.bCMCInitialized)
 		{
-			static auto AckFn = FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession");
-			if (AckFn)
+			// Mantener el PlayerState en el pawn una vez (skin necesita el puntero).
+			RestorePawnPlayerState(Bot);
+
+			// CLAIM-LIVE una sola vez: replica ServerAcknowledgePossession.
+			if (!Bot.bClaimLiveDone && Bot.Controller)
 			{
-				struct { APawn* NewPawn; } Params{};
-				Params.NewPawn = Bot.Pawn;
-				Bot.Controller->ProcessEvent(AckFn, &Params);
+				static auto AckFn = FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession");
+				if (AckFn)
+				{
+					struct { APawn* NewPawn; } Params{};
+					Params.NewPawn = Bot.Pawn;
+					Bot.Controller->ProcessEvent(AckFn, &Params);
+				}
+
+				auto AckOff = Bot.Controller->GetOffset("AcknowledgedPawn", false);
+				if (AckOff != -1 && Bot.Controller->Get<APawn*>(AckOff) != Bot.Pawn)
+					Bot.Controller->Get<APawn*>(AckOff) = Bot.Pawn;
+
+				Bot.bClaimLiveDone = true;
+				LOG_WARN(LogBots, "[CustomBot] CLAIM-LIVE: ServerAcknowledgePossession invoked for bot");
 			}
 
-			auto AckOff = Bot.Controller->GetOffset("AcknowledgedPawn", false);
-			if (AckOff != -1 && Bot.Controller->Get<APawn*>(AckOff) != Bot.Pawn)
-				Bot.Controller->Get<APawn*>(AckOff) = Bot.Pawn;
+			// Forzar tick del CMC habilitado + Activate una sola vez.
+			static auto FnSetTick = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
+			static auto FnActivate = FindObject<UFunction>(L"/Script/Engine.ActorComponent.Activate");
+			if (FnSetTick) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnSetTick, &P); }
+			if (FnActivate) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnActivate, &P); }
 
-			Bot.bClaimLiveDone = true;
-			LOG_WARN(LogBots, "[CustomBot] CLAIM-LIVE: ServerAcknowledgePossession invoked for bot");
+			Bot.bCMCInitialized = true;
+			LOG_INFO(LogBots, "[CustomBot] CMC initialized (one-time setup done)");
 		}
 
-		// Forzar tick del CMC habilitado
-		static auto FnSetTick = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
-		static auto FnActivate = FindObject<UFunction>(L"/Script/Engine.ActorComponent.Activate");
-		if (FnSetTick) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnSetTick, &P); }
-		if (FnActivate) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnActivate, &P); }
+		// --- Throttled: RestorePawnPlayerState cada 30 ticks (~0.5s) ---
+		// El write directo al pointer PlayerState puede re-triggerar
+		// OnRep_PlayerState -> InitializeCharacterParts -> mesh reload si el
+		// engine lo detecta. Con 30 ticks de cooldown se restaura el pointer
+		// despues de UnPossess sin saturar el loader.
+		{
+			Bot.RestorePSCounter++;
+			if (Bot.RestorePSCounter >= 30)
+			{
+				RestorePawnPlayerState(Bot);
+				Bot.RestorePSCounter = 0;
+			}
+		}
 
+		// --- Cada tick: re-aplicar valores que el engine revierte ---
 		// Re-aplicar velocidades que el engine revierte. MaxWalkSpeed se sube a la
 		// velocidad de sprint (900): el CMC usa GetMaxSpeed() como tope al integrar,
 		// y sin esto las peticiones MoveTo sprint (900) quedaban capadas a 600.

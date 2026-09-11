@@ -167,12 +167,13 @@ public:
 		static auto KismetSystemLibrary = FindObject(L"/Script/Engine.Default__KismetSystemLibrary");
 		KismetSystemLibrary->ProcessEvent(LineTraceSingleFn, Params);
 
+		bool ReturnValue = *(bool*)(__int64(Params) + ReturnValueOffset);
+
+		// Copiar OUT antes de liberar: *OutHit apunta dentro de Params.
 		if (OutHit)
 			*OutHit = (FHitResult*)(__int64(Params) + OutHitOffset);
 
-		bool ReturnValue = *(bool*)(__int64(Params) + ReturnValueOffset);
-
-		// VirtualFree(Params, 0, MEM_RELEASE);
+		VirtualFree(Params, 0, MEM_RELEASE);
 
 		return ReturnValue;
 	}
@@ -228,7 +229,11 @@ public:
 		if (OutHit)
 			*OutHit = (FHitResult*)(__int64(Params) + OutHitOffset);
 
-		return *(bool*)(__int64(Params) + ReturnValueOffset);
+		bool ReturnValue = *(bool*)(__int64(Params) + ReturnValueOffset);
+
+		VirtualFree(Params, 0, MEM_RELEASE);
+
+		return ReturnValue;
 	}
 
 	static void PrintStringHook(UObject* Context, FFrame* Stack, void* Ret);

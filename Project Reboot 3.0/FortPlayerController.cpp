@@ -1438,6 +1438,9 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 							KillerAbilityComp->ProcessEvent(NetMulticast_InvokeGameplayCueAdded, AddedParams);
 							KillerAbilityComp->ProcessEvent(NetMulticast_InvokeGameplayCueExecuted, ExecutedParams);
 
+							VirtualFree(AddedParams, 0, MEM_RELEASE);
+							VirtualFree(ExecutedParams, 0, MEM_RELEASE);
+
 							break;
 						}
 					}

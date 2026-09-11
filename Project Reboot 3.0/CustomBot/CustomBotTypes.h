@@ -78,5 +78,10 @@ namespace CBT
 	{
 		TArray<AActor*> Actors;    // actores detectados dentro del radio
 		float Radius = 0.0f;       // radio usado para el barrido
+
+		~FScanResult()
+		{
+			Actors.FreeEngine();
+		}
 	};
 }

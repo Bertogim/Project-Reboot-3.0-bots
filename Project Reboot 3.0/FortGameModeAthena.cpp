@@ -1047,8 +1047,12 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 		static auto ReplicationDriverOffset = GetWorld()->GetNetDriver()->GetOffset("ReplicationDriver", false); // If netdriver is null the world blows up
 
-		Globals::bShouldUseReplicationGraph = (!(ReplicationDriverOffset == -1 || Fortnite_Version >= 20))
-			&& Fortnite_Version != 3.3; // RepGraph is half implemented
+		// A/B del leak base (bots=0, partida real 24/7 desde 721a585): FORZADO a
+		// false para medir si el ReplicationGraph del engine es el que fuga
+		// (~10MB/s committed, arena malloc creciendo, sin UObjects creciendo).
+		// Vuelve a la formula original cuando se decida:
+		//   (!(ReplicationDriverOffset == -1 || Fortnite_Version >= 20)) && Fortnite_Version != 3.3;
+		Globals::bShouldUseReplicationGraph = false;
 
 		LOG_INFO(LogDev, "bShouldUseReplicationGraph: {}", Globals::bShouldUseReplicationGraph);
 

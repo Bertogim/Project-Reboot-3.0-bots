@@ -148,10 +148,21 @@ namespace CustomBotSpawner
 				(unsigned long long)PMC.PageFaultCount);
 		}
 
-		// A/B del leak base (0 bots): el barrido de ~612k UObjects con GetName()
-		// (std::string por el malloc del juego) puede ser la fuente del
-		// crecimiento de la arena; OFF por defecto para medir si WS/Private y
-		// la curva del probe se estabilizan. Vuelve a true solo para diagnosticar.
+		// Conteo TOTAL de UObjects sin GetName() (solo int++, cero heap): dice
+		// si la explosion con bots es de objetos del engine (armas/proyectiles/
+		// fx acumulandose) o solo de arena/buffers. El barrido por clase con
+		// GetName() estaba aqui; era EL leak del idle (std::string por objeto).
+		{
+			auto ObjectNum = ChunkedObjects ? ChunkedObjects->Num() : UnchunkedObjects ? UnchunkedObjects->Num() : 0;
+			int TotalUObjects = 0;
+			for (int i = 0; i < ObjectNum; i++)
+			{
+				if (GetObjectByIndex(i))
+					TotalUObjects++;
+			}
+			LOG_INFO(LogBots, "[memdiag] UObjects total={}", TotalUObjects);
+		}
+
 		constexpr bool bScanUObjects = false;
 		if (bScanUObjects)
 		{

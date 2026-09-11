@@ -148,6 +148,13 @@ namespace CustomBotSpawner
 				(unsigned long long)PMC.PageFaultCount);
 		}
 
+		// A/B del leak base (0 bots): el barrido de ~612k UObjects con GetName()
+		// (std::string por el malloc del juego) puede ser la fuente del
+		// crecimiento de la arena; OFF por defecto para medir si WS/Private y
+		// la curva del probe se estabilizan. Vuelve a true solo para diagnosticar.
+		constexpr bool bScanUObjects = false;
+		if (bScanUObjects)
+		{
 		// Conteo por clase en una pasada. Nombre de clase -> subcadena a buscar.
 		struct ClassCount { const char* Sub; int Count = 0; };
 		ClassCount Counts[] = {
@@ -200,6 +207,7 @@ namespace CustomBotSpawner
 		}
 
 		LOG_INFO(LogBots, "[memdiag] UObjects {}", Diag);
+		}
 
 		// Diagnostico extra (hipotesis leak): sublevels cargados en el UWorld y
 		// contador de replicaciones manuales del hook (NetDriver). Si sublevels

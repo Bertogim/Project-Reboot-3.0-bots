@@ -49,7 +49,7 @@ uint8 AFortGameSessionDedicatedAthena::GetSquadIdForCurrentPlayerHook(AFortGameS
 		}
 	}
 
-	CONTRTOLLERS.Free();
+	CONTRTOLLERS.FreeEngine();
 
 	LOG_INFO(LogDev, "Failed to find SquadId!");
 

@@ -100,7 +100,7 @@ void AFortGameStateAthena::SkipAircraft()
 				Aircrafts.push_back(AllAircrafts.at(i));
 			}
 
-			AllAircrafts.Free();
+			AllAircrafts.FreeEngine();
 		}
 		else
 		{

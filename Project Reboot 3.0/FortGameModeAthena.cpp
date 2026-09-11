@@ -738,7 +738,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 		int ActorsNum = Actors.Num();
 
-		Actors.Free();
+		Actors.FreeEngine();
 
 		if (ActorsNum == 0)
 		{
@@ -786,6 +786,14 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 		float Duration = bShouldSkipAircraft ? 0 : 100000;
 		float EarlyDuration = Duration;
+
+		if (!Globals::bAutoRestart)
+		{
+			busCountdownSeconds = 300;
+			lastPlayerCountForBus = 0;
+			Duration = busCountdownSeconds;
+			EarlyDuration = Duration;
+		}
 
 		float TimeSeconds = GameState->GetServerWorldTimeSeconds(); // UGameplayStatics::GetTimeSeconds(GetWorld());
 
@@ -955,7 +963,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 			CurrentRebootVan->GetResurrectLocation() = CurrentRebootVan->GetClosestActor(FortPlayerStartClass, 450);
 		}
 
-		AllRebootVans.Free();
+		AllRebootVans.FreeEngine();
 
 		if (AmountOfBotsToSpawn != 0)
 		{
@@ -1051,18 +1059,28 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 	if (Engine_Version >= 424) // returning true is stripped on c2+
 	{
-		static auto WarmupRequiredPlayerCountOffset = GameMode->GetOffset("WarmupRequiredPlayerCount");
-
-		if (GameState->GetPlayersLeft() >= GameMode->Get<int>(WarmupRequiredPlayerCountOffset))
+		if (!Globals::bAutoRestart)
 		{
-			// if (MapInfo)
-			{
-				// static auto FlightInfosOffset = MapInfo->GetOffset("FlightInfos");
+			static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
 
-				// if (MapInfo->Get<TArray<__int64>>(FlightInfosOffset).ArrayNum > 0)
+			if (GameState->GetServerWorldTimeSeconds() >= GameState->Get<float>(WarmupCountdownEndTimeOffset))
+				Ret = true;
+		}
+		else
+		{
+			static auto WarmupRequiredPlayerCountOffset = GameMode->GetOffset("WarmupRequiredPlayerCount");
+
+			if (GameState->GetPlayersLeft() >= GameMode->Get<int>(WarmupRequiredPlayerCountOffset))
+			{
+				// if (MapInfo)
 				{
-					// LOG_INFO(LogDev, "ReadyToStartMatch Return Address: 0x{:x}", __int64(_ReturnAddress()) - __int64(GetModuleHandleW(0)));
-					Ret = true;
+					// static auto FlightInfosOffset = MapInfo->GetOffset("FlightInfos");
+
+					// if (MapInfo->Get<TArray<__int64>>(FlightInfosOffset).ArrayNum > 0)
+					{
+						// LOG_INFO(LogDev, "ReadyToStartMatch Return Address: 0x{:x}", __int64(_ReturnAddress()) - __int64(GetModuleHandleW(0)));
+						Ret = true;
+					}
 				}
 			}
 		}
@@ -1073,10 +1091,47 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 	if (Ret)
 	{
+		if (!Globals::bAutoRestart && !bStartedBus)
+		{
+			StartBus(0);
+
+			LOG_INFO(LogMatchmaker, "[HostClient] Bus started, hostState = inGame.");
+		}
+
 		LOG_INFO(LogDev, "Athena_ReadyToStartMatchOriginal RET!"); // if u dont see this, not good
 	}
 
 	return Ret;
+}
+
+static std::string GetPlayerAccountId(APlayerState* PlayerState)
+{
+	if (!PlayerState)
+		return "";
+
+	static auto UniqueIdOffset = PlayerState->GetOffset("UniqueId");
+
+	if (UniqueIdOffset == -1)
+		return "";
+
+	auto UniqueId = PlayerState->GetPtr<FUniqueNetIdRepl>(UniqueIdOffset);
+
+	if (!UniqueId)
+		return "";
+
+	auto& ReplicationBytes = UniqueId->GetReplicationBytes();
+
+	std::string AccountId;
+
+	for (int i = 0; i < ReplicationBytes.Num(); i++)
+	{
+		uint8_t Byte = ReplicationBytes.at(i);
+
+		if (Byte != 0)
+			AccountId += std::format("{:02x}", Byte);
+	}
+
+	return AccountId;
 }
 
 int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint8 preferredTeam, AActor* Controller)
@@ -1144,6 +1199,39 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 		Current = DefaultFirstTeam;
 		NextTeamIndex = DefaultFirstTeam;
 		CurrentTeamMembers = 0;
+	}
+
+	// Matchmaker pre-assigned team (accountId -> teamIndex from StartMatch).
+	auto AccountId = GetPlayerAccountId(PlayerState);
+
+	if (!AccountId.empty())
+	{
+		auto It = HostTeamAssignments.find(AccountId);
+
+		if (It != HostTeamAssignments.end())
+		{
+			NextTeamIndex = It->second;
+
+			auto PlayerStateObjectItem = GetItemByIndex(PlayerState->InternalIndex);
+
+			TWeakObjectPtr<AFortPlayerStateAthena> WeakPlayerState{};
+			WeakPlayerState.ObjectIndex = PlayerState->InternalIndex;
+			WeakPlayerState.ObjectSerialNumber = PlayerStateObjectItem ? PlayerStateObjectItem->SerialNumber : 0;
+
+			if (PlayerStateObjectItem)
+			{
+				if (auto TeamsArrayContainer = GameState->GetTeamsArrayContainer())
+				{
+					TArray<TWeakObjectPtr<AFortPlayerStateAthena>>* TeamArray = TeamsArrayContainer->TeamsArray.IsValidIndex(NextTeamIndex) ? TeamsArrayContainer->TeamsArray.AtPtr(NextTeamIndex) : nullptr;
+
+					if (TeamArray)
+						TeamArray->Add(WeakPlayerState);
+				}
+			}
+
+			LOG_INFO(LogTeams, "[HostClient] {} ({}) pre-assigned to team {} by Matchmaker.", PlayerState->GetPlayerName().ToString(), AccountId, NextTeamIndex);
+			return NextTeamIndex;
+		}
 	}
 
 	// std::cout << "Dru!\n";
@@ -1251,6 +1339,22 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 
 	static auto CurrentPlaylistDataOffset = GameState->GetOffset("CurrentPlaylistData", false);
 	auto CurrentPlaylist = CurrentPlaylistDataOffset == -1 && Fortnite_Version < 6 ? nullptr : GameState->GetCurrentPlaylist();
+
+	// Matchmaker host flow: as soon as the first real (non-bot) player joins,
+	// arm a fixed 1:30 bus countdown that is not shortened by more players.
+	if (!Globals::bAutoRestart && Globals::bInitializedPlaylist && !bStartedBus && lastPlayerCountForBus == 0)
+	{
+		auto NewPlayerState = ((APlayerController*)NewPlayerActor)->GetPlayerState();
+
+		if (NewPlayerState && !NewPlayerState->IsBot())
+		{
+			lastPlayerCountForBus = 1;
+			busCountdownSeconds = 90;
+			SetWarmupCountdown(GameMode, GameState, 90.f);
+
+			LOG_INFO(LogMatchmaker, "[HostClient] First player joined, starting 1:30 bus countdown.");
+		}
+	}
 
 	LOG_INFO(LogPlayer, "HandleStartingNewPlayer!");
 
@@ -1380,7 +1484,7 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 					VendingMachine->K2_DestroyActor();
 				}
 
-				AllVendingMachines.Free();
+				AllVendingMachines.FreeEngine();
 			}
 
 			if (Fortnite_Version < 19) // fr idk what i did too lazy to debug
@@ -1492,8 +1596,8 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 					CurrentActor->K2_DestroyActor();
 			}
 
-			SpawnIsland_FloorLoot_Actors.Free();
-			BRIsland_FloorLoot_Actors.Free();
+			SpawnIsland_FloorLoot_Actors.FreeEngine();
+			BRIsland_FloorLoot_Actors.FreeEngine();
 
 #if 0
 			if (Fortnite_Version >= 23) // Partitioning real

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <string>
+#include <unordered_map>
 
 #include "inc.h"
 
@@ -29,6 +31,17 @@ namespace Globals
 }
 
 extern inline int NumToSubtractFromSquadId = 0; // I think 2?
+
+// --- Host / Matchmaker state -------------------------------------------------
+extern inline bool bPregameLocked = true;          // pregame waits for Matchmaker StartMatch (or local Force Start)
+extern inline bool bStartPregame = false;          // set by StartMatch / Force Start: starts the 10s pregame countdown
+extern inline int busCountdownSeconds = 300;       // bus warmup countdown; whittled to 90s once the first player joins
+extern inline int lastPlayerCountForBus = 0;       // 0 = no real player joined yet; 1 = first player seen (90s armed)
+extern inline bool bHostConnected = false;         // true once the backend accepted /lawin/hosts/register
+extern inline std::string hostState = "idle";      // idle -> starting -> inGame
+extern inline std::unordered_map<std::string, int> HostTeamAssignments = {}; // accountId -> teamIndex (from StartMatch)
+extern inline unsigned long long gManualSraCalls = 0;   // diagnostico: veces que el hook replica manualmente
+extern inline bool bManualReplication = true;            // ON: el hook replica por tick + original; OFF: solo el original (A/B del leak)
 
 extern inline std::string PlaylistName =
 "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo";

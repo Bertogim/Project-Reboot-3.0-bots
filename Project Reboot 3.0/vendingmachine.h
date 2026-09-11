@@ -305,7 +305,7 @@ static inline void FillVendingMachines()
 
 	auto AllVendingMachinesNum = AllVendingMachines.Num();
 
-	AllVendingMachines.Free();
+	AllVendingMachines.FreeEngine();
 
 	bool bPrintDebug = true;
 

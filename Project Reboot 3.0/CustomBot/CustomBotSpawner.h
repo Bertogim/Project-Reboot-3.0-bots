@@ -10,6 +10,8 @@
 #include "../CustomAI/CustomBotAI.h"
 
 #include <chrono>
+#include <algorithm>
+#include <vector>
 
 // DBLOCK: GetProcessMemoryInfo para el diagnostico de RAM del proceso.
 #ifndef PSAPI_VERSION
@@ -47,6 +49,14 @@ namespace CustomBotSpawner
 	// Diagnostico: log una vez al primer invocarse y despues cada ~30 llamadas.
 	inline bool bTickAllFirstLogDone = false;
 
+	// Hook opcional ejecutado en el game thread al principio de cada TickAll.
+	// CustomBotManager lo usa para drenar las peticiones de spawn de la UI
+	// (la GUI corre en el hilo render/GUI, NO en el game thread; spawinear
+	// Fort actors desde ahi crashea: AssembleReferenceTokenStream en
+	// non-game thread while GC is not locked).
+	using TickHook = void (*)();
+	inline TickHook DeferredBotOps = nullptr;
+
 	// Presupuesto de skins pendientes por TickAll (se reinicia en cada tick): el
 	// rebuild de mesh + replicacion de la skin se reparte como maximo 2 por tick
 	// para que una rafaga de 5-22 bots no sature el loader/replicacion (causa del
@@ -61,6 +71,10 @@ namespace CustomBotSpawner
 		static unsigned TickAllCounter = 0;
 		unsigned tc = ++TickAllCounter;
 
+		// Drena la cola de spawn/ops de la UI (un bot por tick como maximo).
+		if (DeferredBotOps)
+			DeferredBotOps();
+
 		// Reparto de skins diferidas: 2 como maximo por tick.
 		PendingSkinBudget = 2;
 
@@ -71,13 +85,17 @@ namespace CustomBotSpawner
 			bTickAllFirstLogDone = true;
 		}
 
-		if (tc % 30 == 0)
+		if (tc % 300 == 0) // cada ~30s a 10tps (30 ticks * 10); produccion
 		{
 			LOG_INFO(LogBots, "[CustomBot] [tickall] invoke #{} bots={}",
 				tc, AllCustomBots.size());
 		}
 
-		// Diagnostico de leak (RAM + conteo UObjects) cada ~30s.
+		// Diagnostico de leak (RAM + conteo UObjects). Se mantiene activo cada
+		// ~40s mientras el problema de memoria no este resuelto (el gate de 300
+		// ticks vive dentro de LogMemDiag). OJO: barre TODO el object array
+		// (~600k UObjects) con GetName() en el game thread; cada corrida puede
+		// causar un pequeno stall periodico.
 		LogMemDiag(tc);
 
 		if (AllCustomBots.empty())
@@ -182,6 +200,53 @@ namespace CustomBotSpawner
 		}
 
 		LOG_INFO(LogBots, "[memdiag] UObjects {}", Diag);
+
+		// Diagnostico extra (hipotesis leak): sublevels cargados en el UWorld y
+		// contador de replicaciones manuales del hook (NetDriver). Si sublevels
+		// crece => streaming leak; si crece SRA/seg con bots => buffers de net.
+		{
+			auto World = GetWorld();
+			int SubLevels = -1;
+			if (World)
+			{
+				static int LevelsOff = World->GetOffset("Levels", false);
+				if (LevelsOff != -1)
+					SubLevels = World->Get<TArray<UObject*>>(LevelsOff).Num();
+			}
+			LOG_INFO(LogBots, "[memdiag] diag: levels={} sraCalls={} bots={}",
+				SubLevels, gManualSraCalls, (int)AllCustomBots.size());
+		}
+
+		// Probe de regiones committed privadas (cada ~60s): enumera las N
+		// regiones de memoria mas grandes del proceso con VirtualQuery. Sirve
+		// para ver QUÉ heap crece ~10MB/s (arena del malloc del juego, buffers
+		// de net, texturas RHI, stacks...). Si una region concreta crece de
+		// forma lineal entre snapshots, ese es el allocator que fuga.
+		if (TickCount % 600 == 0)
+		{
+			struct Region { size_t Size = 0; size_t Base = 0; };
+			std::vector<Region> Big;
+			size_t TotalCommitted = 0;
+			size_t TotalRegions = 0;
+			MEMORY_BASIC_INFORMATION MBI{};
+			for (unsigned char* P = nullptr; ; P += MBI.RegionSize)
+			{
+				if (!VirtualQuery(P, &MBI, sizeof(MBI)))
+					break;
+				if (MBI.State == MEM_COMMIT && MBI.Type == MEM_PRIVATE)
+				{
+					TotalCommitted += MBI.RegionSize;
+					TotalRegions++;
+					if (MBI.RegionSize >= (8ull << 20))
+						Big.push_back({ MBI.RegionSize, (size_t)P });
+				}
+			}
+			std::sort(Big.begin(), Big.end(), [](const Region& a, const Region& b) { return a.Size > b.Size; });
+			std::string R = std::format("VQ: committed={:.0f}MB regions={}", (double)TotalCommitted / (1024.0*1024.0), TotalRegions);
+			for (size_t i = 0; i < Big.size() && i < 8; ++i)
+				R += std::format(" | 0x{:08x}={:.0f}MB", (unsigned int)Big[i].Base, (double)Big[i].Size / (1024.0 * 1024.0));
+			LOG_INFO(LogBots, "[memdiag] {}", R);
+		}
 	}
 
 	// Inicializa las clases de pawn/controller (una sola vez).

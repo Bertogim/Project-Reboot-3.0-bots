@@ -76,7 +76,7 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 		if (CharacterPartsaa.Num() > 0)
 			UFortKismetLibrary::ApplyCharacterCosmetics(GetWorld(), CharacterPartsaa, PlayerState, &aa);
 
-		CharacterPartsaa.Free();
+		CharacterPartsaa.FreeEngine();
 	}
 }
 

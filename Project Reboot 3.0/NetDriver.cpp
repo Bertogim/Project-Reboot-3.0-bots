@@ -65,7 +65,7 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 			// CurrentBuildingSMActor->K2_DestroyActor();
 		}
 
-		AllBuildingSMActors.Free();
+		AllBuildingSMActors.FreeEngine();
 		bShouldDestroyAllPlayerBuilds = false;
 	}
 	
@@ -78,8 +78,9 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 	// (movimiento persistente de MoveTo, y en Parte 2 las decisiones de IA).
 	CustomBotSpawner::TickAll();
 
-	if (Globals::bStartedListening)
+	if (Globals::bStartedListening && bManualReplication)
 	{
+		++gManualSraCalls;
 		if (!Globals::bShouldUseReplicationGraph)
 		{
 			NetDriver->ServerReplicateActors();
@@ -357,7 +358,7 @@ void UNetDriver::ServerReplicateActors_BuildConsiderList(std::vector<FNetworkObj
 			CallPreReplication(Actor, this);
 		}
 
-		Actors.Free();
+		Actors.FreeEngine();
 	}
 
 	for (auto Actor : ActorsToRemove)

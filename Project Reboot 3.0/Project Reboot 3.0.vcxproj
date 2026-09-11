@@ -224,6 +224,7 @@
     <ClCompile Include="FortGameplayAbilityAthena_PeriodicItemGrant.cpp" />
     <ClCompile Include="FortGameSessionDedicatedAthena.cpp" />
     <ClCompile Include="FortGameStateAthena.cpp" />
+    <ClCompile Include="hostclient.cpp" />
     <ClCompile Include="FortInventory.cpp" />
     <ClCompile Include="FortInventory.h" />
     <ClCompile Include="FortInventoryInterface.cpp" />
@@ -440,6 +441,7 @@
     <ClInclude Include="GameplayStatics.h" />
     <ClInclude Include="GameplayTagContainer.h" />
     <ClInclude Include="GameSession.h" />
+    <ClInclude Include="hostclient.h" />
     <ClInclude Include="GameState.h" />
     <ClInclude Include="GenericPlatformMath.h" />
     <ClInclude Include="GenericPlatformMisc.h" />

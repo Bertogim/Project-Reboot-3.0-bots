@@ -143,7 +143,7 @@ static inline void SpawnBGAs() // hahah not "proper", there's a function that we
 		}
 	}
 
-	AllBGAConsumableSpawners.Free();
+	AllBGAConsumableSpawners.FreeEngine();
 
 	LOG_INFO(LogDev, "Spawned BGAS!");
 }

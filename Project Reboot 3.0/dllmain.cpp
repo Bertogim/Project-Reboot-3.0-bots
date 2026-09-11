@@ -1,3 +1,8 @@
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <Windows.h>
 #include <iostream>
 
@@ -10,6 +15,7 @@
 #include "AbilitySystemComponent.h"
 #include "FortPlayerPawn.h"
 #include "globals.h"
+#include "hostclient.h"
 #include "FortInventoryInterface.h"
 #include <fstream>
 #include "GenericPlatformTime.h"
@@ -978,9 +984,15 @@ DWORD WINAPI Main(LPVOID)
 
     CreateThread(0, 0, GuiThread, 0, 0, 0);
 
+    HostClient::Register("", "", 0);
+    HostClient::StartPollThread();
+
     while (SecondsUntilTravel > 0)
     {
-        SecondsUntilTravel -= 1;
+        if (bStartPregame)
+        {
+            SecondsUntilTravel -= 1;
+        }
 
         Sleep(1000);
     }

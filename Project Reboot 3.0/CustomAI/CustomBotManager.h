@@ -7,6 +7,8 @@
 // BotAIContext (CustomBot.AI). No duplica sistemas del proyecto: reutiliza
 // CustomBotSpawner::AllCustomBots como almacen de instancias.
 
+#include <atomic>
+
 #include "CustomBotAI.h"
 #include "CustomBot/CustomBotSpawner.h"
 
@@ -17,6 +19,15 @@ namespace CustomBotManager
 	inline EBotDifficulty Difficulty = EBotDifficulty::Normal;
 	inline EBotPersonalityType PersonalityPool = EBotPersonalityType::Random;
 	inline bool bAutoSpawnInProgress = false;
+
+	// --- Cola diferida (GUI/render thread -> game thread) ----------------------
+	// La UI corre en el hilo render/GUI. Spawinear o destruir Fort actors desde
+	// ahi crashea (AssembleReferenceTokenStream en non-game thread). La GUI solo
+	// encola aqui; CustomBotSpawner::TickAll (game thread, via NetDriver) consume
+	// la cola un bot/op por tick.
+	inline std::atomic<int> PendingSpawnCount = 0;
+	inline std::atomic<bool> bPendingFillTo100 = false;
+	inline std::atomic<bool> bPendingRemoveAll = false;
 
 	// --- Acceso a las instancias ----------------------------------------------
 
@@ -168,6 +179,28 @@ namespace CustomBotManager
 	}
 
 	// --- Spawn ----------------------------------------------------------------
+	// La GUI NUNCA llama a estos directamente: usa Queue* (ejecucion segura en
+	// el game thread via CustomBotSpawner::TickAll).
+
+	// Encola peticiones para el game thread.
+	static void QueueSpawnBots(int Count)
+	{
+		PendingSpawnCount += Count;
+		LOG_INFO(LogBots, "[BotManager] Queued {} bot spawn(s) (pending={})", Count, (int)PendingSpawnCount);
+	}
+
+	static void QueueFillTo100()
+	{
+		bPendingFillTo100 = true;
+		LOG_INFO(LogBots, "[BotManager] Queued FillTo100");
+	}
+
+	static void QueueRemoveAll()
+	{
+		bPendingRemoveAll = true;
+		LOG_INFO(LogBots, "[BotManager] Queued RemoveAllBots");
+	}
+
 	// Spawnea un bot en la posicion dada (como un jugador real) y le crea su IA.
 	// Devuelve nullptr si fallo.
 	static CustomBot* SpawnBotAt(const FVector& Location, const FRotator& Rotation)
@@ -299,4 +332,59 @@ namespace CustomBotManager
 		LOG_INFO(LogBots, "[BotManager] FillTo100: current={}, needed={}", CurrentTotal, Needed);
 		return SpawnBots(Needed);
 	}
+
+	// --- Consumo de la cola (1 invocacion por TickAll, game thread) -----------
+	// Registrada abajo como CustomBotSpawner::DeferredBotOps. Prioridad:
+	// vaciar todo -> fill -> spawn de UN bot por tick (sin Sleep; el propio
+	// ritmo del engine da tiempo a procesar cada bot).
+	static void ProcessPendingOps()
+	{
+		if (bPendingRemoveAll.exchange(false))
+		{
+			RemoveAllBots();
+			return; // un op por tick; el spawn pendiente se atiende al siguiente
+		}
+
+		if (bPendingFillTo100.exchange(false))
+		{
+			auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+
+			if (!GameState)
+				return;
+
+			int CurrentTotal = GameState->GetPlayersLeft();
+			int Needed = 100 - CurrentTotal;
+
+			if (Needed > 0)
+			{
+				PendingSpawnCount += Needed;
+				LOG_INFO(LogBots, "[BotManager] FillTo100: current={}, needed={}", CurrentTotal, Needed);
+			}
+			else
+			{
+				LOG_INFO(LogBots, "[BotManager] Lobby already at {} players, no bots needed", CurrentTotal);
+			}
+		}
+
+		if (PendingSpawnCount > 0)
+		{
+			--PendingSpawnCount;
+
+			CustomBot* Bot = SpawnBotNearLocalPlayer();
+
+			if (!Bot)
+			{
+				LOG_ERROR(LogBots, "[BotManager] Failed to spawn custom bot!");
+				PendingSpawnCount = 0; // si un bot falla, paramos (engine saturado)
+			}
+			else
+			{
+				LOG_INFO(LogBots, "[BotManager] Spawned bot #{} state={} difficulty={} (pending={})",
+					GetTotalCount(), (int)Bot->AI->State, (int)Bot->AI->Difficulty, (int)PendingSpawnCount);
+			}
+		}
+	}
+
+	// Registra el consumidor en el hook del game thread (una vez por TU).
+	inline bool bBotOpsHook = (CustomBotSpawner::DeferredBotOps = &ProcessPendingOps, true);
 }

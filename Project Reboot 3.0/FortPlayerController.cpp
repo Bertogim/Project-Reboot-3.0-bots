@@ -931,7 +931,7 @@ void AFortPlayerController::ServerCreateBuildingActorHook(UObject* Context, FFra
 
 	if (!bCanBuild)
 	{
-		ExistingBuildings.Free();
+		ExistingBuildings.FreeEngine();
 		return ServerCreateBuildingActorOriginal(Context, Stack, Ret);
 	}
 
@@ -944,7 +944,7 @@ void AFortPlayerController::ServerCreateBuildingActorHook(UObject* Context, FFra
 
 	if (!BuildingActor)
 	{
-		ExistingBuildings.Free();
+		ExistingBuildings.FreeEngine();
 		return ServerCreateBuildingActorOriginal(Context, Stack, Ret);
 	}
 
@@ -962,7 +962,7 @@ void AFortPlayerController::ServerCreateBuildingActorHook(UObject* Context, FFra
 
 		if (!MatInstance || MatInstance->GetItemEntry()->GetCount() < MaterialCost)
 		{
-			ExistingBuildings.Free();
+			ExistingBuildings.FreeEngine();
 			BuildingActor->SilentDie();
 			return ServerCreateBuildingActorOriginal(Context, Stack, Ret);
 		}
@@ -981,7 +981,7 @@ void AFortPlayerController::ServerCreateBuildingActorHook(UObject* Context, FFra
 		ExistingBuilding->K2_DestroyActor();
 	}
 
-	ExistingBuildings.Free();
+	ExistingBuildings.FreeEngine();
 
 	// BuildingActor->SetCurrentBuildingLevel()
 	BuildingActor->SetPlayerPlaced(true);

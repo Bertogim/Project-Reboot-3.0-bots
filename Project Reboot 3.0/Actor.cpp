@@ -305,7 +305,7 @@ AActor* AActor::GetClosestActor(UClass* ActorClass, float DistMax, std::function
 		}
 	}
 
-	AllActors.Free();
+	AllActors.FreeEngine();
 
 	return TargetActor;
 }

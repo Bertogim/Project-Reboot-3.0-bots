@@ -25,6 +25,7 @@
 #include "objectviewer.h"
 #include "FortAthenaMutator_Disco.h"
 #include "globals.h"
+#include "hostclient.h"
 #include "Fonts/ruda-bold.h"
 #include "Vector.h"
 #include "reboot.h"
@@ -69,6 +70,7 @@
 #define SETTINGS_TAB 14
 #define CREDITS_TAB 15
 #define BOTS_TAB 16
+#define HOST_TAB 17
 
 #define MAIN_PLAYERTAB 1
 #define INVENTORY_PLAYERTAB 2
@@ -84,7 +86,7 @@ extern inline bool bHandleDeath = true;
 extern inline bool bUseCustomMap = false;
 extern inline std::string CustomMapName = "";
 extern inline int AmountToSubtractIndex = 1;
-extern inline int SecondsUntilTravel = 5;
+extern inline int SecondsUntilTravel = 3;
 extern inline bool bSwitchedInitialLevel = false;
 extern inline bool bIsInAutoRestart = false;
 extern inline float AutoBusStartSeconds = 60;
@@ -121,6 +123,46 @@ static inline void SetIsLategame(bool Value)
 	StartingShield = Value ? 100 : 0;
 }
 
+static inline void SetWarmupCountdown(AFortGameModeAthena* GameMode, AFortGameStateAthena* GameState, float Seconds)
+{
+	if (!GameMode || !GameState)
+		return;
+
+	float TimeSeconds = GameState->GetServerWorldTimeSeconds();
+
+	static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
+	static auto WarmupCountdownStartTimeOffset = GameState->GetOffset("WarmupCountdownStartTime");
+	static auto WarmupCountdownDurationOffset = GameMode->GetOffset("WarmupCountdownDuration");
+	static auto WarmupEarlyCountdownDurationOffset = GameMode->GetOffset("WarmupEarlyCountdownDuration");
+
+	GameState->Get<float>(WarmupCountdownEndTimeOffset) = TimeSeconds + Seconds;
+	GameMode->Get<float>(WarmupCountdownDurationOffset) = Seconds;
+	GameState->Get<float>(WarmupCountdownStartTimeOffset) = TimeSeconds;
+	GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = Seconds;
+}
+
+static inline void StartBus(int Seconds)
+{
+	auto GameMode = (AFortGameModeAthena*)GetWorld()->GetGameMode();
+
+	if (!GameMode)
+		return;
+
+	auto GameState = GameMode->GetGameStateAthena();
+
+	if (!GameState)
+		return;
+
+	bStartedBus = true;
+	hostState = "inGame";
+	AmountOfPlayersWhenBusStart = GameState->GetPlayersLeft();
+
+	if (Seconds > 0)
+		SetWarmupCountdown(GameMode, GameState, (float)Seconds);
+
+	LOG_INFO(LogMatchmaker, "[HostClient] Bus starting ({}s countdown), {} players.", Seconds, AmountOfPlayersWhenBusStart);
+}
+
 static inline bool HasAnyCalendarModification()
 {
 	return Calendar::HasSnowModification() || Calendar::HasNYE() || Fortnite_Version == 8.40 || std::floor(Fortnite_Version) == 13;
@@ -146,12 +188,18 @@ static inline void Restart() // todo move?
 		AllFortBeacons.at(i)->K2_DestroyActor();
 	}
 
-	AllFortBeacons.Free();
+	AllFortBeacons.FreeEngine();
 
 	Globals::bInitializedPlaylist = false;
 	Globals::bStartedListening = false;
 	Globals::bHitReadyToStartMatch = false;
 	bStartedBus = false;
+	bStartPregame = false;
+	bPregameLocked = true;
+	hostState = "idle";
+	HostTeamAssignments.clear();
+	busCountdownSeconds = 300;
+	lastPlayerCountForBus = 0;
 	AmountOfRestarts++;
 
 	LOG_INFO(LogDev, "Switching!");
@@ -316,7 +364,7 @@ static inline void InputVector(const std::string& baseText, FVector* vec)
 static int Width = 640;
 static int Height = 480;
 
-static int Tab = 1;
+static int Tab = HOST_TAB;
 static int PlayerTab = -1;
 static bool bIsEditingInventory = false;
 static bool bInformationTab = false;
@@ -338,6 +386,8 @@ static inline void StaticUI()
 	ImGui::InputInt("Shield/Health for siphon", &AmountOfHealthSiphon);
 
 	ImGui::Checkbox("Enable Developer Mode", &Globals::bDeveloperMode);
+
+	ImGui::Checkbox("Replicacion manual por tick (A/B leak)", &bManualReplication);
 
 	// TODO-PATH: activar/desactivar el pathfinding (navmesh) de los bots custom.
 	// Off = linea recta + desatascado fisico (por PC malos). On = ruta navmesh
@@ -376,6 +426,14 @@ static inline void MainTabs()
 
 	if (ImGui::BeginTabBar(""))
 	{
+		if (ImGui::BeginTabItem("Host"))
+		{
+			Tab = HOST_TAB;
+			PlayerTab = -1;
+			bInformationTab = false;
+			ImGui::EndTabItem();
+		}
+
 		if (ImGui::BeginTabItem("Game"))
 		{
 			Tab = GAME_TAB;
@@ -568,7 +626,7 @@ static inline DWORD WINAPI LateGameThread(LPVOID)
 				Aircrafts.push_back(AllAircrafts.at(i));
 			}
 
-			AllAircrafts.Free();
+			AllAircrafts.FreeEngine();
 		}
 		else
 		{
@@ -866,32 +924,37 @@ static inline void MainUI()
 					{
 						if (ImGui::Button("Start Bus Countdown"))
 						{
-							bStartedBus = true;
-
-							auto GameMode = (AFortGameMode*)GetWorld()->GetGameMode();
-							auto GameState = Cast<AFortGameStateAthena>(GameMode->GetGameState());
-
-							AmountOfPlayersWhenBusStart = GameState->GetPlayersLeft();
-
-							static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
-							// GameState->Get<float>(WarmupCountdownEndTimeOffset) = UGameplayStatics::GetTimeSeconds(GetWorld()) + 10;
-
-							float TimeSeconds = GameState->GetServerWorldTimeSeconds(); // UGameplayStatics::GetTimeSeconds(GetWorld());
-							float Duration = 10;
-							float EarlyDuration = Duration;
-
-							static auto WarmupCountdownStartTimeOffset = GameState->GetOffset("WarmupCountdownStartTime");
-							static auto WarmupCountdownDurationOffset = GameMode->GetOffset("WarmupCountdownDuration");
-							static auto WarmupEarlyCountdownDurationOffset = GameMode->GetOffset("WarmupEarlyCountdownDuration");
-
-							GameState->Get<float>(WarmupCountdownEndTimeOffset) = TimeSeconds + Duration;
-							GameMode->Get<float>(WarmupCountdownDurationOffset) = Duration;
-
-							// GameState->Get<float>(WarmupCountdownStartTimeOffset) = TimeSeconds;
-							GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = EarlyDuration;
+							StartBus(10);
 						}
 					}
 				}
+			}
+		}
+
+		else if (Tab == HOST_TAB)
+		{
+			ImGui::Text(std::format("Connected: {}", bHostConnected).c_str());
+			ImGui::Text(std::format("Host: {} ({}:{})", HostClient::GetHostId(), HostClient::GetLocalIp(), HostClient::GetHostPort()).c_str());
+			ImGui::Text(std::format("State: {}", hostState).c_str());
+			ImGui::Text(std::format("Playlist: {}", PlaylistName).c_str());
+			ImGui::Text(std::format("Bus countdown: {}s", busCountdownSeconds).c_str());
+			ImGui::Text(std::format("Pregame locked: {} (bStartPregame: {})", bPregameLocked, bStartPregame).c_str());
+			ImGui::Text(std::format("Pre-assigned teams: {}", HostTeamAssignments.size()).c_str());
+
+			if (ImGui::Button("Force Start"))
+			{
+				bPregameLocked = false;
+				bStartPregame = true;
+
+				if (hostState == "idle")
+					hostState = "starting";
+
+				LOG_INFO(LogMatchmaker, "[HostClient] Force Start pressed locally.");
+			}
+
+			if (ImGui::Button("Start Bus (10s)"))
+			{
+				StartBus(10);
 			}
 		}
 
@@ -1335,19 +1398,19 @@ static inline void MainUI()
 
 			if (ImGui::Button("Spawn Bots"))
 			{
-				CustomBotManager::SpawnBots(CustomBotManager::DesiredBotCount);
+				CustomBotManager::QueueSpawnBots(CustomBotManager::DesiredBotCount);
 			}
 
 			ImGui::SameLine();
 
 			if (ImGui::Button("Fill to 100"))
 			{
-				CustomBotManager::FillTo100();
+				CustomBotManager::QueueFillTo100();
 			}
 
 			if (ImGui::Button("Remove All Bots"))
 			{
-				CustomBotManager::RemoveAllBots();
+				CustomBotManager::QueueRemoveAll();
 			}
 
 			ImGui::Separator();
@@ -1626,6 +1689,22 @@ static inline void PregameUI()
 {
 	StaticUI();
 
+	ImGui::Separator();
+	ImGui::Text(std::format("[Host] Connected: {} | State: {} | Bus: {}s", bHostConnected, hostState, busCountdownSeconds).c_str());
+
+	if (ImGui::Button("Force Start (Matchmaker/Host)"))
+	{
+		bPregameLocked = false;
+		bStartPregame = true;
+
+		if (hostState == "idle")
+			hostState = "starting";
+
+		LOG_INFO(LogMatchmaker, "[HostClient] Force Start pressed locally.");
+	}
+
+	ImGui::Separator();
+
 	if (Engine_Version >= 422 && Engine_Version < 424)
 	{
 		ImGui::Checkbox("Creative", &Globals::bCreative);
@@ -1652,7 +1731,7 @@ static inline void PregameUI()
 			// ImGui::InputText("Custom Map", &CustomMapName);
 		}
 
-		ImGui::SliderInt("Seconds until load into map", &SecondsUntilTravel, 1, 100);
+		ImGui::SliderInt("Seconds until load into map", &SecondsUntilTravel, 1, 10);
 	}
 
 	ImGui::SliderInt("Players required to start the match", &WarmupRequiredPlayerCount, 1, 100);

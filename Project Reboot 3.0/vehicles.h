@@ -257,7 +257,7 @@ static inline void SpawnVehicles2()
 
 	auto AllVehicleSpawnersNum = AllVehicleSpawners.Num();
 
-	AllVehicleSpawners.Free();
+	AllVehicleSpawners.FreeEngine();
 
 	LOG_INFO(LogGame, "Spawned {}/{} vehicles.", AmountOfVehiclesSpawned, AllVehicleSpawnersNum);
 }

@@ -230,7 +230,7 @@ public:
 	void Tick()
 	{
 		static unsigned BotTickCounter = 0;
-		if ((++BotTickCounter) % 120 == 0)
+		if ((++BotTickCounter) % 1200 == 0) // cada ~40s por bot; antes cada ~4s
 			LOG_INFO(LogBots, "[CustomBot] [bot.tick] ready={} valid={} dbgTick={} life={}",
 				IsReady(), IsValidActor(), DebugTick != nullptr, (int)GetLifeState());
 

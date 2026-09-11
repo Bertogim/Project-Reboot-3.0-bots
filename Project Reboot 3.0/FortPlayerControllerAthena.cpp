@@ -412,7 +412,7 @@ void AFortPlayerControllerAthena::ServerTeleportToPlaygroundLobbyIslandHook(AFor
 		break;
 	}
 
-	AllCreativePlayerStarts.Free();
+	AllCreativePlayerStarts.FreeEngine();
 }
 
 void AFortPlayerControllerAthena::ServerAcknowledgePossessionHook(APlayerController* Controller, APawn* Pawn)

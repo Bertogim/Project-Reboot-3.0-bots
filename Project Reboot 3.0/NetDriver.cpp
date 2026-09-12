@@ -78,28 +78,6 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 	// (movimiento persistente de MoveTo, y en Parte 2 las decisiones de IA).
 	CustomBotSpawner::TickAll();
 
-	if (Globals::bStartedListening && bManualReplication)
-	{
-		++gManualSraCalls;
-		if (!Globals::bShouldUseReplicationGraph)
-		{
-			NetDriver->ServerReplicateActors();
-		}
-		else
-		{
-			static auto ReplicationDriverOffset = NetDriver->GetOffset("ReplicationDriver"/*, false */);
-
-			if (auto ReplicationDriver = NetDriver->Get(ReplicationDriverOffset))
-			{
-				reinterpret_cast<void(*)(UObject*)>(ReplicationDriver->VFTable[Offsets::ServerReplicateActors])(ReplicationDriver);
-			}
-			else
-			{
-				// LOG_INFO(LogDev, "ReplicationDriver is nul!!?1//33/221/4/124/123"); // 3.3 MOMENT
-			}
-		}
-	}
-
 	return TickFlushOriginal(NetDriver);
 }
 

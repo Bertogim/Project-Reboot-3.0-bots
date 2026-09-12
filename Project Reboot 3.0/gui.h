@@ -387,18 +387,11 @@ static inline void StaticUI()
 
 	ImGui::Checkbox("Enable Developer Mode", &Globals::bDeveloperMode);
 
-	ImGui::Checkbox("Replicacion manual por tick (A/B leak)", &bManualReplication);
-
 	// Isolacion del leak de bots: 0=tick completo, 1=sin IA, 2=sin IA/mov,
 	// 3=sin IA/mov/CMC, 4=existencia pura, 5=CMC init-only sin writes,
 	// 6=idem sin CLAIM-LIVE. Se cambia EN VIVO con bots activos; la pendiente
 	// de committed/WS en reboot.log entre fases aísla la causa.
 	ImGui::SliderInt("Leak isolate: tick mode (0=full .. 6=initNoClaim)", &gBotTickMode, 0, 6);
-
-	// TODO-PATH: activar/desactivar el pathfinding (navmesh) de los bots custom.
-	// Off = linea recta + desatascado fisico (por PC malos). On = ruta navmesh
-	// con fallbacks (puertas / romper con pico).
-	ImGui::Checkbox("Pathfinding de bots (navmesh)", &bCustomBotPathfinding);
 
 	if (Globals::bDeveloperMode)
 	{
@@ -806,7 +799,6 @@ static inline void MainUI()
 			{
 				StaticUI();
 
-				if (!bStartedBus)
 				{
 					bool bWillBeLategame = Globals::bLateGame.load();
 					ImGui::Checkbox("Lategame", &bWillBeLategame);
@@ -1492,6 +1484,13 @@ static inline void MainUI()
 
 				ImGui::EndTable();
 			}
+
+			ImGui::Separator();
+
+			// Pathfinding de bots (navmesh). Off = linea recta + desatascado
+			// fisico (retenedor, mas ligero). On = ruta navmesh con fallbacks
+			// (puertas / romper con pico).
+			ImGui::Checkbox("Pathfinding de bots (navmesh)", &bCustomBotPathfinding);
 		}
 		else if (Tab == LATEGAME_TAB)
 		{
@@ -1726,13 +1725,6 @@ static inline void PregameUI()
 	if (Engine_Version >= 422 && Engine_Version < 424)
 	{
 		ImGui::Checkbox("Creative", &Globals::bCreative);
-	}
-
-	if (Addresses::SetZoneToIndex)
-	{
-		bool bWillBeLategame = Globals::bLateGame.load();
-		ImGui::Checkbox("Lategame", &bWillBeLategame);
-		SetIsLategame(bWillBeLategame);
 	}
 
 	if (HasEvent())

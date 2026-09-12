@@ -255,9 +255,9 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		LOG_INFO(LogBots, "[memdiag] UObjects {}", Diag);
 		}
 
-		// Diagnostico extra (hipotesis leak): sublevels cargados en el UWorld y
-		// contador de replicaciones manuales del hook (NetDriver). Si sublevels
-		// crece => streaming leak; si crece SRA/seg con bots => buffers de net.
+		// Diagnostico extra (hipotesis leak): sublevels cargados en el UWorld.
+		// Si crece => streaming leak (el A/B de replicacion manual se retiro;
+		// la replicacion la hace SOLO el engine).
 		{
 			auto World = GetWorld();
 			int SubLevels = -1;
@@ -267,8 +267,8 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 				if (LevelsOff != -1)
 					SubLevels = World->Get<TArray<UObject*>>(LevelsOff).Num();
 			}
-			LOG_INFO(LogBots, "[memdiag] diag: levels={} sraCalls={} bots={} mode={}",
-				SubLevels, gManualSraCalls, (int)AllCustomBots.size(), gBotTickMode);
+			LOG_INFO(LogBots, "[memdiag] diag: levels={} bots={} mode={}",
+				SubLevels, (int)AllCustomBots.size(), gBotTickMode);
 		}
 
 		// Probe de regiones committed privadas (cada ~60s): enumera las N

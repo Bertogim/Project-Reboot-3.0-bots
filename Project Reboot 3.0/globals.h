@@ -40,8 +40,6 @@ extern inline int lastPlayerCountForBus = 0;       // 0 = no real player joined 
 extern inline bool bHostConnected = false;         // true once the backend accepted /lawin/hosts/register
 extern inline std::string hostState = "idle";      // idle -> starting -> inGame
 extern inline std::unordered_map<std::string, int> HostTeamAssignments = {}; // accountId -> teamIndex (from StartMatch)
-extern inline unsigned long long gManualSraCalls = 0;   // diagnostico: veces que el hook replica manualmente
-extern inline bool bManualReplication = true;            // ON: el hook replica por tick + original; OFF: solo el original (A/B del leak)
 
 // Aislamiento del leak de RAM de los bots custom (A/B por fases en vivo).
 // 0=tick completo | 1=sin IA (Midgame/RefillLobbyHP) | 2=sin IA/movimiento |

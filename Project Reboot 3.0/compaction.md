@@ -1,41 +1,61 @@
 Objective
-- Resolver el leak explosivo de RAM con bots (~230MB/s a 25 bots en el run previo; ~180MB/s a 50 bots medido hoy) y dejarlo verificado. El leak idle (0 bots) ya está resuelto.
+- RESUELTO: leak explosivo de RAM con bots. Verificado: 100 bots = WS ~2.6GB PLANO (sin fuga sostenida). Antes 5 bots = +44MB/s.
 Important Details
-- El usuario lanza el servidor él mismo; yo vigilo reboot.log. Pidió vigilarlo cada 10s con sleeps cortos ("no hagas tanto sleep": usar ~8-10s).
-- Leak idle resuelto: la causa era LogMemDiag con GetName() (std::string por el malloc del juego); desactivado en 658eb16 → WS plano 2824MB con 0 bots.
-- No reintentar A/B forcing bShouldUseReplicationGraph=false: provoca AV (hook clásico + RepDriver del engine = doble replicación); revertido en 5680adc y pusheado.
-- Dato clave del run de hoy: UObjects total plano (~614k-618k; solo +~111/bot transitorio al spawinear) mientras WS/committed/regions explotan ⇒ el leak es la arena del malloc del juego (buffers/alocs), no acumulación de objetos del engine.
-- Replicación manual DESCARTADA como causa: bManualReplication=true por defecto (globals.h:44; checkbox vivo gui.h:390 "Replicacion manual por tick (A/B leak)"). Test en vivo con toggle OFF → sraCalls=0 → el leak sigue subiendo igual.
-- sraCalls a 30/s constante con cualquier nº de bots (0/5/20/50) y 0 con el toggle OFF.
-- Crecimiento en bins nuevos de ~64KB (regions 45012→71454→134256); top-8 regiones fijas (0x12970000=64MB, etc.); PageFaults=0 en ambos runs.
-- Bot por-tick: TickAll (CustomBotSpawner.h:69) → TickCustomBotSafe (SEH, CustomBotDebug.cpp:1739) → EnsureCMCActive, Bot->Tick (no aloca), UpdateMovement, TickUnstuck, skin diferida (máx 2/tick), CustomBotAI::Tick → Midgame::Update (warmup = comportamiento de partida real).
-- Revisados y limpios: CustomBotMovement (pares Alloc/VirtualFree), CustomBotCombat (no aloca buffers propios), CustomBotBuilding (BuildPiece libera ExistingBuildings y destruye actores viejos).
-- Build remoto: ./build-vm.sh (compila en VM Windows vía SSH; --clean; baja el DLL a Build/).
-- HEAD = 40966f6 (contador UObject ligero), build OK (DLL 12 sep 00:09). Push confirmado hasta 5680adc; 40966f6 sin confirmación de push.
+- El usuario lanza el servidor él mismo; yo vigilo reboot.log (~10s). El leak idle (0 bots) se resolvió en 658eb16 (GetName fuera de LogMemDiag → WS plano 2824MB).
+- No reintentar bShouldUseReplicationGraph=false (AV por doble replicación); revertido/empujado en 5680adc.
+- A/B previo: replicación manual (bManualReplication true, globals.h:44) DESCARTADA (toggle OFF → sraCalls=0 → sigue fugando). UObjects plano ⇒ leak era la arena del malloc del juego, no objetos del engine.
+- CAUSA RAIZ FINAL (doble capa, ambas reales):
+  1) FName::ToString() (UnrealNames.cpp:8 y 71) filtraba UN FString del engine por llamada: el params
+     { FName InName; FString OutStr; } lo llenaba ProcessEvent (Conv_NameToString) con un TArray<TCHAR>
+     asignado con FMemory en la arena del juego, y NADIE lo liberaba (dtor de FString solo hace
+     Data.Data=nullptr; Free() = VirtualFree, incorrecto). CADA ToString() = leak en la arena.
+  2) EnsureCMCActive (CustomBotMovement.h) llamaba GetOffset() 9 veces POR TICK POR BOT → GetProperty
+     escaneaba la cadena de propiedades completas y por cada propiedad FName::ToString() → cientos de
+     FString filtrados por tick/bot. Binned asigna en páginas de 64KB ⇒ ~1 región nueva/bot/tick
+     (regions +285/s a 5 bots) + committed +45MB/s. UObjects plano, PageFaults=0.
+- Bisect en vivo que condujo a ello (slider gBotTickMode, memdiag mode={}): mode 4/3 planos; mode 2/0
+  ~44MB/s; mode 5 (init-only con CLAIM incluido) plano ⇒ el leak era EXACTAMENTE el bloque por-tick
+  de EnsureCMCActive; el claim/estado live eran inocentes.
+- RestorePawnPlayerState: se llama SOLO al spawn (EnableServerSimulation + primer tick de EnsureCMCActive).
+  Off total ⇒ InitializeCharacterParts reintenta parts cada tick (UObjects 619708, ~100MB/s). Quitar el
+  restore periódico de 30 ticks: re-triggeraba OnRep_PlayerState → mesh reload.
+- FIX APLICADO (build 12 sep 20:09 OK):
+  - UnrealNames.cpp (AMBAS ToString): Conv_NameToString_Params.OutStr.Data.FreeEngine() después de
+    copiar a std::string. Cura de raíz para TODO el código que use ToString (GetProperty, Object.cpp...).
+  - CustomBotMovement.h: los 9 GetOffset del bloque por-tick ahora son `static` (se cachean la primera
+    vez). El bloque por tick ya no escanea NADA. Tambien Object.cpp GetPathName/GetFullName (alyre) con
+    P.Data.FreeEngine() y CachedPathForDef en CustomBotPerception.h (fix previo de la capa GetPathName).
+- gBotTickMode (globals.h:51) + slider GUI 0..6 (gui.h): 0=full 1=noAI 2=noAI/mov 3=noAI/mov/CMC
+  4=existence 5=initNoWrites 6=initNoClaim. Se deja por si se auditan otros componentes.
+- Build remoto: ./build-vm.sh --clean (VM Windows vía SSH; DLL en Build/).
 Work State
 Completed
-- Commit 40966f6: LogMemDiag ahora loguea [memdiag] UObjects total={N} con scan O(n) sin GetName() (cero heap). Build OK vía ./build-vm.sh.
-- Run 1 (replicación ON): 00:10:35 bots=5 committed=3719 regions=45012; 00:10:55 bots=20 WS=5347 committed=5358 regions=71454 UObjects=614774; 00:11:17 bots=50 WS=9229 committed=9234 regions=134256 UObjects=618012; 00:11:36 WS=12641 Private=13678. El usuario mató el proceso.
-- Run 2 (replicación OFF, sraCalls=0): 00:15:11 bots=10 WS=5559 committed=5564 regions=74880 UObjects=612886; 00:15:21 bots=24 WS=6519 UObjects=614444. Sigue subiendo igual ⇒ replicación descartada.
-- Conclusión: leak = arena malloc del juego, por-tick por-bot; no es UObjects ni replicación.
-- Trazado completo del tick del bot (ver Important Details).
+- Verificación FINAL: 20:12-20:15 (DLL 20:09) mode 0: 5 bots → 2790→2792→2759MB plano; luego 90 bots →
+  2818MB plano (bots=90). Pre-fix: 5 bots = +44MB/s (2792→4993 en ~40s). 100 bots ~2.6GB declarado por
+  el usuario. LEAK ELIMINADO.
+- Builds OK: 18:20 (fix GetPathName+cache), 19:29 (modos 5/6), 19:59 (fix raíz ToString+statics),
+  20:09 (+arreglo bStartedBus: el cambio nuevo del usuario usaba Globals::bStartedBus inexistente,
+  la variable real es global bStartedBus en gui.h:104).
+- Biografía del fix: GetPathName era una capa real pero insuficiente (Run 18:20 siguió fugando 44MB/s);
+  el bisect 5/4/3 plano vs 2/0 ~44MB/s delataron el bloque por-tick de EnsureCMCActive → ToString.
 Active
-- Auditoría de CustomBotAI_Midgame.h por alocaciones por-tick por-bot en el malloc del juego. Sospechoso: línea 112 std::string Path = Def->GetPathName(); + .find(CatDirs[i]) (línea 119) — falta leer el contexto (~100-140), su frecuencia de llamada (por tick vs cada Decide 0.5s) y el tipo de retorno de GetPathName().
-- Última lectura del run 2: 00:15:21 WS=6519MB (bots=24) y seguía subiendo; estado final del servidor sin confirmar (probablemente matado de nuevo).
+- Commit + push de HEAD actual (40966f6 + fix raíz ToString/statics + restore spawn-only + modos 0-6 +
+  bStartedBus). master remoto en 5680adc.
 Blocked
 - (none)
 Next Move
-1. Leer CustomBotAI_Midgame.h ~100-140: identificar la función que llama Def->GetPathName() y su frecuencia; comprobar tipo de retorno y si aloca std::string en el arena del juego por llamada.
-2. Revisar los handlers de estado de Midgame por TArray/alocs sin FreeEngine o strings por iteración: DoLooting:258, DoFarming:359, DoExploring:413, DoFighting:622, DoDefending:806, BuildBarricade:758, TickTimers:35, TrySwapForBetterWeapon:229, Decide:835.
-3. Implementar fix → ./build-vm.sh → pedir al usuario que lance con bots y comparar committed/regions/WS contra las curvas medidas (p.ej. 50 bots: committed 9234MB en ~40s de spawn; ~180MB/s).
+1. Commit del conjunto (ver diff: 11 ficheros) con mensaje descriptivo.
+2. git push (master → origin). Confirmar.
+3. (frio) El slider 0..6 y memdiag quedan operativos; no necesario quitarlos.
 Relevant Files
-- Project Reboot 3.0/CustomAI/CustomBotAI_Midgame.h: investigación activa (Update:918, Decide:835, línea 112 GetPathName, handlers de estados).
-- Project Reboot 3.0/CustomBot/CustomBotSpawner.h: TickAll:69, LogMemDiag, contador UObject ligero (40966f6), PendingSkinBudget=2, cola DeferredBotOps (1 bot/tick).
-- Project Reboot 3.0/CustomBot/CustomBotDebug.cpp: TickCustomBotSafe:1739, BotTickCallbackImpl:1711.
-- Project Reboot 3.0/CustomBot/CustomBot.h:230: Bot->Tick (no aloca).
-- Project Reboot 3.0/NetDriver.cpp:81-103: gate bManualReplication + TickFlushOriginal.
-- Project Reboot 3.0/globals.h:44 y Project Reboot 3.0/gui.h:390: toggle bManualReplication.
-- build-vm.sh: build remoto (sin cmd.exe local).
-- Build/Project Reboot 3.0.dll: build 12 sep 00:09 = 40966f6.
+- Project Reboot 3.0/UnrealNames.cpp: FName::ToString() (const y no-const) → FreeEngine del FString de salida. CAUSA RAIZ.
+- Project Reboot 3.0/CustomBot/CustomBotMovement.h: EnsureCMCActive (offsets static, restaura PS solo al spawn, modes 5/6, RestorePawnPlayerState).
+- Project Reboot 3.0/CustomBot/CustomBotDebug.cpp:1712: BotTickCallbackImpl con gates de gBotTickMode 0-6.
+- Project Reboot 3.0/CustomBot/CustomBotSpawner.h: memdiag diag con mode= + LogMemDiag (contador ligero, 40966f6).
+- Project Reboot 3.0/Object.cpp: GetPathName/GetFullName FreeEngine (capa 1 del fix).
+- Project Reboot 3.0/CustomBot/CustomBotPerception.h + CustomBotAI_Midgame.h: CachedPathForDef (capa 1 del fix).
+- Project Reboot 3.0/FortGameModeAthena.cpp: StartAircraftPhase (hostState/bStartedBus, cambio matchmaking del usuario).
+- Project Reboot 3.0/globals.h:51 y gui.h:389: gBotTickMode + slider.
+- Build/Project Reboot 3.0.dll: build 12 sep 20:09.
 - reboot.log: /home/bertogim/Escritorio/CI/Programas/Uf3/Uf3/FortniteV3.5/FortniteGame/Binaries/Win64/reboot.log.
-- Git remote: https://github.com/Bertogim/Project-Reboot-3.0-bots (master hasta 5680adc; 40966f6 local).
+- Git remote: https://github.com/Bertogim/Project-Reboot-3.0-bots (master hasta 5680adc; 40966f6 + fix local sin push).

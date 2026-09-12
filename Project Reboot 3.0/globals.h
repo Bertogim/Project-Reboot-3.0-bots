@@ -43,6 +43,13 @@ extern inline std::unordered_map<std::string, int> HostTeamAssignments = {}; // 
 extern inline unsigned long long gManualSraCalls = 0;   // diagnostico: veces que el hook replica manualmente
 extern inline bool bManualReplication = true;            // ON: el hook replica por tick + original; OFF: solo el original (A/B del leak)
 
+// Aislamiento del leak de RAM de los bots custom (A/B por fases en vivo).
+// 0=tick completo | 1=sin IA (Midgame/RefillLobbyHP) | 2=sin IA/movimiento |
+// 3=sin IA/mov/CMC | 4=existencia pura (solo se loguea). Cambiar en caliente
+// con el slider de la GUI; la pendiente de committed/WS entre fases aisla el
+// componente del tick que fuga.
+extern inline int gBotTickMode = 0;
+
 extern inline std::string PlaylistName =
 "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo";
 // "/Game/Athena/Playlists/gg/Playlist_Gg_Reverse.Playlist_Gg_Reverse";

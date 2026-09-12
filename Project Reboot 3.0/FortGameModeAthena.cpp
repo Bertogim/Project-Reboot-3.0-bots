@@ -181,6 +181,13 @@ void AFortGameModeAthena::HandleSpawnRateForActorClass(UClass* ActorClass, float
 
 void AFortGameModeAthena::StartAircraftPhase()
 {
+	if (hostState != "inGame")
+	{
+		hostState = "inGame";
+		bStartedBus = true;
+		LOG_INFO(LogMatchmaker, "[HostClient] Bus/Aircraft started, hostState = inGame (joinable=false).");
+	}
+
 	if (Addresses::StartAircraftPhase 
 		&& Fortnite_Version < 24 // ig they load or sometrhing gg
 		) 

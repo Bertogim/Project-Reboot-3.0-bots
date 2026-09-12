@@ -168,12 +168,21 @@ void UObject::SetBitfieldValue(int Offset, uint8_t FieldMask, bool NewValue)
 
 std::string UObject::GetPathName() const
 {
-	return UKismetSystemLibrary::GetPathName(this).ToString();
+	auto P = UKismetSystemLibrary::GetPathName(this);
+	std::string Result = P.ToString();
+	P.Data.FreeEngine();
+	return Result;
 }
 
 std::string UObject::GetFullName() const
 {
-	return ClassPrivate ? ClassPrivate->GetName() + " " + UKismetSystemLibrary::GetPathName(this).ToString() : "NoClassPrivate";
+	if (!ClassPrivate)
+		return "NoClassPrivate";
+
+	auto P = UKismetSystemLibrary::GetPathName(this);
+	std::string Result = ClassPrivate->GetName() + " " + P.ToString();
+	P.Data.FreeEngine();
+	return Result;
 }
 
 UPackage* UObject::GetOutermost() const

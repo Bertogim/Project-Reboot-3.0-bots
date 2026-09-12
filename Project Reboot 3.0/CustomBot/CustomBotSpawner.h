@@ -232,8 +232,8 @@ namespace CustomBotSpawner
 				if (LevelsOff != -1)
 					SubLevels = World->Get<TArray<UObject*>>(LevelsOff).Num();
 			}
-			LOG_INFO(LogBots, "[memdiag] diag: levels={} sraCalls={} bots={}",
-				SubLevels, gManualSraCalls, (int)AllCustomBots.size());
+			LOG_INFO(LogBots, "[memdiag] diag: levels={} sraCalls={} bots={} mode={}",
+				SubLevels, gManualSraCalls, (int)AllCustomBots.size(), gBotTickMode);
 		}
 
 		// Probe de regiones committed privadas (cada ~60s): enumera las N

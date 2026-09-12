@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unordered_map>
+
 #include "CustomBot.h"
 
 #include "GameplayStatics.h"
@@ -22,6 +24,30 @@ namespace CustomBotPerception
 	static bool IsAlly(CustomBot& Bot, AFortPlayerStateAthena* Other);
 	static bool IsEnemy(CustomBot& Bot, AFortPlayerStateAthena* Other);
 	static AFortPlayerStateAthena* GetPlayerStateOf(AActor* Actor);
+
+	// Path completo de un item definition, CACHEADO por definicion.
+	// OJO LEAK: GetPathName() ejecuta ProcessEvent (KismetSystemLibrary) que aloca
+	// un buffer FString en la arena del juego, y cada llamada convertia a
+	// std::string. En los bucles calientes (scan de loot por bot cada 0.35s,
+	// EquipBestWeapon cada tick) eso era una alocacion de string por pickup/item
+	// por tick -> la arena del malloc del juego crecia sin parar (~180MB/s a 50
+	// bots). Con este cache GetPathName() se pide UNA vez por definition unica en
+	// toda la sesion; el resto de accesos devuelve el path ya convertido.
+	static const std::string& CachedPathForDef(UFortItemDefinition* Def)
+	{
+		static std::unordered_map<UFortItemDefinition*, std::string> Cache;
+		static const std::string Empty;
+
+		if (!Def)
+			return Empty;
+
+		auto It = Cache.find(Def);
+		if (It != Cache.end())
+			return It->second;
+
+		Cache.emplace(Def, Def->GetPathName());
+		return Cache.find(Def)->second;
+	}
 
 	// Tipos de item que puede contener un pickup / inventory.
 	enum class EItemType : uint8_t
@@ -116,7 +142,7 @@ namespace CustomBotPerception
 
 		int Score = (Entry->GetLevel() > 0 ? Entry->GetLevel() : 1) * 100;
 
-		std::string Path = Def->GetPathName();
+		const std::string& Path = CachedPathForDef(Def);
 
 		static const char* CatDirs[] = { "/Sniper/", "/Launchers/", "/Shotgun/", "/Rifle/", "/SMG/", "/Pistol/" };
 		static const int CatBonus[] = { 600, 550, 500, 400, 300, 150 };

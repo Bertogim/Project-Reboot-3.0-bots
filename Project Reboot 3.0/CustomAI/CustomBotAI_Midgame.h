@@ -109,7 +109,7 @@ namespace CustomBotAIMidgame
 		auto Def = Entry->GetItemDefinition();
 		int Score = (Entry->GetLevel() > 0 ? Entry->GetLevel() : 1) * 100;
 
-		std::string Path = Def->GetPathName();
+		const std::string& Path = CustomBotPerception::CachedPathForDef(Def);
 
 		static const char* CatDirs[] = { "/Sniper/", "/Launchers/", "/Shotgun/", "/Rifle/", "/SMG/", "/Pistol/" };
 		static const int CatBonus[]  = { 600, 550, 500, 400, 300, 150 };

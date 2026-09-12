@@ -1,6 +1,7 @@
 #include "CustomBotDebug.h"
 
 #include "CustomBot.h"
+#include "globals.h"
 
 #include "CustomBotSpawner.h"
 #include "CustomBotMovement.h"
@@ -1714,26 +1715,59 @@ static void BotTickCallbackImpl(void* data)
 	if (!Bot || !Bot->IsValidActor() || !Bot->IsReady())
 		return;
 
-	CustomBotMovement::EnsureCMCActive(*Bot);
-	Bot->Tick();
-	CustomBotMovement::UpdateMovement(*Bot);
-
-	// TODO-PATH (fallback sin ruta): desatascado fisico (retroceder 2m +
-	// carrerilla 1m + salto + romper con pico) cuando el bot lleva >umbral
-	// bloqueado en linea recta. Nota: corre DESPUES de UpdateMovement, por lo
-	// que solo re-apunta el move si la secuencia lo necesita.
-	CustomBotBreak::TickUnstuck(*Bot);
-
-	// Skin diferida: aplicar como maximo PendingSkinBudget skins por TickAll
-	// (se reinicia en CustomBotSpawner::TickAll). Todo esto corre bajo SEH.
-	if (Bot->bSkinPending && CustomBotSpawner::PendingSkinBudget > 0)
+	// Aislamiento del leak (A/B en vivo): el slider de la GUI cambia
+	// gBotTickMode (0=full | 1=sin IA | 2=sin IA/mov | 3=sin IA/mov/CMC |
+	// 4=existencia | 5=CMC init-only sin writes | 6=idem sin CLAIM-LIVE).
+	// Cada cambio se loguea para correlar la pendiente de committed/WS de
+	// memdiag con la fase.
+	static int LastMode = -1;
+	int Mode = gBotTickMode;
+	if (Mode != LastMode)
 	{
-		--CustomBotSpawner::PendingSkinBudget;
-		CustomBotMovement::ApplyPendingSkin(*Bot);
+		LOG_INFO(LogBots, "[leak] [tick-mode] -> {} (0=full 1=noAI 2=noAI/move 3=noAI/move/CMC 4=existence 5=initNoWrites 6=initNoClaim)", Mode);
+		LastMode = Mode;
 	}
 
-	if (Bot->AI)
-		CustomBotAI::Tick(*Bot, *Bot->AI);
+	if (Mode < 4)
+	{
+		if (Mode <= 2)
+			CustomBotMovement::EnsureCMCActive(*Bot, true, true);
+
+		Bot->Tick();
+
+		if (Mode <= 1)
+		{
+			CustomBotMovement::UpdateMovement(*Bot);
+
+			// Desatascado fisico (retroceder 2m + carrerilla 1m + salto + romper
+			// con pico) cuando el bot lleva >umbral bloqueado en linea recta.
+			// Corre DESPUES de UpdateMovement: solo re-apunta el move si lo necesita.
+			CustomBotBreak::TickUnstuck(*Bot);
+
+			// Skin diferida: aplicar como maximo PendingSkinBudget skins por TickAll
+			// (se reinicia en CustomBotSpawner::TickAll). Todo esto corre bajo SEH.
+			if (Bot->bSkinPending && CustomBotSpawner::PendingSkinBudget > 0)
+			{
+				--CustomBotSpawner::PendingSkinBudget;
+				CustomBotMovement::ApplyPendingSkin(*Bot);
+			}
+		}
+
+		if (Mode <= 0 && Bot->AI)
+			CustomBotAI::Tick(*Bot, *Bot->AI);
+
+		return;
+	}
+
+	if (Mode == 4)
+		return; // existencia pura: el pawn sigue su tick nativo, nosotros no hacemos nada
+
+	// Modos 5/6: SOLO la inicializacion una vez (claim + activar CMC) y ningun
+	// trabajo por tick despues. Aisla "el estado de pawn live" de "nuestros
+	// writes por tick" (5) y el CLAIM-LIVE del CMC (6).
+	bool bClaim = (Mode == 5);
+	CustomBotMovement::EnsureCMCActive(*Bot, false, bClaim);
+	Bot->Tick();
 }
 
 void TickCustomBotSafe(CustomBot* Bot)

@@ -16,8 +16,13 @@ std::string FName::ToString() const
 	KismetStringLibrary->ProcessEvent(Conv_NameToString, &Conv_NameToString_Params);
 
 	auto Str = Conv_NameToString_Params.OutStr.ToString();
-	
-	// Conv_NameToString_Params.OutStr.Free();
+
+	// OJO LEAK (raiz): Conv_NameToString llena OutStr con un FString del engine
+	// (asignado con FMemory en la arena del juego). El destructor de FString
+	// solo anula el puntero, NO libera. Free() usa VirtualFree (incorrecto).
+	// Sin FreeEngine(), CADA ToString() filtraba el buffer: GetProperty ->
+	// GetOffset por tick x bots = ~45MB/s con 5 bots (paginas de 64KB del binned).
+	Conv_NameToString_Params.OutStr.Data.FreeEngine();
 
 	return Str;
 }
@@ -80,7 +85,8 @@ std::string FName::ToString()
 
 	auto Str = Conv_NameToString_Params.OutStr.ToString();
 
-	// Conv_NameToString_Params.OutStr.Free();
+	// OJO LEAK (raiz): ver version const arriba. Debe liberarse con FreeEngine.
+	Conv_NameToString_Params.OutStr.Data.FreeEngine();
 
 	return Str;
 }

@@ -91,10 +91,13 @@ namespace CustomBotMovement
 		return Bot.Pawn->Get(CharacterMovementOffset);
 	}
 
-	// Restaura el puntero PlayerState del pawn (lo borra UnPossess). El mesh y
-	// los sistemas de cosmeticos nativos leen Pawn->GetPlayerState(); sin esto
-	// la skin de bots "sin controller" nunca se aplica (InitializeCharacterParts
-	// falla con "PlayerState: None").
+	// Restaura el puntero PlayerState del pawn (lo borra UnPossess). Sin el
+	// puntero, InitializeCharacterParts falla y el sistema nativo de cosmeticos
+	// re-intenta cargar parts cada tick (leak ~100MB/s + UObjects creciendo,
+	// medido 19:12 con bots=5). Se llama SOLO al spawn del bot
+	// (EnableServerSimulation + primer tick de EnsureCMCActive). NO cada 30
+	// ticks: la re-escritura periodica re-triggeraba OnRep_PlayerState ->
+	// InitializeCharacterParts -> mesh reload.
 	static void RestorePawnPlayerState(CustomBot& Bot)
 	{
 		if (!Bot.Pawn || !Bot.PlayerState)
@@ -118,10 +121,8 @@ namespace CustomBotMovement
 		Bot.Controller->UnPossess();
 
 		// UnPossess() limpia Pawn->PlayerState (ACharacter::UnPossessed -> null).
-		// Sin el puntero el mesh no aplica la skin: AFortPlayerPawn::
-		// InitializeCharacterParts lee Pawn->GetPlayerState() y falla con
-		// "Failed to retrieve character parts. PlayerState: None". Se restaura
-		// el puntero para que el sistema de cosmeticos/tick del pawn lo vea.
+		// Se restaura el puntero para que el sistema de cosmeticos/tick del pawn
+		// lo vea (sin el, el mesh re-intenta cargar parts cada tick).
 		RestorePawnPlayerState(Bot);
 
 		bool bBitOK = false;
@@ -156,7 +157,7 @@ namespace CustomBotMovement
 	// RestorePawnPlayerState se throttlea a cada 30 ticks (~0.5s) por la
 	// misma razon: el write directo al pointer PlayerState puede triggerar
 	// OnRep_PlayerState -> InitializeCharacterParts -> mesh reload.
-	static void EnsureCMCActive(CustomBot& Bot)
+	static void EnsureCMCActive(CustomBot& Bot, bool bPerTickWork = true, bool bDoClaim = true)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
@@ -174,7 +175,11 @@ namespace CustomBotMovement
 			RestorePawnPlayerState(Bot);
 
 			// CLAIM-LIVE una sola vez: replica ServerAcknowledgePossession.
-			if (!Bot.bClaimLiveDone && Bot.Controller)
+			// Aislamiento del leak: bDoClaim=false (modo 6) omite el handshake
+			// (EnableServerSimulation documenta que no es necesario para la
+			// fisica) para ver si el claim es el que activa el tick nativo con
+			// leak de arena (~44MB/s con 5 bots).
+			if (bDoClaim && !Bot.bClaimLiveDone && Bot.Controller)
 			{
 				static auto AckFn = FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession");
 				if (AckFn)
@@ -202,11 +207,10 @@ namespace CustomBotMovement
 			LOG_INFO(LogBots, "[CustomBot] CMC initialized (one-time setup done)");
 		}
 
-		// --- Throttled: RestorePawnPlayerState cada 30 ticks (~0.5s) ---
-		// El write directo al pointer PlayerState puede re-triggerar
-		// OnRep_PlayerState -> InitializeCharacterParts -> mesh reload si el
-		// engine lo detecta. Con 30 ticks de cooldown se restaura el pointer
-		// despues de UnPossess sin saturar el loader.
+// --- DESHABILITADO: RestorePawnPlayerState se llama SOLO al spawn ---
+		// El restore periodico cada 30 ticks re-triggeraba OnRep_PlayerState ->
+		// InitializeCharacterParts -> mesh reload continuo.
+		/*
 		{
 			Bot.RestorePSCounter++;
 			if (Bot.RestorePSCounter >= 30)
@@ -215,19 +219,36 @@ namespace CustomBotMovement
 				Bot.RestorePSCounter = 0;
 			}
 		}
+		*/
+
+		// Aislamiento del leak (modo 5/6): con bPerTickWork=false se hace SOLO
+		// la inicializacion una vez (claim + activar CMC) y no se toca nada mas
+		// por tick. Si el leak (~44MB/s) sigue con los writes por tick ausentes,
+		// el driver es de ESTADO (el pawn live tickea nativo y fuga), no nuestros
+		// writes.
+		if (!bPerTickWork)
+			return;
 
 		// --- Cada tick: re-aplicar valores que el engine revierte ---
+		// LEAK RAIZ (fix): los offsets se cachean en static la primera vez.
+		// Antes se llamaba GetOffset() cada tick x cada bot, y GetOffset ->
+		// GetProperty escaneaba toda la cadena de propiedades llamando
+		// FName::ToString() por cada propiedad. ToString() filtraba un FString
+		// del engine por llamada (ver UnrealNames.cpp) -> ~45MB/s con 5 bots.
+		// Ahora el bloque por tick no escanea nada.
 		// Re-aplicar velocidades que el engine revierte. MaxWalkSpeed se sube a la
 		// velocidad de sprint (900): el CMC usa GetMaxSpeed() como tope al integrar,
 		// y sin esto las peticiones MoveTo sprint (900) quedaban capadas a 600.
-		auto SetFloat = [&](const char* Name, float Value) {
-			int Off = CME->GetOffset(Name, false);
-			if (Off != -1) *(float*)(CMEAddr + Off) = Value;
-		};
-		SetFloat("MaxWalkSpeed", SprintSpeed);
-		SetFloat("MaxWalkSpeedCrouched", WalkSpeed);
-		SetFloat("MaxFlySpeed", SprintSpeed);
-		SetFloat("MaxAcceleration", 2048.0f);
+		{
+			static int MaxWalkSpeedOff = CME->GetOffset("MaxWalkSpeed", false);
+			static int MaxWalkSpeedCrouchedOff = CME->GetOffset("MaxWalkSpeedCrouched", false);
+			static int MaxFlySpeedOff = CME->GetOffset("MaxFlySpeed", false);
+			static int MaxAccelerationOff = CME->GetOffset("MaxAcceleration", false);
+			if (MaxWalkSpeedOff != -1) *(float*)(CMEAddr + MaxWalkSpeedOff) = SprintSpeed;
+			if (MaxWalkSpeedCrouchedOff != -1) *(float*)(CMEAddr + MaxWalkSpeedCrouchedOff) = WalkSpeed;
+			if (MaxFlySpeedOff != -1) *(float*)(CMEAddr + MaxFlySpeedOff) = SprintSpeed;
+			if (MaxAccelerationOff != -1) *(float*)(CMEAddr + MaxAccelerationOff) = 2048.0f;
+		}
 
 		// Refuerzo de Walking si el juego relega el pawn no-live a Falling
 		// (misma tecnica que el DebugBot). Se salta mientras el bot es pasajero
@@ -236,23 +257,24 @@ namespace CustomBotMovement
 
 		if (!bInAircraft)
 		{
-			int ModeOff = CME->GetOffset("MovementMode", false);
+			static int ModeOff = CME->GetOffset("MovementMode", false);
 			if (ModeOff != -1 && *(int*)(CMEAddr + ModeOff) != 1)
 			{
 				*(int*)(CMEAddr + ModeOff) = 1;
-				int GroundOff = CME->GetOffset("GroundMovementMode", false);
+				static int GroundOff = CME->GetOffset("GroundMovementMode", false);
 				if (GroundOff != -1) *(int*)(CMEAddr + GroundOff) = 1;
 			}
 		}
 
 		// Desbloquear gates que Fortnite pone en pawns sin cliente
-		auto SetBool = [&](const char* Name, uint8_t Value) {
-			int Off = Bot.Pawn->GetOffset(Name, false);
-			if (Off != -1) *(uint8_t*)(__int64(Bot.Pawn) + Off) = Value;
-		};
-		SetBool("bSimGravityDisabled", 0);
-		SetBool("bDisableMovementAndTurnInPlace", 0);
-		SetBool("bAllowMovement", 1);
+		{
+			static int bSimGravityDisabledOff = Bot.Pawn->GetOffset("bSimGravityDisabled", false);
+			static int bDisableMovementOff = Bot.Pawn->GetOffset("bDisableMovementAndTurnInPlace", false);
+			static int bAllowMovementOff = Bot.Pawn->GetOffset("bAllowMovement", false);
+			if (bSimGravityDisabledOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bSimGravityDisabledOff) = 0;
+			if (bDisableMovementOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bDisableMovementOff) = 0;
+			if (bAllowMovementOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bAllowMovementOff) = 1;
+		}
 
 		// Los pawns simulados en servidor se replican a los clientes segun su
 		// NetUpdateFrequency. Con frecuencia baja el cliente ve a los bots

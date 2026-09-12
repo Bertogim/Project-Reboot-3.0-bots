@@ -23,7 +23,7 @@ public:
 private:
 	static DWORD WINAPI PollThreadProc(LPVOID lpParam);
 	static void PollLoop();
-	static bool PostJson(const std::string& path, const std::string& body, std::string& outResponse);
+	static long PostJson(const std::string& path, const std::string& body, std::string& outResponse);
 
 	static inline std::string HostId;
 	static inline std::string HostIp;

@@ -98,6 +98,8 @@ namespace CustomBotSpawner
 		// causar un pequeno stall periodico.
 		LogMemDiag(tc);
 
+		auto T0 = std::chrono::steady_clock::now();
+
 		if (AllCustomBots.empty())
 			return;
 
@@ -123,6 +125,30 @@ namespace CustomBotSpawner
 
 		for (size_t i = ToRemove.size(); i-- > 0;)
 			AllCustomBots.erase(AllCustomBots.begin() + ToRemove[i]);
+
+		// Diagnostico de CPU del tick de bots: cuantos ms de game-thread se
+		// comen los bots por frame (suma de EnsureCMCActive+Tick+Movimiento+IA
+		// de TODOS los bots). Se loguea cada ~300 ticks con la media; si la media
+		// ronda 10-15ms por frame el server nota lageo con pocos bots.
+		{
+			auto T1 = std::chrono::steady_clock::now();
+			auto Us = std::chrono::duration_cast<std::chrono::microseconds>(T1 - T0).count();
+
+			static uint64_t PerfAccumUs = 0;
+			static unsigned PerfFrames = 0;
+			PerfAccumUs += Us;
+			PerfFrames++;
+
+			unsigned FramesPerReport = 300;
+			if (PerfFrames >= FramesPerReport)
+			{
+double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
+			LOG_INFO(LogBots, "[perf] bots={} botTick avg={:.2f}ms/frame last={:.2f}ms (x{} frames)",
+				(int)AllCustomBots.size(), AvgMs, (double)Us / 1000.0, PerfFrames);
+			PerfAccumUs = 0;
+			PerfFrames = 0;
+			}
+		}
 	}
 
 	// Diagnostico de RAM + conteo de UObjects por clase (UNA sola pasada sobre
@@ -152,15 +178,24 @@ namespace CustomBotSpawner
 		// si la explosion con bots es de objetos del engine (armas/proyectiles/
 		// fx acumulandose) o solo de arena/buffers. El barrido por clase con
 		// GetName() estaba aqui; era EL leak del idle (std::string por objeto).
+		// OJO PERF: recorrer TODOS los slots (~618k) con GetObjectByIndex en el
+		// game thread era el hitch periodico de +1.1s (STAT_FrameTime +1148ms en
+		// el launcher.log). Con el leak ya resuelto el total se espacia a cada
+		// ~3000 ticks (~50s); la RAM del proceso se sigue viendo cada 300 ticks.
 		{
-			auto ObjectNum = ChunkedObjects ? ChunkedObjects->Num() : UnchunkedObjects ? UnchunkedObjects->Num() : 0;
-			int TotalUObjects = 0;
-			for (int i = 0; i < ObjectNum; i++)
+			static unsigned LastObjectCountTick = 0;
+			if (TickCount - LastObjectCountTick >= 3000)
 			{
-				if (GetObjectByIndex(i))
-					TotalUObjects++;
+				LastObjectCountTick = TickCount;
+				auto ObjectNum = ChunkedObjects ? ChunkedObjects->Num() : UnchunkedObjects ? UnchunkedObjects->Num() : 0;
+				int TotalUObjects = 0;
+				for (int i = 0; i < ObjectNum; i++)
+				{
+					if (GetObjectByIndex(i))
+						TotalUObjects++;
+				}
+				LOG_INFO(LogBots, "[memdiag] UObjects total={}", TotalUObjects);
 			}
-			LOG_INFO(LogBots, "[memdiag] UObjects total={}", TotalUObjects);
 		}
 
 		constexpr bool bScanUObjects = false;

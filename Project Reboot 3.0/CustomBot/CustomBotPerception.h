@@ -119,6 +119,115 @@ namespace CustomBotPerception
 		return Bot.Pawn->GetDistanceTo(Actor);
 	}
 
+	// --- Cache GLOBAL de barridos de mundo (perf con N bots) ------------------
+	// Cada finder (loot/cofres/jugadores/obstaculos) hacía su PROPIO
+	// GetAllActorsOfClass sobre el mundo entero por bot: con 50 bots eso eran
+	// ~50 barridos por bucket cada ScanCooldown -> solo el tick de bots costaba
+	// 130-211ms/frame. Aqui la barrida de cada clase se hace UNA vez a nivel
+	// global y se refresca cada SharedCooldown; todos los bots filtran sobre la
+	// MISMA lista compartida (solo distancia cuadrada, sin native calls frias).
+
+	inline constexpr float SharedCooldown = 0.5f;
+
+	struct SharedBucket
+	{
+		UClass* Cls = nullptr;
+		float Time = -1.0f;
+		TArray<AActor*> Actors;
+		std::vector<FVector> Locations; // misma posicion que Actors (cache para filtros baratos)
+	};
+
+	static std::vector<SharedBucket>& SharedBuckets()
+	{
+		static std::vector<SharedBucket> Buckets;
+		return Buckets;
+	}
+
+	// Lista compartida de actores de una clase: UNA barrida de mundo por
+	// SharedCooldown, usada por todos los bots. Cachea tambien la ubicacion de
+	// cada actor en el propio bucket: asi el filtro por distancia de cada bot
+	// NO hace llamadas nativas (GetActorLocation/GetDistanceTo son ProcessEvent).
+	static SharedBucket& SharedBucketByClass(UClass* Cls)
+	{
+		static SharedBucket Empty;
+
+		if (!Cls)
+			return Empty;
+
+		auto& Buckets = SharedBuckets();
+		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+
+		for (auto& Bucket : Buckets)
+		{
+			if (Bucket.Cls == Cls)
+			{
+				if (Bucket.Time < 0.0f || Now - Bucket.Time >= SharedCooldown)
+				{
+					if (Bucket.Actors.Num() > 0)
+						Bucket.Actors.FreeEngine();
+					Bucket.Actors = UGameplayStatics::GetAllActorsOfClass(GetWorld(), Cls);
+
+					Bucket.Locations.clear();
+					Bucket.Locations.reserve(Bucket.Actors.Num());
+					for (int i = 0; i < Bucket.Actors.Num(); ++i)
+						Bucket.Locations.push_back(Bucket.Actors.at(i)->GetActorLocation());
+
+					Bucket.Time = Now;
+				}
+				return Bucket;
+			}
+		}
+
+		SharedBuckets().push_back({ Cls, Now, UGameplayStatics::GetAllActorsOfClass(GetWorld(), Cls) });
+		auto& NewBucket = SharedBuckets().back();
+		NewBucket.Locations.reserve(NewBucket.Actors.Num());
+		for (int i = 0; i < NewBucket.Actors.Num(); ++i)
+			NewBucket.Locations.push_back(NewBucket.Actors.at(i)->GetActorLocation());
+		return NewBucket;
+	}
+
+	// Posicion global de un cofre, cacheada para el landing/el loot.
+	struct CachedChest
+	{
+		FVector Location;
+		bool bSearched;
+	};
+
+	// Cache GLOBAL de cofres del mundo (BuildingContainer). La IA lo usa para
+	// aterrizar cerca de un cofre (PickLandingPoint) y evitar caer en el mar o
+	// fuera del mapa. Refresco ligado al bucket global compartido.
+	static const std::vector<CachedChest>& CachedChests()
+	{
+		static std::vector<CachedChest> Chests;
+		static float LastBuild = -1.0f;
+
+		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+
+		if (LastBuild < 0.0f || Now - LastBuild >= SharedCooldown)
+		{
+			LastBuild = Now;
+			Chests.clear();
+
+			static auto BuildingContainerClass = FindObject<UClass>(L"/Script/FortniteGame.BuildingContainer");
+			auto& Bucket = SharedBucketByClass(BuildingContainerClass);
+
+			for (int i = 0; i < Bucket.Actors.Num(); ++i)
+			{
+				auto Container = Cast<ABuildingContainer>(Bucket.Actors.at(i));
+
+				if (!Container || Container->IsActorBeingDestroyed())
+					continue;
+
+				CachedChest Chest;
+				Chest.Location = Bucket.Locations[i];
+				Chest.bSearched = Container->IsAlreadySearched();
+				Chests.push_back(Chest);
+			}
+		}
+
+		return Chests;
+	}
+
 	// Puntuacion heuristica de VALOR de un pickup suelto (para elegir el que
 	// "mas le renta" coger, no solo el mas cercano): nivel (tier) del item +
 	// bonus por categoria de arma (sniper/launcher > pistola) y por consumible
@@ -180,7 +289,9 @@ namespace CustomBotPerception
 	}
 
 	// Barrido: obtiene una clase de actor dentro del radio alrededor del bot.
-	// Devuelve la TArray de actores de esa clase (sin filtrar por distancia).
+	// Usa el cache GLOBAL compartido (una sola barrida de mundo por clase y
+	// cooldown, no una por bot) y filtra por distancia cuadrada sobre las
+	// ubicaciones cacheadas (sin llamadas nativas).
 	static TArray<AActor*> GetAllActorsOfClassWithin(CustomBot& Bot, UClass* ActorClass, float Radius)
 	{
 		TArray<AActor*> Result;
@@ -188,24 +299,27 @@ namespace CustomBotPerception
 		if (!Bot.IsReady() || !ActorClass || !Bot.Pawn)
 			return Result;
 
-		static auto World = GetWorld();
-
-		TArray<AActor*> All = UGameplayStatics::GetAllActorsOfClass(World, ActorClass);
-
+		auto& Bucket = SharedBucketByClass(ActorClass);
 		FVector BotLocation = Bot.Pawn->GetActorLocation();
+		float RadiusSq = Radius * Radius;
 
-		for (int i = 0; i < All.Num(); ++i)
+		int N = Bucket.Actors.Num();
+		for (int i = 0; i < N; ++i)
 		{
-			AActor* Actor = All.at(i);
+			AActor* Actor = Bucket.Actors.at(i);
 
 			if (!Actor || Actor->IsActorBeingDestroyed())
 				continue;
 
-			if (DistanceToActor(Bot, Actor) <= Radius)
+			const FVector& L = Bucket.Locations[i];
+			float DX = L.X - BotLocation.X;
+			float DY = L.Y - BotLocation.Y;
+			float DZ = L.Z - BotLocation.Z;
+
+			if (DX * DX + DY * DY + DZ * DZ <= RadiusSq)
 				Result.Add(Actor);
 		}
 
-		All.FreeEngine();
 		return Result;
 	}
 

@@ -145,7 +145,9 @@ void HostClient::Register(const std::string& hostId, const std::string& ipOverri
 
 	std::string Response;
 
-	if (PostJson("/lawin/hosts/register", Body.dump(), Response))
+	long Status = PostJson("/lawin/hosts/register", Body.dump(), Response);
+
+	if (Status >= 200 && Status < 300)
 	{
 		bHostConnected = true;
 		LOG_INFO(LogMatchmaker, "[HostClient] Registered successfully with the backend.");
@@ -153,7 +155,7 @@ void HostClient::Register(const std::string& hostId, const std::string& ipOverri
 	else
 	{
 		bHostConnected = false;
-		LOG_WARN(LogMatchmaker, "[HostClient] Backend rejected the registration (raw: {}).", Response.substr(0, 200));
+		LOG_WARN(LogMatchmaker, "[HostClient] Backend rejected the registration (status {}, raw: {}).", Status, Response.substr(0, 200));
 	}
 }
 
@@ -200,7 +202,9 @@ void HostClient::PollLoop()
 
 		std::string Response;
 
-		if (PostJson("/lawin/hosts/poll", Body.dump(), Response))
+		long Status = PostJson("/lawin/hosts/poll", Body.dump(), Response);
+
+		if (Status >= 200 && Status < 300)
 		{
 			try
 			{
@@ -255,17 +259,24 @@ void HostClient::PollLoop()
 				LOG_WARN(LogMatchmaker, "[HostClient] Failed to parse poll response: {}", e.what());
 			}
 		}
+		else if (Status == 404)
+		{
+			// The backend was restarted and lost the in-memory host registry.
+			// Re-register so the matchmaker accepts our polls again.
+			LOG_WARN(LogMatchmaker, "[HostClient] Backend no me conoce (404), re-registrando el host...");
+			Register(HostId, HostIp, HostPort);
+		}
 
 		Sleep(2000);
 	}
 }
 
-bool HostClient::PostJson(const std::string& path, const std::string& body, std::string& outResponse)
+long HostClient::PostJson(const std::string& path, const std::string& body, std::string& outResponse)
 {
 	static CURL* Curl = curl_easy_init();
 
 	if (!Curl)
-		return false;
+		return 0;
 
 	PostResponse Response;
 
@@ -290,17 +301,14 @@ bool HostClient::PostJson(const std::string& path, const std::string& body, std:
 	if (PerformResult != CURLE_OK)
 	{
 		LOG_WARN(LogMatchmaker, "[HostClient] POST {} failed: {}", path, curl_easy_strerror(PerformResult));
-		return false;
+		return 0;
 	}
 
 	curl_easy_getinfo(Curl, CURLINFO_RESPONSE_CODE, &Response.StatusCode);
+	outResponse = Response.Body;
 
 	if (Response.StatusCode < 200 || Response.StatusCode >= 300)
-	{
 		LOG_WARN(LogMatchmaker, "[HostClient] POST {} returned status {}", path, Response.StatusCode);
-		return false;
-	}
 
-	outResponse = Response.Body;
-	return true;
+	return Response.StatusCode;
 }

@@ -1421,6 +1421,18 @@ static inline void MainUI()
 
 			ImGui::Separator();
 
+			if (ImGui::Button("Teleport to Random Bot"))
+			{
+				CustomBotManager::QueueTeleportToRandomBot();
+			}
+
+			ImGui::SameLine();
+
+			if (ImGui::Button("Bring Random Bot"))
+			{
+				CustomBotManager::QueueBringRandomBot();
+			}
+
 			auto Counts = CustomBotManager::GetStateCounts();
 
 			ImGui::Text("Total: %d | Alive: %d | Dead: %d",

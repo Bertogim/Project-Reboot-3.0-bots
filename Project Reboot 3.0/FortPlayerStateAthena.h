@@ -97,6 +97,17 @@ public:
 		return ReadBitfieldValue(bInAircraftOffset, bInAircraftFieldMask);
 	}
 
+	// Desmonta/sube al bus del bot manualmente. El juego sigue tratando al pawn
+	// como pasajero mientras bInAircraft=true (seats/replicacion del avion):
+	// el FALLBACK del bot lo teletransportaba pero NO limpiaba el flag y el bot
+	// quedaba colgado a Z~80000 sin caer (Leak/hitch + "put character here").
+	void SetInAircraft(bool bNewInAircraft)
+	{
+		static auto bInAircraftOffset = GetOffset("bInAircraft");
+		static auto bInAircraftFieldMask = GetFieldMask(GetProperty("bInAircraft"));
+		return SetBitfieldValue(bInAircraftOffset, bInAircraftFieldMask, bNewInAircraft);
+	}
+
 	bool HasThankedBusDriver()
 	{
 		static auto bThankedBusDriverOffset = GetOffset("bThankedBusDriver");

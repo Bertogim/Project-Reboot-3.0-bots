@@ -252,10 +252,12 @@ namespace CustomBotMovement
 
 		// Refuerzo de Walking si el juego relega el pawn no-live a Falling
 		// (misma tecnica que el DebugBot). Se salta mientras el bot es pasajero
-		// del bus (el avion lo monta en Skydive/Falling; no tocar el modo).
+		// del bus (el avion lo monta en Skydive/Falling; no tocar el modo) y
+		// mientras caiga del bus (bInAirPhase): forzar Walking en el aire era lo
+		// que dejaba a los bots CONGELADOS flotando a ~80km sin gravedad.
 		bool bInAircraft = Bot.PlayerState && Bot.PlayerState->IsInAircraft();
 
-		if (!bInAircraft)
+		if (!bInAircraft && !Bot.bInAirPhase)
 		{
 			static int ModeOff = CME->GetOffset("MovementMode", false);
 			if (ModeOff != -1 && *(int*)(CMEAddr + ModeOff) != 1)

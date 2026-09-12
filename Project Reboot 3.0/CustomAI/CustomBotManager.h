@@ -11,6 +11,8 @@
 
 #include "CustomBotAI.h"
 #include "CustomBot/CustomBotSpawner.h"
+#include "NetDriver.h"
+#include "FortPlayerControllerAthena.h"
 
 namespace CustomBotManager
 {
@@ -28,6 +30,12 @@ namespace CustomBotManager
 	inline std::atomic<int> PendingSpawnCount = 0;
 	inline std::atomic<bool> bPendingFillTo100 = false;
 	inline std::atomic<bool> bPendingRemoveAll = false;
+
+	// Teleports pedidos desde la GUI (hilo render). Se ejecutan en el game
+	// thread via ProcessPendingOps: mover Fort actors fuera del game thread
+	// crashea, igual que al spawnear.
+	inline std::atomic<bool> bPendingTeleportToBot = false;   // jugador -> bot aleatorio
+	inline std::atomic<bool> bPendingBringRandomBot = false;  // bot aleatorio -> jugador
 
 	// --- Acceso a las instancias ----------------------------------------------
 
@@ -201,6 +209,140 @@ namespace CustomBotManager
 		LOG_INFO(LogBots, "[BotManager] Queued RemoveAllBots");
 	}
 
+	// Encola "teletransportar al jugador real al bot aleatorio".
+	static void QueueTeleportToRandomBot()
+	{
+		bPendingTeleportToBot = true;
+		LOG_INFO(LogBots, "[BotManager] Queued TeleportToRandomBot");
+	}
+
+	// Encola "traer un bot aleatorio junto al jugador real".
+	static void QueueBringRandomBot()
+	{
+		bPendingBringRandomBot = true;
+		LOG_INFO(LogBots, "[BotManager] Queued BringRandomBot");
+	}
+
+	// El primer jugador REAL de la lista de conexiones (salta los controllers
+	// de los bots custom).
+	static AFortPlayerControllerAthena* GetFirstRealPlayerController()
+	{
+		auto World = GetWorld();
+		if (!World)
+			return nullptr;
+
+		auto NetDriver = World->GetNetDriver();
+		if (!NetDriver)
+			return nullptr;
+
+		auto& Conn = NetDriver->GetClientConnections();
+
+		for (int i = 0; i < Conn.Num(); ++i)
+		{
+			auto Connection = Conn.at(i);
+			if (!Connection)
+				continue;
+
+			auto Controller = Connection->GetPlayerController();
+			if (!Controller)
+				continue;
+
+			bool bIsBotController = false;
+			auto& Bots = GetBots();
+			for (size_t b = 0; b < Bots.size(); ++b)
+			{
+				if (Bots[b].Controller == Controller)
+				{
+					bIsBotController = true;
+					break;
+				}
+			}
+
+			if (!bIsBotController)
+				return Cast<AFortPlayerControllerAthena>(Controller);
+		}
+
+		return nullptr;
+	}
+
+	// Un bot vivo aleatorio con pawn valido.
+	static CustomBot* GetRandomAliveBot()
+	{
+		auto Alive = GetAliveBots();
+
+		std::vector<CustomBot*> Valid;
+		for (size_t i = 0; i < Alive.size(); ++i)
+		{
+			if (Alive[i] && Alive[i]->Pawn)
+				Valid.push_back(Alive[i]);
+		}
+
+		if (Valid.empty())
+			return nullptr;
+
+		return Valid[std::rand() % Valid.size()];
+	}
+
+	// Teletransporta el pawn del primer jugador real hasta un bot aleatorio.
+	static void TeleportToRandomBot()
+	{
+		auto* PC = GetFirstRealPlayerController();
+
+		if (!PC || !PC->GetPawn())
+		{
+			LOG_WARN(LogBots, "[BotManager] TeleportToRandomBot: no real player pawn");
+			return;
+		}
+
+		auto* Bot = GetRandomAliveBot();
+
+		if (!Bot || !Bot->Pawn)
+		{
+			LOG_WARN(LogBots, "[BotManager] TeleportToRandomBot: no alive bot with pawn");
+			return;
+		}
+
+		FVector Dest = Bot->Pawn->GetActorLocation();
+		Dest.X += 250.0f;
+		Dest.Y += 250.0f;
+		Dest.Z += 100.0f;
+
+		PC->GetPawn()->TeleportTo(Dest, PC->GetPawn()->GetActorRotation());
+
+		LOG_INFO(LogBots, "[BotManager] Teleported player to bot at ({:.0f},{:.0f},{:.0f})",
+			Dest.X, Dest.Y, Dest.Z);
+	}
+
+	// Teletransporta un bot aleatorio hasta el pawn del primer jugador real.
+	static void BringRandomBotToPlayer()
+	{
+		auto* PC = GetFirstRealPlayerController();
+
+		if (!PC || !PC->GetPawn())
+		{
+			LOG_WARN(LogBots, "[BotManager] BringRandomBot: no real player pawn");
+			return;
+		}
+
+		auto* Bot = GetRandomAliveBot();
+
+		if (!Bot || !Bot->Pawn)
+		{
+			LOG_WARN(LogBots, "[BotManager] BringRandomBot: no alive bot with pawn");
+			return;
+		}
+
+		FVector Dest = PC->GetPawn()->GetActorLocation();
+		Dest.X += 250.0f;
+		Dest.Y += 250.0f;
+		Dest.Z += 100.0f;
+
+		Bot->Pawn->TeleportTo(Dest, Bot->Pawn->GetActorRotation());
+
+		LOG_INFO(LogBots, "[BotManager] Brought random bot to player at ({:.0f},{:.0f},{:.0f})",
+			Dest.X, Dest.Y, Dest.Z);
+	}
+
 	// Spawnea un bot en la posicion dada (como un jugador real) y le crea su IA.
 	// Devuelve nullptr si fallo.
 	static CustomBot* SpawnBotAt(const FVector& Location, const FRotator& Rotation)
@@ -343,6 +485,19 @@ namespace CustomBotManager
 		{
 			RemoveAllBots();
 			return; // un op por tick; el spawn pendiente se atiende al siguiente
+		}
+
+		// Teleports pedidos desde la GUI (un op por tick).
+		if (bPendingTeleportToBot.exchange(false))
+		{
+			TeleportToRandomBot();
+			return;
+		}
+
+		if (bPendingBringRandomBot.exchange(false))
+		{
+			BringRandomBotToPlayer();
+			return;
 		}
 
 		if (bPendingFillTo100.exchange(false))

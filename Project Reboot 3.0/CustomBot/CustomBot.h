@@ -77,6 +77,12 @@ public:
 	// OnRep_PlayerState -> InitializeCharacterParts -> FortCustomizationAssetLoader.
 	unsigned RestorePSCounter = 0;
 
+	// El bot esta en el AIRE (bajando del bus / planeando): EnsureCMCActive NO
+	// debe forzarle MovementMode=Walking mientras eso dure, o queda congelado
+	// a ~80km flotando (modo Walking en el aire = sin gravedad). Se pone a
+	// true al ejectar/saltar y a false al aterrizar (OnLanded).
+	bool bInAirPhase = false;
+
 	// --- Probe de movimiento (diagnostico) ----------------------------------
 	// CustomBotMovement::EnsureCMCActive registra cada ventana de ~60 ticks el
 	// desplazamiento horizontal mientras hay MoveTo activo (log [mprobe]), para

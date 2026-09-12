@@ -152,10 +152,9 @@ struct BotAIContext
 	int StrafeDir = 1;         // +1 derecha / -1 izquierda (evita orbitar)
 
 	// Battle bus / glider
-	float JumpDelay = 0.0f;    // momento (tiempo) en que decide saltar
+	float JumpDelay = 0.0f;    // momento (tiempo) en que decide saltar del bus
 	bool bFiredGlider = false; // ya desplego el glider
-	bool bJumpAttempted = false; // ya envio la senal nativa de salto (Character::Jump)
-	float JumpAttemptTime = 0.0f;  // momento del intento (para el fallback de 5s)
+	float InBusSince = -1.0f;  // momento en que entro en InBus (stagger del eject)
 
 	// Combate
 	bool bIsFiring = false;
@@ -251,11 +250,12 @@ namespace CustomBotAI
 		}
 	}
 
-	// Punto de aterrizaje / destino: repartido alrededor del centro de la zona
-	// final, con la Z del centro de la zona (los jugadores eligen "donde va la
-	// zona"). La variacion aleatoria reparte a los bots (no saltan todos al mismo
-	// sitio) y el sesgo de personalidad acerca/aleja del centro (agresivo vs
-	// defensivo, Seccion 3).
+	// Punto de aterrizaje / destino. PRIMERO intenta aterrizar CERCA DE UN COFRE
+	// sin abrir dentro de la zona segura prevista: los cofres estan en POIs y
+	// edificios DENTRO del mapa, asi que el bot toca suelo con loot a la mano y
+	// ya no cae en mitad del mar / fuera del mapa (el mprobe mostraba bots en
+	// Looting con 'moved 0u': el destino aleatorio no era alcanzable a pie).
+	// Si no hay cofres cerca, fallback a la logica aleatoria original.
 	static FVector PickLandingPoint(float Aggression, float RiskTolerance)
 	{
 		FVector Center = GetSafeZoneCenter();
@@ -263,9 +263,47 @@ namespace CustomBotAI
 		if ((Center | Center) == 0.0f)
 			Center = FVector{};
 
-		// Radio de desviacion: un bot agresivo (Aggression ~0.85) aterriza cerca
-		// del centro; uno cauto (RiskTolerance ~0.3) se dispersa hacia zonas
-		// tranquilas. Rango resultante: ~850..5000 unidades.
+		// Intento 1: aterrizar junto a un cofre sin abrir (mas cercano al centro,
+		// sesgado por personalidad: agresivo -> zona caliente cerca del centro).
+		if (CustomBotPerception::BotTime() > 0.0f)
+		{
+			const auto& Chests = CustomBotPerception::CachedChests();
+			std::vector<FVector> Candidates;
+			std::vector<FVector> HotCandidates;
+
+			float SelectRadius = 5000.0f + RiskTolerance * 3000.0f;
+
+			for (const auto& Chest : Chests)
+			{
+				if (Chest.bSearched)
+					continue;
+
+				float DX = Chest.Location.X - Center.X;
+				float DY = Chest.Location.Y - Center.Y;
+				float D = FMath::Sqrt(DX * DX + DY * DY);
+
+				if (D <= SelectRadius)
+				{
+					Candidates.push_back(Chest.Location);
+					if (D <= 3000.0f)
+						HotCandidates.push_back(Chest.Location);
+				}
+			}
+
+			std::vector<FVector>& Pool = (Aggression >= 0.6f && !HotCandidates.empty()) ? HotCandidates : Candidates;
+
+			if (!Pool.empty())
+			{
+				FVector Landing = Pool[std::rand() % Pool.size()];
+
+				if (Landing.Z <= 0.0f)
+					Landing.Z = 0.0f;
+
+				return Landing;
+			}
+		}
+
+		// Fallback: la logica aleatoria original alrededor del centro.
 		float BaseRadius = 3000.0f;
 		float RadiusScale = 1.0f - (Aggression * 0.4f) + ((1.0f - RiskTolerance) * 0.4f);
 		RadiusScale = FMath::Clamp(RadiusScale, 0.35f, 1.6f);
@@ -278,7 +316,6 @@ namespace CustomBotAI
 						Center.Y + FMath::Sin(Angle) * Radius,
 						0.0f};
 
-		// Z: la del centro del mapa como referencia (el CMC detecta el suelo).
 		Landing.Z = Center.Z;
 
 		if (Landing.Z <= 0.0f)
@@ -315,6 +352,8 @@ namespace CustomBotAI
 
 			Ctx.State = CustomBotAI::IsInAircraftPhase() ? EBotState::InBus : EBotState::Looting;
 			Ctx.bHasLandingPoint = false;
+			Ctx.InBusSince = -1.0f;
+			Bot.bInAirPhase = false;
 
 			if (Ctx.State == EBotState::InBus)
 			{

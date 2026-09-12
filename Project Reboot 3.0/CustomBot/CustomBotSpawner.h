@@ -66,6 +66,87 @@ namespace CustomBotSpawner
 	// Diagnostico de RAM + conteo UObjects (definido debajo; TickAll lo llama).
 	static void LogMemDiag(unsigned TickCount);
 
+	// Muerte de un bot: completa a mano el flujo que el engine no ejecuta para
+	// estos bots simulados (el pawn muere por danio y SE DESTRUYE solo, sin
+	// ClientOnPawnDied/RemoveFromAlivePlayers -> sin kill feed ni decremento de
+	// PlayersLeft). Definida abajo, antes de TickAll.
+	// Muerte de un bot: completa a mano el flujo que el engine no ejecuta para
+	// estos bots simulados (el pawn muere por danio y SE DESTRUYE solo, sin
+	// ClientOnPawnDied/RemoveFromAlivePlayers -> sin kill feed ni decremento de
+	// PlayersLeft). Secuencia: 1) guard anti-doble proceso, 2) killer desde el
+	// Instigator del pawn muerto (ultimo que hizo danio; si no hay, solo se
+	// decrementa vivos), 3) kill feed al killer con ClientReportKill (espejo de
+	// ClientOnPawnDiedHook) + score, 4) --PlayersLeft + OnRep, 5) quitar de
+	// GetAlivePlayers, 6) limpiar actores con Destroy().
+	static void HandleBotDeath(CustomBot& Bot)
+	{
+		if (Bot.bDeathHandled)
+			return;
+		Bot.bDeathHandled = true;
+
+		auto DeadPawn = Bot.Pawn;
+		auto DeadPlayerState = Bot.PlayerState
+			? Cast<AFortPlayerStateAthena>(Bot.PlayerState)
+			: (Bot.Controller ? Cast<AFortPlayerStateAthena>(Bot.Controller->GetPlayerState()) : nullptr);
+
+		APawn* KillerPawn = nullptr;
+		if (DeadPawn)
+		{
+			static int InstigatorOffset = -2;
+			if (InstigatorOffset == -2)
+				InstigatorOffset = DeadPawn->GetOffset("Instigator", false);
+			if (InstigatorOffset != -1)
+				KillerPawn = Cast<AFortPlayerPawn>(DeadPawn->Get<APawn*>(InstigatorOffset));
+		}
+		auto KillerPlayerState = KillerPawn
+			? Cast<AFortPlayerStateAthena>(KillerPawn->GetPlayerState())
+			: nullptr;
+
+		LOG_INFO(LogBots, "[CustomBot] [death] pawn={} ps={} dbno={} hp={:.0f} killer pawn={} ps={}",
+			bool(DeadPawn), bool(DeadPlayerState),
+			DeadPawn ? DeadPawn->IsDBNO() : false,
+			DeadPawn ? (double)DeadPawn->GetHealth() : 0.0,
+			bool(KillerPawn), bool(KillerPlayerState));
+
+		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
+		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+
+		if (KillerPlayerState && KillerPlayerState != DeadPlayerState)
+		{
+			if (MemberOffsets::FortPlayerStateAthena::KillScore != -1)
+				KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::KillScore)++;
+			if (MemberOffsets::FortPlayerStateAthena::TeamKillScore != -1)
+				KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::TeamKillScore)++;
+
+			if (DeadPlayerState)
+				KillerPlayerState->ClientReportKill(DeadPlayerState);
+		}
+
+		if (GameState)
+		{
+			GameState->GetPlayersLeft() = FMath::Clamp(GameState->GetPlayersLeft() - 1, 0, 9999);
+			GameState->OnRep_PlayersLeft();
+		}
+
+		if (GameMode)
+		{
+			auto& Alive = GameMode->GetAlivePlayers();
+			for (int i = 0; i < Alive.Num(); ++i)
+			{
+				if (Alive.At(i) == Bot.Controller)
+				{
+					Alive.RemoveAt(i, 1);
+					break;
+				}
+			}
+		}
+
+		LOG_INFO(LogBots, "[CustomBot] [death] done playersLeft={} botsLeft={}",
+			GameState ? GameState->GetPlayersLeft() : -1, (int)AllCustomBots.size());
+
+		Bot.Destroy();
+	}
+
 	static void TickAll()
 	{
 		static unsigned TickAllCounter = 0;
@@ -109,14 +190,20 @@ namespace CustomBotSpawner
 		{
 			CustomBot& Bot = AllCustomBots[i];
 
-			if (!Bot.IsValidActor())
+			// Muerte del bot: pawn destruido por el engine al matarlo O salud
+			// reducida a 0. DBNO cuenta como vivo (puede revivir / sigue en los
+			// vivos). El flow nativo de muerte no corre para estos bots, asi que
+			// lo completa HandleBotDeath; luego se saca del vector.
 			{
-				LOG_INFO(LogBots, "[CustomBot] [tickall] INVALID bot idx={} controller={} pawn={}, removing",
-					i, bool(Bot.Controller), bool(Bot.Pawn));
+				auto Life = Bot.GetLifeState();
+				bool bDead = !Bot.IsValidActor() || Life == CBT::ELifeState::Dead;
 
-				Bot.Destroy();
-				ToRemove.push_back(i);
-				continue;
+				if (bDead)
+				{
+					HandleBotDeath(Bot);
+					ToRemove.push_back(i);
+					continue;
+				}
 			}
 
 			// SEH protection per-bot: si un bot crashea, lo saltamos sin matar el juego

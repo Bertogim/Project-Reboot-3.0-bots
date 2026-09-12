@@ -38,6 +38,14 @@ public:
 
 	bool bInitialized = false;
 
+	// Muerte ya gestionada (anti-doble-proceso). El engine NO ejecuta el flujo
+	// nativo de muerte para estos bots simulados (SetIsBot(false)+UnPossess):
+	// al matar a un bot su pawn se destruye y TickAll lo ve "invalid". HandleBotDeath
+	// (CustomBotSpawner) completa la muerte a mano (kill feed + decremento de
+	// PlayersLeft) UNA sola vez; este flag evita que ticks siguientes re-procesen
+	// al bot ya con los punteros a nullptr.
+	bool bDeathHandled = false;
+
 	// --- Estado de movimiento (pipeline MoveTo + UpdateMovement por tick) ----
 	// Almacena la peticion de movimiento activa; CustomBotMovement::UpdateMovement
 	// (llamado desde CustomBotSpawner::TickAll en el tick del servidor) la consume.

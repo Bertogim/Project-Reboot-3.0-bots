@@ -24,14 +24,30 @@ namespace CustomBotAI
 	}
 
 	// Centro de la zona segura actual/objetivo (best-effort).
-	// Prefiere el centro de la zona final (SafeZoneLocations[last]); si no hay
-	// datos, devuelve FVector().
+	// Prefiere la POSICION del indicador de zona actual (el circulo real que ve
+	// el jugador en el mapa, usado ya por GetSafeZoneRadius para el radio); si
+	// no, el centro de la zona FINAL (SafeZoneLocations[last]). El indicador es
+	// la fuente mas fiable: cuando SafeZoneLocations llega vacio (algunas
+	// versiones) GetSafeZoneCenter devolvia (0,0,0) y con el fallback
+	// GetSafeZoneCenter(bot) la distancia al "centro" era siempre 0, asi que
+	// IsOutsideSafeZone nunca daba true y los bots NO rotaban aunque la storm
+	// les estuviera encima (observado: bots yendo al loot en vez de a la zona).
 	static FVector GetSafeZoneCenter()
 	{
 		auto GameMode = GetGameMode();
 
 		if (GameMode)
 		{
+			auto SafeZoneIndicator = GameMode->GetSafeZoneIndicator();
+
+			if (SafeZoneIndicator && !SafeZoneIndicator->IsActorBeingDestroyed())
+			{
+				FVector IndicatorLoc = SafeZoneIndicator->GetActorLocation();
+
+				if ((IndicatorLoc | IndicatorLoc) > 0.0f)
+					return IndicatorLoc;
+			}
+
 			static auto SafeZoneLocationsOffset = GameMode->GetOffset("SafeZoneLocations", false);
 
 			if (SafeZoneLocationsOffset != -1)
@@ -59,14 +75,36 @@ namespace CustomBotAI
 		return Center;
 	}
 
-	// Radio estimado de la zona segura actual. Es best-effort: si no podemos leer
-	// el radio del indicador, devolvemos un valor por defecto grande (la zona es
-	// enorme a principio de partida) para no forzar rotaciones innecesarias.
-	static float GetSafeZoneRadius()
+	// Radio de la zona segura ACTUAL (el indicador del mapa, "SafeZoneIndicator"
+// del GameMode). La heuristica vieja devolvia 90000 fijo: con el circulo ya
+// encogido los bots estaban "dentro" del falso radio y nadie rotaba, asi que
+// la tormenta los mataba sin intentar huir. Ahora se lee el Radius real; si no
+// esta disponible (phase temprana / sin indicador) se cae al default grande.
+static float GetSafeZoneRadius()
+{
+	auto GameMode = GetGameMode();
+
+	if (GameMode)
 	{
-		constexpr float DefaultRadius = 90000.0f;
-		return DefaultRadius;
+		auto SafeZoneIndicator = GameMode->GetSafeZoneIndicator();
+
+		if (SafeZoneIndicator && !SafeZoneIndicator->IsActorBeingDestroyed())
+		{
+			static auto RadiusOffset = SafeZoneIndicator->GetOffset("Radius", false);
+
+			if (RadiusOffset != -1)
+			{
+				float R = SafeZoneIndicator->Get<float>(RadiusOffset);
+
+				if (R > 0.0f)
+					return R;
+			}
+		}
 	}
+
+	constexpr float DefaultRadius = 90000.0f;
+	return DefaultRadius;
+}
 
 	// Devuelve true si el bot esta fuera de la zona segura actual (frente a la
 	// tormenta). Se asume un radio heuristico; el efecto neto es que rota hacia

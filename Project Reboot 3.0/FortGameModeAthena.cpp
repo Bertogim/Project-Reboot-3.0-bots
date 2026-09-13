@@ -1286,7 +1286,14 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 
 	if (!bShouldSpreadTeams)
 	{
-		if (CurrentTeamMembers >= MaxSquadSize)
+		// Los BOTS custom SIEMPRE van a equipos individuales: si la playlist
+		// tuviera un MaxSquadSize gigante (creative/playground) TODOS los bots
+		// acabarian en el MISMO equipo (aliados entre ellos y con el jugador;
+		// sin peleas entre bots y el servidor con grupos raros). Con squad size
+		// efectivo = 1 para bots, cada bot es su propio equipo.
+		int BotSquadSize = bIsBot ? 1 : MaxSquadSize;
+
+		if (CurrentTeamMembers >= BotSquadSize)
 		{
 			NextTeamIndex++;
 			CurrentTeamMembers = 0;

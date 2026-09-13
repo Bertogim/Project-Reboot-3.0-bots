@@ -1358,3 +1358,77 @@ Cuando termines, proporciona:
 NO afirmar que algo funciona si no se ha compilado/probado.
 
 Si alguna parte no puede implementarse por una limitación real del código de Project Reboot 3.0, indicarlo claramente y explicar exactamente qué falta.
+
+---
+
+# 45. PROBLEMAS ARREGLADOS (sesión de prueba real)
+
+Problemas observados en partida real con la DLL compilada y las soluciones aplicadas en código:
+
+## 45.1 Bots atascados en paredes / terreno elevado sin romper
+
+- `CustomBotPerception::FindFrontObstacle`: antes `TryBreakFront` usaba `FindNearestObstacle` (UN único candidato global). Si el obstáculo más cercano NO estaba delante (un árbol al lado), ignoraba la pared de delante y no picaba. Ahora elige entre TODOS los `BuildingSMActor` los que cumplen el cono frontal horizontal (dot >= MinDot).
+- `TryBreakFront` además filtra por destructibles (`CanDestroy`): el suelo del terreno a los pies es normalmente el "obstáculo más cercano" del cono pero no bloquea el paso.
+- Etapa 4 del desatascado: agotados los 8 swings del pico sin abrir paso, se fuerza `DestroyTarget` sobre `Bot.UnstickTarget` (destrucción real) antes de pasar a construir.
+
+## 45.2 Bots mirando al cielo/al suelo (+-45) salvo disparando
+
+- `CustomBotMovement::SetRotation` clampa el Pitch a [-45, 45] a menos que `Bot.bFiringWeapon` sea true.
+- `Campo bFiringWeapon` (CustomBot.h): true en `CustomBotCombat::FireWeapon`, false en `StopFiring`. Combate y melee lo desactivan cuando aplica.
+
+## 45.3 Toggle "pathfinding solo si atascado (10s)"
+
+- `bCustomBotPathfindingFallback` (CustomBotTypes.h, default false) + checkbox en `gui.h` (pestaña Bots).
+- `UpdateMovement` usa navmesh SOLO si `bCustomBotPathfinding || (bCustomBotPathfindingFallback && StuckPersistTime >= 10s)`.
+- `AdvanceStuckDetector` mide progreso NETO hacia el goal real (inmune a los tirones del desatascado); `TickUnstuck` no interfiere con la ruta navmesh cuando ya hay waypoints.
+- IMPORTANTE: cuando el toggle está OFF la IA debe igualmente intentar desatascarse (saltar/romper/construir): eso lo hace `CustomBotBreak` (máquina física). NO es exclusivo del navmesh.
+
+## 45.4 Bots que suben a cofres en alto / loot en 2º piso
+
+- `DoLooting` (CustomBotAI_Midgame): si el cofre está +260u por encima, construye rampas cada ~1.5s (escalera) en vez de quedarse debajo mirando hacia arriba.
+- `TryResolveBlockedPath` se llama en las ramas de cofre y pickup (construir/destruir/saltar, Sec. 6/7/14).
+
+## 45.5 Equipos: bots todos en el mismo squad (creative/playground)
+
+- `Athena_PickTeamHook`: en playlists de equipos grandes los bots custom SIEMPRE reciben equipo propio (squad size efectivo = 1); sin esto el juego los mete a todos en el mismo equipo y no se pelean.
+
+## 45.6 Bots NO se detectan entre sí (solo seguían al jugador)
+
+- CAUSA: al activar la simulación de servidor (`SetIsBot(false)` + `UnPossess`), el Pawn de un bot pierde su Controller. `GetPlayerStateOf(Pawn)` usaba `Pawn->GetController()->GetPlayerState()` → nullptr → el bot se descartaba en `RefreshPlayerCache` (no es aliado ni enemigo). El jugador humano sí tenía controller, por eso solo lo veían a él.
+- FIX: `GetPlayerStateOf` (y `GetActorTeam`) leen la propiedad `PlayerState` directamente del Pawn cuando no hay controller (restaurada al spawn por `RestorePawnPlayerState`).
+
+## 45.7 Bots que persiguen pero no atacan / no se acercan
+
+- El rango efectivo de disparo era `Dist <= 30000`u: el bot se quedaba parado disparando a 300 m sin acercase. Ahora `bInRange = Dist <= 6000` u y se aproxima hasta ~550 u antes de disparar.
+- Sin arma real equipada: ataca a melee hasta `kMeleeRange` (260 u).
+
+## 45.8 Bots atascados que no rotan a la safe zone
+
+- CAUSA: `Decide` pasaba a `Rotating` (destino = centro de zona) pero la máquina de desatascado física seguía restaurando su `UnstickGoal` VIEJO con `MoveTo` cada tick, piseando el nuevo destino: el bot seguía empujando contra la pared "en falso".
+- FIX: `CustomBotMovement::MoveTo`, al cambiar el destino, CANCELA la máquina de desatascado (UnstickStage/Time/Swings/Goal/Detour/Ramp/Target = 0) y el detector de progreso. Cada cambio de destino re-dispara el detector limpio hacia el nuevo objetivo.
+
+## 45.9 Centro de la safe zone no fiable
+
+- `GetSafeZoneCenter` (CustomBotAI_SafeZone): si `SafeZoneLocations` llega vacío, con el fallback `GetSafeZoneCenter(bot)` la distancia al "centro" era siempre 0 → `IsOutsideSafeZone` nunca daba true → los bots NO rotaban. Ahora prefiere la POSICIÓN del indicador de zona actual (el círculo real del mapa); fallback a `SafeZoneLocations[last]`.
+
+## 45.10 Bots que dan vueltas sin avanzar (wander)
+
+- `PickWanderTarget` (CustomBotAI_Midgame): el ángulo era totalmente aleatorio → zumbaban alrededor de su posición. Ahora el paseo se sesga en un cono de ±60º hacia el objetivo (safe zone), distancia 400..1300 u.
+
+## 45.11 Bots atascados 10s sin saltar
+
+- CAUSA: bajo simulación de servidor (UnPossess + bRunPhysicsWithNoController) el Actor Tick del Character no está garantizado, y `Character::Jump` solo marca `bPressedJump` para que ESE tick lo convierta en salto → el bot se quedaba pegado al suelo.
+- FIX: `CustomBotMovement::Jump` ahora aplica un impulso real de física: `LaunchCharacter` (bZOverride) + patada directa a `Velocity.Z` del CMC + `Character.Jump` nativo como refuerzo.
+
+## 45.12 Escalera de rampas para superar muros (toggle desactivado)
+
+- Etapa 6 del desatascado (`CustomBotBreak`): construye HASTA 3 rampas apiladas (cada una en la celda delante con el Z del terreno; al estar el bot ya subido en la anterior, las siguientes se apilan) y remata con un SUELO (`BuildFlatOnTop`) para poder cruzar. Solo si ninguna opción avanza se pasa a rodear (etapa 7).
+
+## 45.13 Compilación
+
+- FIX previo: `CustomBotAI_Midgame.h` incluía `CustomBotBreak.h` con ruta errónea → `include "CustomBot/CustomBotBreak.h"`.
+- FIX previo: `CustomBotAI_Bus.h` llamaba `StartSkydive` (C3861) antes de su definición en un namespace → forward declaration al inicio.
+
+## 45.14 Pendiente / restarter
+
+- El restarter (`/media/bertogim/NVMEcosas/SERVERS Y BOTS/LAN-CI/Reboot-Launcher`) sigue dando problemas; diagnosticarlo por separado (proceso del servidor/client o gestión de reinicios).

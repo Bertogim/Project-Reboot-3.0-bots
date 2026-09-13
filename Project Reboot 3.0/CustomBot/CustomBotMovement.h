@@ -375,6 +375,14 @@ namespace CustomBotMovement
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
 
+		// Limitar la mirada vertical a +-45 grados salvo cuando el bot este
+		// disparando con un arma (o agitando el pico): en combate/melee necesita
+		// apuntar al enemigo/estructura aunque este en alto, pero en marcha
+		// normal no quiere mirar al cielo mientras camina.
+		FRotator Final = Rotation;
+		if (!Bot.bFiringWeapon)
+			Final.Pitch = FMath::Clamp(Final.Pitch, -45.0f, 45.0f);
+
 		// 1. Camara del controlador (SetControlRotation) -> direccion de disparo.
 		if (Bot.Controller)
 		{
@@ -386,7 +394,7 @@ namespace CustomBotMovement
 
 				auto Params = Alloc(SetControlRotationFn->GetPropertiesSize());
 
-				*(FRotator*)(__int64(Params) + NewRotationOffset) = Rotation;
+				*(FRotator*)(__int64(Params) + NewRotationOffset) = Final;
 
 				Bot.Controller->ProcessEvent(SetControlRotationFn, Params);
 
@@ -411,7 +419,7 @@ namespace CustomBotMovement
 
 			auto Params = Alloc(K2_SetWorldRotationFn->GetPropertiesSize());
 
-			*(FRotator*)(__int64(Params) + NewRotationOffset) = Rotation;
+			*(FRotator*)(__int64(Params) + NewRotationOffset) = Final;
 			*(bool*)(__int64(Params) + bSweepOffset) = false;
 			*(bool*)(__int64(Params) + bTeleportOffset) = false; // NO teleport: la fisica sigue intacta
 
@@ -446,6 +454,12 @@ namespace CustomBotMovement
 
 		Bot.bMoveRequestActive = false;
 		Bot.MoveState = CBT::EMovementState::Idle;
+
+		// Sin move activo no puede haber atasco por progreso: se resetea el
+		// detector (CustomBotBreak) para que la proxima peticion vuelva a medir.
+		Bot.StuckWindowTime = -1.0f;
+		Bot.StuckWindowPos = FVector{};
+		Bot.StuckTime = 0.0f;
 	}
 
 	// Aplica la velocidad horizontal hacia Destination una sola vez.
@@ -510,6 +524,40 @@ namespace CustomBotMovement
 		{
 			ClearPath(Bot);
 			Bot.PathQueryTime = -1.0f;
+
+			// Al cambiar de destino se resetea el detector de atasco por progreso
+			// (CustomBotBreak): cada destino es una partida nueva.
+			Bot.StuckWindowTime = -1.0f;
+			Bot.StuckWindowPos = FVector{};
+			Bot.StuckTime = 0.0f;
+
+			// CRITICO (storm priority): tambien se cancela la MAQUINA de
+			// desatascado fisico. Si el destino cambia (p.ej. Decide pasa a
+			// Rotating hacia la safe zone) mientras el bot esta atascado en una
+			// pared, el FSM seguia restaurando su UnstickGoal viejo (MoveTo al
+			// destino capturado al arrancar) y piseaba el nuevo destino: el bot
+			// seguia empujando contra el muro en vez de rotar. Ahora cada cambio
+			// de destino aborta la secuencia en curso (si sigue atascado tras
+			// cambiar, el nuevo destino re-dispara el detector limpio).
+			Bot.UnstickStage = 0;
+			Bot.UnstickTime = -1.0f;
+			Bot.BlockedSince = -1.0f;
+			Bot.UnstickSwings = 0;
+			Bot.UnstickGoal = FVector{};
+			Bot.UnstickRefLoc = FVector{};
+			Bot.bUnstickDetourSet = false;
+			Bot.UnstickDetourDest = FVector{};
+			Bot.UnstickDetourCount = 0;
+			Bot.bUnstickRampBuilt = false;
+			Bot.UnstickRampCount = 0;
+			Bot.UnstickFloorCount = 0;
+			Bot.UnstickTarget = nullptr;
+
+			// Atasco persistente (fallback navmesh 10s): episodio descartado con
+			// el goal viejo; el nuevo destino empieza a medir desde cero.
+			Bot.StuckPersistTime = 0.0f;
+			Bot.StuckPersistGoal = FVector{};
+			Bot.StuckPersistBest = 1e30f;
 		}
 
 		Bot.MoveRequest.Destination = Destination;
@@ -595,6 +643,11 @@ namespace CustomBotMovement
 
 			ClearPath(Bot);
 			Bot.MoveState = CBT::EMovementState::Arrived;
+
+			// Llegada = progreso real: el contador de atasco persistente (fallback
+			// navmesh a los 10s) se reinicia para la proxima peticion.
+			Bot.StuckPersistTime = 0.0f;
+			Bot.StuckPersistBest = 1e30f;
 			return;
 		}
 
@@ -616,7 +669,15 @@ namespace CustomBotMovement
 		// ruta se consulta (o re-consulta) con throttle en RefreshPath. Con el
 		// checkbox de la UI en off (bCustomBotPathfinding=false) se salta todo
 		// este bloque y se va en linea recta (lo barato para PC malos).
-		if (bCustomBotPathfinding)
+		//
+		// Pathfinding FALLBACK (bCustomBotPathfindingFallback): igualmente se va
+		// en linea recta, pero si el bot lleva >=10s SIN superar su mejor avance
+		// (StuckPersistTime) se consulta el navmesh como ESCAPE: paredes o
+		// edificios de 2+ pisos que ni rompiendo ni construyendo se superan.
+		const bool bUseNavPath = bCustomBotPathfinding ||
+			(bCustomBotPathfindingFallback && Bot.StuckPersistTime >= CustomBot::PathfindingFallbackStuckTime);
+
+		if (bUseNavPath)
 		{
 			if (Bot.PathWaypoints.empty())
 				RefreshPath(Bot, Destination);
@@ -678,35 +739,53 @@ namespace CustomBotMovement
 		CharacterVelocity.Y = Dir.Y * WalkSpeed;
 	}
 
-	// Movimiento por eje tipo input jugador: strafe lateral.
-	// Value en [-1, 1]; positiva = right, negativa = left.
-	static void MoveRight(CustomBot& Bot, float Value)
+	// Salto del pawn. Se aplica UN impulso real a la fisica (LaunchCharacter +
+	// patada de Velocity.Z en el CMC) y ADEMAS el Character.Jump nativo (para la
+	// animacion/estado). Los bots corren bajo simulacion de servidor (UnPossess +
+	// bRunPhysicsWithNoController) y no tienen su Actor Tick del Character
+	// garantizado: Character::Jump solo marca bPressedJump para que ese Tick lo
+	// convierta en salto, asi que se quedaban "pegados" al suelo (observado:
+	// bots atascados 10s sin saltar en la etapa 3 del desatascado). El impulso
+	// del CMC (PendingLaunchVelocity / Velocity) lo consume la fisica siempre.
+	static void Jump(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
 
 		auto CharacterMovement = GetCharacterMovement(Bot);
 
-		if (!CharacterMovement)
-			return;
+		// 1) Impulso real via LaunchCharacter (unchanged XY, sobreescribe solo Z).
+		static auto LaunchCharacterFn = FindObject<UFunction>(L"/Script/Engine.Character.LaunchCharacter");
 
-		FVector Dir = Bot.Pawn->GetActorRightVector() * Value;
+		if (LaunchCharacterFn)
+		{
+			struct
+			{
+				FVector LaunchVelocity;
+				bool bXYOverride;
+				bool bZOverride;
+			} Params{ FVector{ 0.0f, 0.0f, JumpStrength }, false, true };
 
-		static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
-		FVector& CharacterVelocity = CharacterMovement->Get<FVector>(VelocityOffset);
+			Bot.Pawn->ProcessEvent(LaunchCharacterFn, &Params);
+		}
 
-		CharacterVelocity.X = Dir.X * WalkSpeed;
-		CharacterVelocity.Y = Dir.Y * WalkSpeed;
-	}
+		// 2) Patada directa a la velocidad del CMC por si el pending launch se
+		// pierde con la simulacion server (nunca rebajar, respeta caidas activas).
+		if (CharacterMovement)
+		{
+			static auto VelocityOffset = CharacterMovement->GetOffset("Velocity", false);
 
-	// Salto del pawn (invoca la UFunction nativa Character.Jump).
-	static void Jump(CustomBot& Bot)
-	{
-		if (!Bot.IsReady() || !Bot.Pawn)
-			return;
+			if (VelocityOffset != -1)
+			{
+				FVector& Velocity = CharacterMovement->Get<FVector>(VelocityOffset);
+				Velocity.Z = FMath::Max(Velocity.Z, JumpStrength);
+			}
+		}
 
+		// 3) Character.Jump nativo: deja el estado/anim de salto para el motor.
 		static auto JumpFn = FindObject<UFunction>(L"/Script/Engine.Character.Jump");
-		Bot.Pawn->ProcessEvent(JumpFn);
+		if (JumpFn)
+			Bot.Pawn->ProcessEvent(JumpFn);
 	}
 
 	// Lanza el pawn (impulso), util para impulsos puntuales.

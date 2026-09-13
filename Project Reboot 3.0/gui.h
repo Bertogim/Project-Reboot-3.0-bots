@@ -387,6 +387,8 @@ static inline void StaticUI()
 
 	ImGui::Checkbox("Enable Developer Mode", &Globals::bDeveloperMode);
 
+	ImGui::Checkbox("Manual replication per tick", &bManualReplication);
+
 	// Isolacion del leak de bots: 0=tick completo, 1=sin IA, 2=sin IA/mov,
 	// 3=sin IA/mov/CMC, 4=existencia pura, 5=CMC init-only sin writes,
 	// 6=idem sin CLAIM-LIVE. Se cambia EN VIVO con bots activos; la pendiente
@@ -1444,8 +1446,7 @@ static inline void MainUI()
 
 				struct { const char* Name; int Count; } StateEntries[] = {
 					{ "In Bus",           Counts.InBus },
-					{ "Choosing Landing", Counts.ChoosingLanding },
-					{ "Jumping",          Counts.Jumping },
+					{ "Ejecting",         Counts.Ejecting },
 					{ "Gliding",          Counts.Gliding },
 					{ "Landing",          Counts.Landing },
 					{ "Looting",          Counts.Looting },
@@ -1491,6 +1492,7 @@ static inline void MainUI()
 			// fisico (retenedor, mas ligero). On = ruta navmesh con fallbacks
 			// (puertas / romper con pico).
 			ImGui::Checkbox("Pathfinding de bots (navmesh)", &bCustomBotPathfinding);
+			ImGui::Checkbox("Pathfinding solo si atascado (10s)", &bCustomBotPathfindingFallback);
 		}
 		else if (Tab == LATEGAME_TAB)
 		{

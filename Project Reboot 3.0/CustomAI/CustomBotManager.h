@@ -95,8 +95,7 @@ namespace CustomBotManager
 	struct FStateCounts
 	{
 		int InBus = 0;
-		int ChoosingLanding = 0;
-		int Jumping = 0;
+		int Ejecting = 0;
 		int Gliding = 0;
 		int Landing = 0;
 		int Looting = 0;
@@ -130,8 +129,7 @@ namespace CustomBotManager
 			switch (Bot.AI->State)
 			{
 			case EBotState::InBus:           ++Counts.InBus; break;
-			case EBotState::ChoosingLanding: ++Counts.ChoosingLanding; break;
-			case EBotState::Jumping:         ++Counts.Jumping; break;
+			case EBotState::Ejecting:         ++Counts.Ejecting; break;
 			case EBotState::Gliding:         ++Counts.Gliding; break;
 			case EBotState::Landing:         ++Counts.Landing; break;
 			case EBotState::Looting:         ++Counts.Looting; break;
@@ -449,6 +447,12 @@ namespace CustomBotManager
 		while (!Bots.empty())
 		{
 			CustomBot& Bot = Bots.back();
+
+			// Decrementa PlayersLeft / quita de GetAlivePlayers de cada bot para
+			// que el marcador y los vivos queden consistentes al limpiar. No
+			// spamea feed/chat (bCountOnly=true).
+			CustomBotSpawner::ProcessBotDeathCounters(Bot, true);
+
 			Bot.Destroy();
 			Bots.pop_back();
 		}

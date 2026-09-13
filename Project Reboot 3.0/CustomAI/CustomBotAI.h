@@ -33,8 +33,7 @@
 enum class EBotState : uint8_t
 {
 	InBus,            // dentro del Battle Bus, esperando
-	ChoosingLanding,  // eligiendo destino mientras sigue en el bus
-	Jumping,          // inicio del salto del bus
+	Ejecting,         // salto del bus: eject custom a la posicion del avion
 	Gliding,          // planeando con el glider hacia el destino
 	Landing,          // aterrizando (frenando cerca del suelo)
 	Looting,          // buscando/recogiendo loot
@@ -55,8 +54,7 @@ inline const TCHAR* CustomBotStateName(EBotState State)
 	switch (State)
 	{
 	case EBotState::InBus:            return L"In Bus";
-	case EBotState::ChoosingLanding:  return L"Choosing Landing";
-	case EBotState::Jumping:          return L"Jumping";
+	case EBotState::Ejecting:         return L"Ejecting";
 	case EBotState::Gliding:          return L"Gliding";
 	case EBotState::Landing:          return L"Landing";
 	case EBotState::Looting:          return L"Looting";
@@ -148,8 +146,10 @@ struct BotAIContext
 	float ScanTimer = 0.0f;
 	float ReactTimer = 0.0f;   // retraso de reaccion humano
 	float ActionTimer = 0.0f;  // cooldown entre acciones de combate
-	float StrafeTimer = 0.0f;  // cambia la direccion del strafe cada X segundos
-	int StrafeDir = 1;         // +1 derecha / -1 izquierda (evita orbitar)
+
+	// Deteccion de "siendo atacado": caida de vida entre ticks de IA.
+	float LastDamageTime = -999.0f; // BotTime() del ultimo disparo recibido
+	float CheckedHealth = -1.0f;    // vida registrada en el ultimo tick de IA
 
 	// Battle bus / glider
 	float JumpDelay = 0.0f;    // momento (tiempo) en que decide saltar del bus
@@ -365,8 +365,7 @@ namespace CustomBotAI
 		switch (Ctx.State)
 		{
 		case EBotState::InBus:
-		case EBotState::ChoosingLanding:
-		case EBotState::Jumping:
+		case EBotState::Ejecting:
 		case EBotState::Gliding:
 		case EBotState::Landing:
 			TickBus(Bot, Ctx);

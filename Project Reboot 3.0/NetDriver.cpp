@@ -78,6 +78,35 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 	// (movimiento persistente de MoveTo, y en Parte 2 las decisiones de IA).
 	CustomBotSpawner::TickAll();
 
+	// A/B del leak: la replicación MANUAL (ademas del original) era la config
+	// verificado-funcional para que los clientes terminen de cargar. En este
+	// build el engine no drivea la replique con ReplicationDriver, asi que sin
+	// este bloque el cliente se queda INFINITAMENTE en loading al conectar.
+	// En 5680adc se confirmo que NO causa el leak (UObjects plano); el leak era
+	// ToString/GetOffset (compaction.md). NO VOLVER A QUITARLO mientras no haya
+	// un ReplicationDriver nativo funcional.
+	if (Globals::bStartedListening && bManualReplication)
+	{
+		++gManualSraCalls;
+		if (!Globals::bShouldUseReplicationGraph)
+		{
+			NetDriver->ServerReplicateActors();
+		}
+		else
+		{
+			static auto ReplicationDriverOffset = NetDriver->GetOffset("ReplicationDriver"/*, false */);
+
+			if (auto ReplicationDriver = NetDriver->Get(ReplicationDriverOffset))
+			{
+				reinterpret_cast<void(*)(UObject*)>(ReplicationDriver->VFTable[Offsets::ServerReplicateActors])(ReplicationDriver);
+			}
+			else
+			{
+				// LOG_INFO(LogDev, "ReplicationDriver is nul!!?1//33/221/4/124/123"); // 3.3 MOMENT
+			}
+		}
+	}
+
 	return TickFlushOriginal(NetDriver);
 }
 

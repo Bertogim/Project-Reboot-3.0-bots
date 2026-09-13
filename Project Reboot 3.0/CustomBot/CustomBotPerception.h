@@ -663,11 +663,8 @@ namespace CustomBotPerception
 
 		if (auto Pawn = Cast<AFortPlayerPawn>(Actor))
 		{
-			if (auto Controller = Pawn->GetController())
-			{
-				if (auto PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState()))
-					return (int)PlayerState->GetTeamIndex();
-			}
+			if (auto PS = GetPlayerStateOf(Pawn))
+				return (int)PS->GetTeamIndex();
 
 			return -1;
 		}
@@ -758,6 +755,83 @@ namespace CustomBotPerception
 
 		OutType = Bot.CachedObstacleType;
 		return Bot.CachedNearestObstacle;
+	}
+
+	// Obstaculo (ABuildingSMActor) mas cercano que este DELANTE del bot: dentro
+	// del cono frontal horizontal definido por FacingDir/MinDot. A diferencia de
+	// FindNearestObstacle (UN unico candidato global), elige entre TODOS los de
+	// Radio el que ademas cumple el cono: asi una pared delante no se ignora
+	// porque haya un arbol mas cercano al lado (TryBreakFront la usara para
+	// romper el muro que de verdad bloquea). Un barrido fresco; solo llamar en
+	// desatascado (no por cada viaje normal).
+	// Filter: predicado opcional que descarta candidatos (p.ej. excluir piezas
+	// no destructibles como el suelo del terreno a los pies del bot, que es el
+	// "obstaculo mas cercano" en el cono pero no es lo que bloquea el paso).
+	static AActor* FindFrontObstacle(CustomBot& Bot, float Radius, const FVector& FacingDir, float MinDot, CBT::EObstacleType& OutType, bool (*Filter)(AActor*) = nullptr)
+	{
+		OutType = CBT::EObstacleType::None;
+
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return nullptr;
+
+		FVector BotLoc = Bot.Pawn->GetActorLocation();
+
+		// Direccion frontal HORIZONTAL normalizada a mano (el FVector del repo no
+		// expone Size/Normalize; mismo patron que DirectionTo).
+		FVector Fwd{ FacingDir.X, FacingDir.Y, 0.0f };
+		float FwdLenSq = Fwd | Fwd;
+
+		if (FwdLenSq <= 0.0001f)
+			return nullptr;
+
+		float InvFwdLen = 1.0f / FMath::Sqrt(FwdLenSq);
+		Fwd.X *= InvFwdLen;
+		Fwd.Y *= InvFwdLen;
+
+		AActor* Best = nullptr;
+		float BestDist = 1e30f;
+
+		static auto BuildingSMActorClass = FindObject<UClass>(L"/Script/FortniteGame.BuildingSMActor");
+		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, BuildingSMActorClass, Radius);
+
+		for (int i = 0; i < All.Num(); ++i)
+		{
+			AActor* Actor = All.at(i);
+
+			if (!Actor || Actor == Bot.Pawn || Actor->IsActorBeingDestroyed())
+				continue;
+
+			if (Filter && !Filter(Actor))
+				continue;
+
+			// Cono frontal horizontal (deja fuera arboles/rocas a los lados).
+			FVector ToObj = Actor->GetActorLocation() - BotLoc;
+			ToObj.Z = 0.0f;
+			float LenSq = ToObj | ToObj;
+
+			if (LenSq <= 0.0001f)
+				continue;
+
+			float InvLen = 1.0f / FMath::Sqrt(LenSq);
+			ToObj.X *= InvLen;
+			ToObj.Y *= InvLen;
+
+			if ((Fwd | ToObj) < MinDot)
+				continue;
+
+			float D = DistanceToActor(Bot, Actor);
+
+			if (D <= Radius && D < BestDist)
+			{
+				Best = Actor;
+				BestDist = D;
+			}
+		}
+
+		All.FreeEngine();
+
+		OutType = Best ? ClassifyObstacle(Bot, Best) : CBT::EObstacleType::None;
+		return Best;
 	}
 
 	// Devuelve true si el camino directo hacia TargetLocation esta bloqueado.
@@ -890,7 +964,28 @@ namespace CustomBotPerception
 		if (auto Pawn = Cast<AFortPlayerPawn>(Actor))
 		{
 			if (auto Controller = Pawn->GetController())
-				return Cast<AFortPlayerStateAthena>(Controller->GetPlayerState());
+			{
+				if (auto PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState()))
+					return PlayerState;
+			}
+
+			// Bot custom UnPossess al activar simulacion de servidor: su Pawn ya
+			// NO tiene Controller, asi que GetController() devuelve nullptr y el
+			// Pawn se descartaba en RefreshPlayerCache (IsEnemy/IsAlly devolvian
+			// false). Consecuencia: los bots NO se detectaban entre si, solo
+			// veian al jugador humano (que SI tiene controller). Aqui resolvemos
+			// el PlayerState directamente de la propiedad "PlayerState" del Pawn
+			// (restaurada al spawn por RestorePawnPlayerState).
+			static int PSOffset = -1;
+			if (PSOffset == -1)
+				PSOffset = Pawn->GetOffset("PlayerState", false);
+
+			if (PSOffset != -1)
+			{
+				auto* PS = Cast<AFortPlayerStateAthena>(Pawn->Get<UObject*>(PSOffset));
+				if (PS)
+					return PS;
+			}
 		}
 
 		return nullptr;

@@ -104,6 +104,9 @@ namespace CustomBotCombat
 
 	static bool FireWeapon(CustomBot& Bot)
 	{
+		// Mientras este disparando con un arma (o con el pico) se permite apuntar
+		// con +-90 de pitch: el clamp a +-45 de SetRotation solo aplica en marcha.
+		Bot.bFiringWeapon = true;
 		return ActivatePrimaryAbility(Bot);
 	}
 
@@ -146,6 +149,8 @@ namespace CustomBotCombat
 	static void StopFiring(CustomBot& Bot)
 	{
 		auto Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
+
+		Bot.bFiringWeapon = false;
 
 		if (!Weapon)
 			return;

@@ -1715,6 +1715,13 @@ static void BotTickCallbackImpl(void* data)
 	if (!Bot || !Bot->IsValidActor() || !Bot->IsReady())
 		return;
 
+	// Cadaver en espera de que el engine lo reclame (muerte procesada con
+	// Health<=0 pero pawn aun vivo): no tick de mov/IA/CMC para no arrastrar al
+	// pawn en medio de la animacion de muerte. TickAll limpia cuando el pawn
+	// quede invalido.
+	if (Bot->GetLifeState() == CBT::ELifeState::Dead)
+		return;
+
 	// Aislamiento del leak (A/B en vivo): el slider de la GUI cambia
 	// gBotTickMode (0=full | 1=sin IA | 2=sin IA/mov | 3=sin IA/mov/CMC |
 	// 4=existencia | 5=CMC init-only sin writes | 6=idem sin CLAIM-LIVE).

@@ -14,11 +14,14 @@
 
 #include "CustomBotAI.h"
 
+#include "CustomBot/CustomBotBreak.h"
+
 namespace CustomBotAIMidgame
 {
 	// Forward declarations (usadas antes de su definicion mas abajo; C3861).
 	static FVector PickWanderTarget(CustomBot& Bot, const FVector& Bias);
 	static void BuildBarricade(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc);
+	static void FleeWithWalls(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc, bool bBuildWalls);
 	static void DoEndGame(CustomBot& Bot, BotAIContext& Ctx);
 	static bool TryResolveBlockedPath(FVector& MoveTarget, CustomBot& Bot, BotAIContext& Ctx);
 	static void RefillLobbyHP(CustomBot& Bot);
@@ -49,7 +52,6 @@ namespace CustomBotAIMidgame
 		Ctx.ScanTimer -= Elapsed;
 		Ctx.ReactTimer -= Elapsed;
 		Ctx.ActionTimer -= Elapsed;
-		Ctx.StrafeTimer -= Elapsed;
 	}
 
 	// --- Evaluacion de vida / escudo ------------------------------------------
@@ -65,11 +67,26 @@ namespace CustomBotAIMidgame
 		return Health < 75.0f || Shield < 50.0f;
 	}
 
-	static bool IsBeingAttacked(CustomBot& Bot)
+	static bool IsBeingAttacked(CustomBot& Bot, BotAIContext& Ctx)
 	{
-		// Best-effort: considera que esta "siendo atacado" si la vida no esta
-		// llena y hay un enemigo visible muy cerca.
-		return Bot.IsReady() && Bot.GetHealth() < 100.0f;
+		// Detecta si el bot esta recibiendo disparos comparando su vida entre
+		// ticks de IA: una caida de vida marca el momento del ultimo impacto.
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return false;
+
+		float Health = Bot.GetHealth();
+		float Now = CustomBotPerception::BotTime();
+
+		if (Ctx.CheckedHealth < 0.0f)
+			Ctx.CheckedHealth = Health;
+
+		if (Health < Ctx.CheckedHealth - 0.5f)
+			Ctx.LastDamageTime = Now;
+
+		Ctx.CheckedHealth = Health;
+
+		// Se considera "siendo atacado" si recibio danio en los ultimos 2s.
+		return Now - Ctx.LastDamageTime < 2.0f;
 	}
 
 	// --- Percepcion de enemigos (con limite propio, no omnisciente) ------------
@@ -297,6 +314,35 @@ namespace CustomBotAIMidgame
 			}
 			else
 			{
+				// Camino bloqueado en planta baja (pared del edificio, desnivel):
+				// construir rampa / destruir el obstaculo / saltar para acercarse
+				// (Sec. 6/7/14) en vez de quedarse quieto delante del muro.
+				if (Bot.IsPathBlocked())
+				{
+					FVector ResolveDest = Container->GetActorLocation();
+					if (CustomBotAIMidgame::TryResolveBlockedPath(ResolveDest, Bot, Ctx))
+						return;
+				}
+				else
+				{
+					// Cofre EN ALTO (2o piso o mas): el MoveTo compara la distancia
+					// HORIZONTAL, asi que al llegar al XY del cofre el bot quedaria
+					// marcado como "llegado" debajo de el, mirando hacia arriba sin
+					// avanzar. Subir construyendo rampas (una cada ~1.5s) como una
+					// escalera hacia el cofre.
+					float VertDiff = Container->GetActorLocation().Z - Bot.Pawn->GetActorLocation().Z;
+
+					if (VertDiff > 260.0f && Ctx.ActionTimer <= 0.0f)
+					{
+						if (CustomBotBreak::BuildRampUp(Bot))
+						{
+							Ctx.ActionTimer = 1.5f;
+							LOG_INFO(LogBots, "[BotAI] loot: building ramp toward elevated container (+{:.0f}u)", VertDiff);
+							return;
+						}
+					}
+				}
+
 				CustomBotMovement::MoveTo(Bot, Container->GetActorLocation(), 120.0f, true);
 			}
 
@@ -326,6 +372,15 @@ namespace CustomBotAIMidgame
 			else
 			{
 				CustomBotMovement::MoveTo(Bot, Pickup->GetActorLocation(), 100.0f, true);
+
+				// Loot detras de una pared/desnivel: construir/destruir/saltar
+				// mientras se acerca (Sec. 6/7/14).
+				if (Bot.IsPathBlocked())
+				{
+					FVector ResolveDest = Pickup->GetActorLocation();
+					if (CustomBotAIMidgame::TryResolveBlockedPath(ResolveDest, Bot, Ctx))
+						return;
+				}
 			}
 
 			return;
@@ -619,6 +674,20 @@ namespace CustomBotAIMidgame
 		CustomBotMovement::LookAt(Bot, Aim);
 	}
 
+	// Puntos de vida totales (vida + escudo) de cualquier pawn enemigo. El bot
+	// no distingue entre bots y jugadores: todos los FortPlayerPawn se tratan
+	// igual, solo cuenta la relacion de equipo.
+	static float PawnTotalHealth(AActor* Actor)
+	{
+		if (!Actor)
+			return 0.0f;
+
+		if (auto Pawn = Cast<AFortPawn>(Actor))
+			return Pawn->GetHealth() + Pawn->GetShield();
+
+		return 100.0f;
+	}
+
 	static void DoFighting(CustomBot& Bot, BotAIContext& Ctx, AActor* Enemy)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -629,29 +698,19 @@ namespace CustomBotAIMidgame
 		{
 			Ctx.EnemyTarget = nullptr;
 			Ctx.State = EBotState::Exploring;
+			Bot.bInCombat = false; // ya no se combate: el desatascado puede actuar
 			CustomBotCombat::StopFiring(Bot);
 			Ctx.bIsFiring = false;
 			return;
 		}
 
+		// En combate el desatascado global queda en manos de la IA
+		// (TryResolveBlockedPath); CustomBotBreak no debe interferir.
+		Bot.bInCombat = true;
+
 		FVector EnemyLoc = Enemy->GetActorLocation();
-
-		// Rotar/apuntar (si el bot era agresivo intenta apuntar mejor).
-		AimWithSkill(Bot, Ctx, EnemyLoc);
-
-		// Impulsos: strafe LATERAL alternando direccion (no orbitar). El bot
-		// siempre mira al enemigo (AimWithSkill), asi que un strafe fijo a la
-		// derecha lo hace girar en circulo alrededor del objetivo.
-		if (!Bot.HasMoveRequest() || Bot.HasArrived())
-		{
-			if (Ctx.StrafeTimer <= 0.0f || Ctx.StrafeDir == 0)
-			{
-				Ctx.StrafeDir = (std::rand() % 2) ? -1 : 1;
-				Ctx.StrafeTimer = 1.0f + float(std::rand() % 1500) / 1000.0f;
-			}
-
-			CustomBotMovement::MoveRight(Bot, 0.5f * (float)Ctx.StrafeDir);
-		}
+		float Dist = Bot.Pawn->GetDistanceTo(Enemy);
+		bool bAttacked = IsBeingAttacked(Bot, Ctx);
 
 		// Arma real equipada? (el pico no cuenta como arma de fuego).
 		bool bHasWeapon = CustomBotCombat::IsWeaponEquipped(Bot) && !CustomBotCombat::IsPickaxeEquipped(Bot);
@@ -662,64 +721,17 @@ namespace CustomBotAIMidgame
 			bHasWeapon = CustomBotCombat::IsWeaponEquipped(Bot) && !CustomBotCombat::IsPickaxeEquipped(Bot);
 		}
 
-		if (bHasWeapon)
+		// SIN ARMAR (solo pico/melee): atacar al cuerpo a cuerpo y, si el
+		// enemigo lleva un arma de fuego (pelear contra eso es suicida), huir.
+		if (!bHasWeapon)
 		{
-			int Ammo = CustomBotCombat::GetCurrentAmmo(Bot);
-
-			bool bLOS = CustomBotPerception::HasLineOfSight(Bot, EnemyLoc, Enemy);
-			bool bInRange = Bot.Pawn->GetDistanceTo(Enemy) <= 30000.0f;
-
-			// React timer introduce retraso humano antes de disparar.
-			if (Ctx.ReactTimer <= 0.0f && bLOS && bInRange)
-			{
-				if (Ammo > 0)
-				{
-					if (Ctx.ActionTimer <= 0.0f)
-					{
-						// Racha de disparos determinada por la agresividad.
-						if ((float)(std::rand() % 1000) / 1000.0f <= Ctx.Personality.Aggression * 0.9f)
-						{
-							CustomBotCombat::FireWeapon(Bot);
-							Ctx.bIsFiring = true;
-						}
-						Ctx.ActionTimer = 0.12f;
-					}
-				}
-				else
-				{
-					// Sin municion: recargar de forma cosmetica.
-					CustomBotCombat::Reload(Bot, 30);
-				}
-			}
-			else
-			{
-				if (Ctx.bIsFiring)
-				{
-					CustomBotCombat::StopFiring(Bot);
-					Ctx.bIsFiring = false;
-				}
-			}
-		}
-		else
-		{
-			// SIN ARMAS (solo pico/melee): si el enemigo lleva un arma real
-			// (de fuego), HUIR: pelear el pico contra un arma es suicida. Si el
-			// enemigo tambien va de melee, se planta y golpea (o persigue en
-			// linea recta); nunca orbitar.
-			CustomBotCombat::StopFiring(Bot);
-			Ctx.bIsFiring = false;
-
 			if (CustomBotCombat::EnemyHasRealWeapon(Enemy))
 			{
-				FVector BotLoc = Bot.Pawn->GetActorLocation();
-				FVector Away = BotLoc + CustomBotMovement::DirectionTo(EnemyLoc, BotLoc) * 1500.0f;
-
-				CustomBotMovement::LookAt(Bot, EnemyLoc);
-				CustomBotMovement::MoveTo(Bot, Away, 100.0f, true, false);
+				FleeWithWalls(Bot, Ctx, EnemyLoc, bAttacked);
 				return;
 			}
 
-			float Dist = Bot.Pawn->GetDistanceTo(Enemy);
+			AimWithSkill(Bot, Ctx, EnemyLoc);
 
 			if (Dist <= kMeleeRange)
 			{
@@ -733,10 +745,93 @@ namespace CustomBotAIMidgame
 					Ctx.ActionTimer = 0.35f;
 				}
 			}
+			else if (!Bot.HasMoveRequest() || Bot.HasArrived())
+			{
+				// Perseguir en linea recta (nunca orbitar / strafear).
+				// Si el camino esta bloqueado, primero saltar/destruir/construir
+				// (Sec. 6/7/14); si aun asi no se resuelve, perseguir igual.
+				if (Bot.IsPathBlocked())
+				{
+					FVector ResolveDest = EnemyLoc;
+					if (CustomBotAIMidgame::TryResolveBlockedPath(ResolveDest, Bot, Ctx))
+						return;
+				}
+
+				CustomBotMovement::MoveTo(Bot, EnemyLoc, kMeleeRange * 0.5f, true, false);
+			}
+
+			return;
+		}
+
+		// CON ARMA: huir si nos estan disparando y estamos en desventaja (el
+		// enemigo es mas fuerte o el bot no tolera el riesgo); si no, atacar.
+		float MyHP = Bot.GetHealth() + Bot.GetShield();
+		float EnemyHP = PawnTotalHealth(Enemy);
+
+		bool bFlee = bAttacked &&
+			(EnemyHP > MyHP + 20.0f || Ctx.Personality.RiskTolerance < 0.4f);
+
+		if (bFlee)
+		{
+			FleeWithWalls(Bot, Ctx, EnemyLoc, true);
+			return;
+		}
+
+		// ATACAR: mirar/apuntar al enemigo.
+		AimWithSkill(Bot, Ctx, EnemyLoc);
+
+		bool bLOS = CustomBotPerception::HasLineOfSight(Bot, EnemyLoc, Enemy);
+		// Rango efectivo: acercarse hasta ~60m antes de disparar (antes el bot se
+		// quedaba parado disparando a 300m porque el rango era 30000u -> "persiguen
+		// pero no atacan" / "se quedan lejos sin acercarse").
+		bool bInRange = Dist <= 6000.0f;
+
+		// Si el enemigo no esta a la vista o en rango, acercarse en linea recta.
+		if (!bLOS || !bInRange)
+		{
+			// Si el camino esta bloqueado, primero saltar/destruir/construir
+			// (Sec. 6/7/14); si aun asi no se resuelve, perseguir igual.
+			if (Bot.IsPathBlocked())
+			{
+				FVector ResolveDest = Bot.MoveRequest.Destination;
+				if (CustomBotAIMidgame::TryResolveBlockedPath(ResolveDest, Bot, Ctx))
+					return;
+			}
+
+			if (!Bot.HasMoveRequest() || Bot.HasArrived())
+				CustomBotMovement::MoveTo(Bot, EnemyLoc, 550.0f, true, false);
+		}
+
+		int Ammo = CustomBotCombat::GetCurrentAmmo(Bot);
+
+		// React timer introduce retraso humano antes de disparar.
+		if (Ctx.ReactTimer <= 0.0f && bLOS && bInRange)
+		{
+			if (Ammo > 0)
+			{
+				if (Ctx.ActionTimer <= 0.0f)
+				{
+					// Racha de disparos determinada por la agresividad.
+					if ((float)(std::rand() % 1000) / 1000.0f <= Ctx.Personality.Aggression * 0.9f)
+					{
+						CustomBotCombat::FireWeapon(Bot);
+						Ctx.bIsFiring = true;
+					}
+					Ctx.ActionTimer = 0.12f;
+				}
+			}
 			else
 			{
-				if (!Bot.HasMoveRequest() || Bot.HasArrived())
-					CustomBotMovement::MoveTo(Bot, EnemyLoc, kMeleeRange * 0.5f, true, false);
+				// Sin municion: recargar de forma cosmetica.
+				CustomBotCombat::Reload(Bot, 30);
+			}
+		}
+		else
+		{
+			if (Ctx.bIsFiring)
+			{
+				CustomBotCombat::StopFiring(Bot);
+				Ctx.bIsFiring = false;
 			}
 		}
 
@@ -802,6 +897,39 @@ namespace CustomBotAIMidgame
 		}
 	}
 
+	// Huida: correr en linea recta en direccion contraria al enemigo y, si nos
+	// estan disparando (bBuildWalls), ir plantando paredes de cobertura entre el
+	// bot y el perseguidor: quedan "a la espalda" del bot mientras corre y frenan
+	// al enemigo que lo persigue.
+	static void FleeWithWalls(CustomBot& Bot, BotAIContext& Ctx, const FVector& EnemyLoc, bool bBuildWalls)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn)
+			return;
+
+		CustomBotCombat::StopFiring(Bot);
+		Ctx.bIsFiring = false;
+
+		FVector BotLoc = Bot.Pawn->GetActorLocation();
+		FVector AwayDir = CustomBotMovement::DirectionTo(EnemyLoc, BotLoc);
+
+		if (!(AwayDir | AwayDir))
+			return;
+
+		FVector Away = BotLoc + AwayDir * 1500.0f;
+
+		// Mirar hacia donde huye (no tropieza con lo que tiene delante).
+		CustomBotMovement::LookAt(Bot, BotLoc + AwayDir * 100.0f);
+		CustomBotMovement::MoveTo(Bot, Away, 100.0f, true, false);
+
+		// Paredes de cobertura mientras recibe fuego: cada ~0.9s levanta una
+		// pared en la celda hacia el enemigo (a su espalda al alejarse).
+		if (bBuildWalls && Ctx.ActionTimer <= 0.0f)
+		{
+			BuildBarricade(Bot, Ctx, EnemyLoc);
+			Ctx.ActionTimer = 0.9f;
+		}
+	}
+
 	// --- DEFENDERA / reaccionar al ser superior -------------------------------
 	static void DoDefending(CustomBot& Bot, BotAIContext& Ctx, AActor* Enemy)
 	{
@@ -842,12 +970,17 @@ namespace CustomBotAIMidgame
 		{
 			Ctx.State = EBotState::Dead;
 			CustomBotCombat::StopFiring(Bot);
+			Bot.bInCombat = false;
 			return;
 		}
 
+		// Por defecto el bot NO esta en combate; los estados Fighting/Defending
+		// lo marcan (y DoFighting lo confirma a tick). Lo lee CustomBotBreak.
+		Bot.bInCombat = false;
+
 		// Vida/escudo y situacion.
 		bool bHeal = NeedsHealing(Bot);
-		bool bAttacked = IsBeingAttacked(Bot);
+		bool bAttacked = IsBeingAttacked(Bot, Ctx);
 
 		// Enemigo visible?
 		AActor* Enemy = ScanForEnemy(Bot, Ctx);
@@ -878,12 +1011,18 @@ namespace CustomBotAIMidgame
 		{
 			// Evaluar ventaja -> pelear o defenderse.
 			float MyHP = Bot.GetHealth() + Bot.GetShield();
-			float EnemyHP = 100.0f;
+			float EnemyHP = PawnTotalHealth(Enemy);
 
 			if (EnemyHP <= MyHP + 20.0f || Ctx.Personality.RiskTolerance > 0.6f)
+			{
 				Ctx.State = EBotState::Fighting;
+				Bot.bInCombat = true;
+			}
 			else
+			{
 				Ctx.State = EBotState::Defending;
+				Bot.bInCombat = true;
+			}
 
 			return;
 		}
@@ -968,18 +1107,27 @@ namespace CustomBotAIMidgame
 	{
 		FVector BotLoc = Bot.Pawn->GetActorLocation();
 
-		// Direccion general hacia el centro +/- dispersion.
+		// Direccion general hacia el Bias (centro de la safe zone) si esta lejos.
 		FVector Dir = CustomBotMovement::DirectionTo(BotLoc, Bias);
 
-		float Angle = float(std::rand() % 360);
-		float Rad = Angle * 3.14159265358979323846f / 180.0f;
+		if (!(Dir | Dir))
+			Dir = Bot.Pawn->GetActorForwardVector();
 
-		// Desplazamiento aleatorio (300..1200 unidades).
-		float Dist = 300.0f + float(std::rand() % 900);
+		if (!(Dir | Dir))
+			Dir = FVector{ 1.0f, 0.0f, 0.0f };
 
-		FVector Offset{ FMath::Cos(Rad) * Dist, FMath::Sin(Rad) * Dist, 0.0f };
+		// El paseo se sesga en un cono de +-60 grados hacia el objetivo: antes el
+		// angulo era totalmente aleatorio y los bots "daban vueltas" alrededor de
+		// su posicion sin acercarse a ninguna parte (observado). Pasean, pero con
+		// deriva hacia la zona segura (que es tambien la prioridad de la storm).
+		constexpr float SpreadRad = 60.0f * 3.14159265358979323846f / 180.0f;
+		float Base = FMath::Atan2(Dir.Y, Dir.X);
+		float Angle = Base + (float(std::rand() % 1000) / 1000.0f * 2.0f - 1.0f) * SpreadRad;
 
-		FVector Target = BotLoc + Offset;
+		// Desplazamiento aleatorio (400..1300 unidades).
+		float Dist = 400.0f + float(std::rand() % 900);
+
+		FVector Target{ BotLoc.X + FMath::Cos(Angle) * Dist, BotLoc.Y + FMath::Sin(Angle) * Dist, BotLoc.Z };
 
 		// Si hay LOS obstruido, buscar un punto alcanzable.
 		return CustomBotPerception::FindReachablePoint(Bot, Target);

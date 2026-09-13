@@ -24,6 +24,11 @@
 // sistema antiguo (bots.h) pero como una entidad CustomBot independiente.
 // NO modifica el sistema antiguo en absoluto.
 
+// Forward de ToDeathCause (definida en FortPlayerController.cpp, linkage
+// externa, scope global): traducir los tags de muerte del pawn a la causa de
+// muerte del DeathInfo.
+uint8 ToDeathCause(const FGameplayTagContainer& TagContainer, bool bWasDBNO, AFortPawn* Pawn);
+
 namespace CustomBotSpawner
 {
 	// Envolturas SEH (definidas en CustomBotSEH.cpp, TU pure-C). Necesarias para
@@ -66,19 +71,21 @@ namespace CustomBotSpawner
 	// Diagnostico de RAM + conteo UObjects (definido debajo; TickAll lo llama).
 	static void LogMemDiag(unsigned TickCount);
 
-	// Muerte de un bot: completa a mano el flujo que el engine no ejecuta para
-	// estos bots simulados (el pawn muere por danio y SE DESTRUYE solo, sin
+	// Muerte de un bot: completa a mano el flujo que el engine NO ejecuta para
+	// estos bots simulados (SetIsBot(false)+UnPossess): el pawn muere por danio
+	// y el flow nativo de death/kill-feed del jugador reales no corre (sin
 	// ClientOnPawnDied/RemoveFromAlivePlayers -> sin kill feed ni decremento de
-	// PlayersLeft). Definida abajo, antes de TickAll.
-	// Muerte de un bot: completa a mano el flujo que el engine no ejecuta para
-	// estos bots simulados (el pawn muere por danio y SE DESTRUYE solo, sin
-	// ClientOnPawnDied/RemoveFromAlivePlayers -> sin kill feed ni decremento de
-	// PlayersLeft). Secuencia: 1) guard anti-doble proceso, 2) killer desde el
-	// Instigator del pawn muerto (ultimo que hizo danio; si no hay, solo se
-	// decrementa vivos), 3) kill feed al killer con ClientReportKill (espejo de
-	// ClientOnPawnDiedHook) + score, 4) --PlayersLeft + OnRep, 5) quitar de
-	// GetAlivePlayers, 6) limpiar actores con Destroy().
-	static void HandleBotDeath(CustomBot& Bot)
+	// PlayersLeft). Secuencia: 1) guard anti-doble proceso, 2) contadores y
+	// COMBAT-FEED (credito al killer + DeathInfo + OnRep_DeathInfo),
+	// 3) --PlayersLeft + OnRep, 4) quitar de GetAlivePlayers, 5) Destroy().
+
+	// Contadores + kill feed de la muerte de un bot (SIN destruir). Se separa de
+	// la destruccion para re-usarlo desde HandleBotDeath y desde RemoveAllBots
+	// (marcar la salida de bots como muertes: decrementa los vivos). DEBE correr
+	// bajo SEH: lee del pawn muerto (posible carrera con su destruccion).
+	// bCountOnly: solo contadores (PlayersLeft/AlivePlayers), sin kill feed/chat
+	// (usado por RemoveAllBots para no spamear eliminaciones al limpiar).
+	static void ProcessBotDeathCounters(CustomBot& Bot, bool bCountOnly = false)
 	{
 		if (Bot.bDeathHandled)
 			return;
@@ -111,7 +118,65 @@ namespace CustomBotSpawner
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 
-		if (KillerPlayerState && KillerPlayerState != DeadPlayerState)
+		// KILL FEED + CHAT DE MUERTE: rellenar el DeathInfo del muerto (espejo de
+		// ClientOnPawnDiedHook) y disparar OnRep_DeathInfo para que el cliente
+		// muestre la eliminacion ("ha sido eliminado/a", kill feed). Solo se lee
+		// del pawn si sigue vivo (0 HP recien o en destruccion); si el pawn ya lo
+		// destruyo el engine, se omite la parte de tags (el credito de kill via
+		// ClientReportKill + score se da igualmente).
+		bool bReadPawn = DeadPawn && !DeadPawn->IsActorBeingDestroyed();
+
+		if (!bCountOnly && DeadPlayerState && bReadPawn)
+		{
+			auto DeathInfo = DeadPlayerState->GetDeathInfo();
+
+			if (DeathInfo)
+			{
+				DeadPlayerState->ClearDeathInfo();
+
+				FGameplayTagContainer ClassicTags{};
+				if (MemberOffsets::FortPlayerPawn::CorrectTags != 0)
+					ClassicTags = DeadPawn->Get<FGameplayTagContainer>(MemberOffsets::FortPlayerPawn::CorrectTags);
+
+				// Copia manual por elemento (la copia de TArray dentro del Get<> es
+				// superficial y se libera al salir de scope): DeathTags del DeathInfo
+				// no debe colgar del temporal. Mismo esquema que ClientOnPawnDiedHook.
+				FGameplayTagContainer CopyTags;
+				for (int i = 0; i < ClassicTags.GameplayTags.Num(); ++i)
+					CopyTags.GameplayTags.Add(ClassicTags.GameplayTags.at(i));
+				for (int i = 0; i < ClassicTags.ParentTags.Num(); ++i)
+					CopyTags.ParentTags.Add(ClassicTags.ParentTags.at(i));
+
+				// La escritura del DeathInfo solo aplica a versiones con ese struct
+				// (>1.8 o 1.11), igual que en ClientOnPawnDiedHook; la caida a
+				// kill credit/PlayersLeft de abajo corre SIEMPRE.
+				bool bDeathInfoReady = (Fortnite_Version > 1.8 || Fortnite_Version == 1.11);
+
+				if (bDeathInfoReady)
+				{
+					uint8 DeathCause = ToDeathCause(ClassicTags, false, DeadPawn);
+
+					if (MemberOffsets::DeathInfo::bDBNO != -1)
+						*(bool*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::bDBNO) = DeadPawn->IsDBNO();
+					if (MemberOffsets::DeathInfo::DeathCause != -1)
+						*(uint8*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathCause) = DeathCause;
+					if (MemberOffsets::DeathInfo::DeathLocation != -1)
+						*(FVector*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathLocation) = DeadPawn->GetActorLocation();
+					if (MemberOffsets::DeathInfo::DeathTags != -1)
+						*(FGameplayTagContainer*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathTags) = CopyTags;
+					if (MemberOffsets::DeathInfo::bInitialized != -1)
+						*(bool*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::bInitialized) = true;
+					if (MemberOffsets::DeathInfo::Distance != -1)
+						*(float*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::Distance) =
+							(KillerPawn && KillerPawn != DeadPawn) ? DeadPawn->GetDistanceTo(KillerPawn) : 0.0f;
+
+					DeadPlayerState->OnRep_DeathInfo();
+				}
+			}
+		}
+
+		// Credito de kill: score + kill feed nativo del killer (ClientReportKill).
+		if (!bCountOnly && KillerPlayerState && KillerPlayerState != DeadPlayerState)
 		{
 			if (MemberOffsets::FortPlayerStateAthena::KillScore != -1)
 				KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::KillScore)++;
@@ -143,7 +208,15 @@ namespace CustomBotSpawner
 
 		LOG_INFO(LogBots, "[CustomBot] [death] done playersLeft={} botsLeft={}",
 			GameState ? GameState->GetPlayersLeft() : -1, (int)AllCustomBots.size());
+	}
 
+	// Muerte de un bot: contadores + kill feed + destruccion definitiva.
+	static void HandleBotDeath(CustomBot& Bot)
+	{
+		if (Bot.bDeathHandled)
+			return;
+
+		ProcessBotDeathCounters(Bot);
 		Bot.Destroy();
 	}
 
@@ -193,16 +266,52 @@ namespace CustomBotSpawner
 			// Muerte del bot: pawn destruido por el engine al matarlo O salud
 			// reducida a 0. DBNO cuenta como vivo (puede revivir / sigue en los
 			// vivos). El flow nativo de muerte no corre para estos bots, asi que
-			// lo completa HandleBotDeath; luego se saca del vector.
+			// lo completa HandleBotDeath/ProcessBotDeathCounters.
 			{
 				auto Life = Bot.GetLifeState();
 				bool bDead = !Bot.IsValidActor() || Life == CBT::ELifeState::Dead;
 
 				if (bDead)
 				{
-					HandleBotDeath(Bot);
-					ToRemove.push_back(i);
-					continue;
+					if (!Bot.bDeathHandled)
+					{
+						// Toda la logica (contadores + kill feed) bajo SEH: el
+						// pawn puede destruirse a mitad de proceso por el propio
+						// engine (UAF del Instigator/tags = el crash historico de
+						// muertes por tormenta). Si el SEH captura algo, el bot
+						// se reintenta el siguiente tick sin tumbar el server.
+						struct DeathCtx { CustomBot* Bot; } Ctx{ &Bot };
+						TickBotSafeSEH([](void* P) {
+							CustomBot& C = *((DeathCtx*)P)->Bot;
+							if (C.IsValidActor() && C.GetLifeState() == CBT::ELifeState::Dead)
+							{
+								// Pawn vivo a 0 HP: el engine esta en el deathflow
+								// (animacion/cadaver). Marcar + feed, y NO destruir:
+								// el motor termina la muerte y el siguiente tick
+								// (pawn invalido) hace la limpieza final.
+								ProcessBotDeathCounters(C);
+							}
+							else
+							{
+								// Pawn ya reclamado por el engine: limpieza total
+								// inmediata (HandleBotDeath es idempotente por el
+								// bDeathHandled). Si el SEH fallo sin marcar, el
+								// bot se reintenta el siguiente tick.
+								HandleBotDeath(C);
+							}
+						}, &Ctx);
+					}
+
+					// Limpieza: solo cuando el pawn ya no existe. Si sigue vivo a
+					// 0 HP tras el feed (bDeathHandled) se dejan un par de ticks
+					// para que la animacion de muerte se vea; BotTickCallbackImpl
+					// no mueve cadaveres (ver guard en CustomBotDebug.cpp).
+					if (!Bot.IsValidActor())
+					{
+						Bot.Destroy();
+						ToRemove.push_back(i);
+						continue;
+					}
 				}
 			}
 
@@ -356,37 +465,6 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 			}
 			LOG_INFO(LogBots, "[memdiag] diag: levels={} bots={} mode={}",
 				SubLevels, (int)AllCustomBots.size(), gBotTickMode);
-		}
-
-		// Probe de regiones committed privadas (cada ~60s): enumera las N
-		// regiones de memoria mas grandes del proceso con VirtualQuery. Sirve
-		// para ver QUÉ heap crece ~10MB/s (arena del malloc del juego, buffers
-		// de net, texturas RHI, stacks...). Si una region concreta crece de
-		// forma lineal entre snapshots, ese es el allocator que fuga.
-		if (TickCount % 600 == 0)
-		{
-			struct Region { size_t Size = 0; size_t Base = 0; };
-			std::vector<Region> Big;
-			size_t TotalCommitted = 0;
-			size_t TotalRegions = 0;
-			MEMORY_BASIC_INFORMATION MBI{};
-			for (unsigned char* P = nullptr; ; P += MBI.RegionSize)
-			{
-				if (!VirtualQuery(P, &MBI, sizeof(MBI)))
-					break;
-				if (MBI.State == MEM_COMMIT && MBI.Type == MEM_PRIVATE)
-				{
-					TotalCommitted += MBI.RegionSize;
-					TotalRegions++;
-					if (MBI.RegionSize >= (8ull << 20))
-						Big.push_back({ MBI.RegionSize, (size_t)P });
-				}
-			}
-			std::sort(Big.begin(), Big.end(), [](const Region& a, const Region& b) { return a.Size > b.Size; });
-			std::string R = std::format("VQ: committed={:.0f}MB regions={}", (double)TotalCommitted / (1024.0*1024.0), TotalRegions);
-			for (size_t i = 0; i < Big.size() && i < 8; ++i)
-				R += std::format(" | 0x{:08x}={:.0f}MB", (unsigned int)Big[i].Base, (double)Big[i].Size / (1024.0 * 1024.0));
-			LOG_INFO(LogBots, "[memdiag] {}", R);
 		}
 	}
 
@@ -555,7 +633,9 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		// Vida/escudo base.
 		Bot.Pawn->SetHealth(100);
 		Bot.Pawn->SetMaxHealth(100);
-		LOG_INFO(LogBots, "[CustomBot] Health set to 100/100");
+		Bot.Pawn->SetShield(0);
+		Bot.Pawn->SetMaxShield(100);
+		LOG_INFO(LogBots, "[CustomBot] Health/Shield set to 100/100 y 0/100");
 
 		// Abilities.
 		LOG_INFO(LogBots, "[CustomBot] Granting abilities...");

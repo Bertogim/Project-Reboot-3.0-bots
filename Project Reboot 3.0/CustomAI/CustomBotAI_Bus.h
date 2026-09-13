@@ -8,17 +8,21 @@
 //   1) al arrancar el avion cada bot espera entre 15 y 45s (ventana de salto:
 //      pasan 15s desde que empieza el bus y luego hay 30s para tirarse), de
 //      modo que las caidas se reparten a lo largo del trayecto,
-//   2) ChoosingLanding elige su zona (cerca de cofres),
-//   3) Jumping -> CustomEject: se teletransporta a la posicion ACTUAL del avion
+//   2) Ejecting -> CustomEject: se teletransporta a la posicion ACTUAL del avion
 //      (o al centro fijo del bus como fallback) a altura de vuelo,
-//   4) ReleaseForSimulation + bInAirPhase=true (gravedad SI actua) +
+//   3) ReleaseForSimulation + bInAirPhase=true (gravedad SI actua) +
 //      StartSkydive controlado hacia su zona,
-//   5) el motor despliega la ala delta automaticamente cerca del suelo,
-//   6) cuando el CMC vuelve a Walking -> ha aterrizado -> Looting.
+//   4) el motor despliega la ala delta automaticamente cerca del suelo,
+//   5) cuando el CMC vuelve a Walking -> ha aterrizado -> Looting.
+// (Nota: los estados viejos ChoosingLanding/Jumping desaparecieron: elegir zona
+// era instantaneo y "Jumping" tampoco saltaba, se teletransportaba. Quedo un
+// solo estado Ejecting = elegir zona + teletransporte + caida controlada.)
 //
 // Garantia anti-lobby: si la fase de avion ya termino y un bot sigue en
-// InBus/ChoosingLanding sin haber salido, Update lo coloca DIRECTAMENTE en el
-// suelo de su destino (ForceExitAircraft). Ningun bot se queda en la isla.
+// InBus/Ejecting sin haber salido, Update lo coloca en el suelo de su destino
+// (ForceExitAircraft) o, si nunca estuvo montado, lo lanza desde ALTURA sobre
+// su zona para que caiga de verdad (StartLateDrop). Ningun bot se queda en la
+// isla esperando.
 //
 // Nota: el motor de fisicas SOBREESCRIBE el movement mode del bot constantemente.
 // No se setea MovementMode aqui: si esta en el aire estara Falling automaticamente.
@@ -31,6 +35,9 @@ namespace CustomBotAIBus
 	inline constexpr float SkydiveHorizontalSpeed = 1500.0f; // avance rapido hacia el destino
 	inline constexpr float SkydiveMaxDescent = -1200.0f;     // descenso de skydive (NO caida libre)
 	inline constexpr float GlideHorizontalSpeed = 900.0f;    // planeo (el glider ya desplegado)
+
+	// Forward declaration (StartLateDrop la usa antes de su definicion).
+	static void StartSkydive(CustomBot& Bot, BotAIContext& Ctx, const FVector& Target);
 
 	// Lee el CharacterMovement del bot (UObject*).
 	static UObject* CMC(CustomBot& Bot)
@@ -178,6 +185,42 @@ namespace CustomBotAIBus
 			OutLoc.X, OutLoc.Y, OutLoc.Z);
 	}
 
+	// SPAWN TARDIO (la fase de avion ya termino y este bot nunca se monto): en
+	// lugar de sentarlo directo al suelo (ForceExitAircraft lo pone "de golpe"),
+	// se le hace caer de verdad desde ALTURA sobre su zona de aterrizaje:
+	// teletransporte a la altitud de vuelo del bus + bInAirPhase=true (no forzar
+	// Walking en el aire) + skydive controlado. Es el comportamiento pedido:
+	// "teletransportarse a altura y caer". Al tocar suelo el midgame arranca.
+	static void StartLateDrop(CustomBot& Bot, BotAIContext& Ctx)
+	{
+		if (!Bot.Pawn)
+			return;
+
+		if (Bot.PlayerState)
+			Bot.PlayerState->SetInAircraft(false);
+
+		ReleaseForSimulation(Bot);
+		Bot.bInAirPhase = true;
+
+		if (!Ctx.bHasLandingPoint)
+		{
+			Ctx.LandingPoint = CustomBotAI::PickLandingPoint(
+				Ctx.Personality.Aggression, Ctx.Personality.RiskTolerance);
+			Ctx.bHasLandingPoint = true;
+		}
+
+		FVector Target = Ctx.LandingPoint;
+		FVector DropPos{ Target.X, Target.Y, 80936.0f };
+
+		Bot.Pawn->TeleportTo(DropPos, Bot.Pawn->GetActorRotation());
+		ReapplySkinViz(Bot);
+		StartSkydive(Bot, Ctx, Target);
+		Ctx.State = EBotState::Gliding;
+
+		LOG_WARN(LogBots, "[BotBus] late spawn -> altitude drop from ({:.0f},{:.0f},{:.0f}) toward landing",
+			DropPos.X, DropPos.Y, DropPos.Z);
+	}
+
 	// Inicia la caida como un SKYDIVE CONTROLADO hacia el destino (no como caerse
 	// de un edificio): velocidad horizontal hacia la zona + descenso limitado.
 	static void StartSkydive(CustomBot& Bot, BotAIContext& Ctx, const FVector& Target)
@@ -314,7 +357,7 @@ namespace CustomBotAIBus
 		// Ya no estamos en fase de avion (el bus termino el recorrido).
 		if (!CustomBotAI::IsInAircraftPhase())
 		{
-			if (Ctx.State == EBotState::InBus || Ctx.State == EBotState::ChoosingLanding)
+			if (Ctx.State == EBotState::InBus)
 			{
 				if (IsInAircraft(Bot))
 				{
@@ -326,10 +369,10 @@ namespace CustomBotAIBus
 				else
 				{
 					// El bus ya termino y este bot no salio a tiempo: NO lo dejamos
-					// en la isla. Colocarlo directamente en el suelo de su destino
-					// ("put character here") para que empiece a jugar en el mapa.
-					// (Si seguimos en Warmup, que siga en el lobby: el avion lo
-					// recogera al empezar la fase.)
+					// en la isla. Si seguimos en Warmup, que siga en el lobby (el
+					// avion lo recogera al empezar la fase). Si la partida ya
+					// empezo, lanzarlo desde ALTURA sobre su zona para que caiga y
+					// juegue (caer del cielo, no aparecer sentado en el suelo).
 					AFortGameStateAthena* GS = CustomBotAI::GetGameState();
 					EAthenaGamePhase Phase = GS ? GS->GetGamePhase() : EAthenaGamePhase::None;
 
@@ -340,21 +383,19 @@ namespace CustomBotAIBus
 					}
 					else
 					{
-						Bot.bInAirPhase = false;
-						ForceExitAircraft(Bot, Ctx);
+						StartLateDrop(Bot, Ctx);
 					}
 				}
 
 				return;
 			}
 
-			if (Ctx.State == EBotState::Jumping)
+			if (Ctx.State == EBotState::Ejecting)
 			{
-				// El bus termino justo cuando iba a saltar: no empezar la caida
-				// desde la isla (se quedaria en el lobby); colocarlo en el suelo
-				// de su destino directamente.
-				Bot.bInAirPhase = false;
-				ForceExitAircraft(Bot, Ctx);
+				// El bus termino justo cuando iba a saltar: no arrancar la caida
+				// desde la isla (se quedaria en el lobby); suelta la caida desde
+				// altitud de spawn tardio.
+				StartLateDrop(Bot, Ctx);
 			}
 		}
 
@@ -384,33 +425,15 @@ namespace CustomBotAIBus
 			}
 
 			if (UGameplayStatics::GetTimeSeconds(GetWorld()) >= Ctx.JumpDelay)
-				Ctx.State = EBotState::ChoosingLanding;
+				Ctx.State = EBotState::Ejecting;
 
 			break;
 		}
 
-		case EBotState::ChoosingLanding:
+		case EBotState::Ejecting:
 		{
-			if (!Ctx.bHasLandingPoint)
-			{
-				Ctx.LandingPoint = CustomBotAI::PickLandingPoint(Ctx.Personality.Aggression, Ctx.Personality.RiskTolerance);
-				Ctx.bHasLandingPoint = true;
-			}
-
-			// Pequena variacion de tiempo y saltar.
-			if (UGameplayStatics::GetTimeSeconds(GetWorld()) >= Ctx.JumpDelay + 0.5f)
-				Ctx.State = EBotState::Jumping;
-
-			break;
-		}
-
-		case EBotState::Jumping:
-		{
-			// SIN salto nativo y SIN montaje: eject custom directo desde el lobby/
-			// isla a la posicion ACTUAL del avion + caida controlada. No se posee ni
-			// se des-posee nada (el bot ya viene en modo simulacion desde el spawn),
-			// asi que nunca se dispara el re-spawn de pawn del juego (SpawnDefaultPawn
-			// fallando por colision / errores MCP) que dejaba media partida rota.
+			// Salto del bus: elegir zona (si no se hizo) + eject custom directo
+			// a la posicion ACTUAL del avion + caida controlada (skydive/glide).
 			if (!Ctx.bHasLandingPoint)
 			{
 				Ctx.LandingPoint = CustomBotAI::PickLandingPoint(

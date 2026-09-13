@@ -11,6 +11,16 @@
 //         mas ligero y fiable); se puede activar en la UI, pestaña Bots.
 inline bool bCustomBotPathfinding = false;
 
+// TODO-PATH: toggle de PATHFINDING FALLBACK (navmesh solo cuando de verdad esta
+// atascado). Lo gestiona el checkbox "Pathfinding solo si atascado (10s)" en
+// gui.h (pestaña Bots). true = el bot va en linea recta + desatascado fisico
+// como de costumbre, pero SOLO usa la ruta navmesh cuando lleva >= 10s sin
+// superar su mejor avance (CustomBot::StuckPersistTime, medido contra el goal
+// real, inmune a los tirones del desatascado) -> escape para paredes/edificios
+// con 2+ pisos que no se superan ni rompiendo ni construyendo. false = sistema
+// actual. Por defecto OFF; se activa desde la UI, pestaña Bots.
+inline bool bCustomBotPathfindingFallback = false;
+
 // CustomBotTypes - Tipos compartidos entre los modulos del sistema de bot "Season 3".
 // Parte 1: SOLO cuerpo/capacidades (sin decisiones de IA). Estos tipos estan
 // diseñados para que los modulos de movimiento/percepcion/inventario/combate/etc.

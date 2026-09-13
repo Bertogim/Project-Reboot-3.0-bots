@@ -53,6 +53,10 @@ public:
 	CBT::EMovementState MoveState = CBT::EMovementState::Idle;
 	bool bMoveRequestActive = false;
 
+	// true mientras el bot dispara un arma (o agita el pico): el clamp de pitch
+	// a +-45 grados de SetRotation se desactiva si esta disparando (CustomBotCombat).
+	bool bFiringWeapon = false;
+
 	// --- Contexto de IA (Parte 2) --------------------------------------------
 	// Motor de decisiones autonomas (estado, personalidad, objetivo actual, etc).
 	// Es un puntero opaco (forward declaration) para que los modulos de capacidad
@@ -159,6 +163,40 @@ public:
 	FVector UnstickRefLoc{};    // posicion de referencia de la etapa
 	int UnstickSwings = 0;      // golpes de pico dados en la etapa "romper"
 	int UnstickFails = 0;       // ciclos de desatascado fallidos consecutivos (tope)
+	FVector UnstickDetourDest{};// punto de rodeo (etapa "ir por otro lado")
+	bool bUnstickDetourSet = false; // el desvio ya esta apuntado
+	int UnstickDetourCount = 0; // lados de rodeo probados (0/1 -> +1, 2 -> -1)
+	bool bUnstickRampBuilt = false; // rampa ya construida en la etapa de construir
+	int UnstickRampCount = 0;   // rampas apiladas en la escalera de la etapa 6 (tope 3)
+	int UnstickFloorCount = 0;  // suelos colocados encima de la escalera
+
+	// --- Deteccion de atasco por PROGRESO real (no solo LOS) ----------------
+	// Con un move activo, el bot se considera atascado si no se desplaza mas
+	// de un umbral en una ventana de tiempo, aunque la LOS al destino este
+	// despejada (empotrado contra un collider/estructura). Lo gestiona
+	// CustomBotBreak con StuckWindowTime/StuckWindowPos/StuckTime.
+	float StuckWindowTime = -1.0f; // BotTime del ultimo muestreo de progreso
+	FVector StuckWindowPos{};      // posicion horizontal en el ultimo muestreo
+	float StuckTime = 0.0f;        // segundos acumulados sin avanzar
+	bool bInCombat = false;        // lo marca la IA (Fighting/Defending); evita desatascar en combate
+
+	// --- Atasco PERSISTENTE (pathfinding fallback a los 10s) -----------------
+	// Para el toggle "pathfinding solo si atascado": se acumula el tiempo en que
+	// el bot NO supera su mejor avance horizontal hacia el goal (UnstickGoal si
+	// hay desatascado activo, si no el destino del MoveTo actual). El desatascado
+	// fisico (retroceder/saltar/rodear) tambien mueve al bot, asi que NO vale
+	// medir solo "se mueve o no": se mide contra el progreso NETO hacia el goal.
+	float StuckPersistTime = 0.0f;  // segundos sin superar el mejor avance
+	FVector StuckPersistGoal{};     // goal para el que se mide el progreso
+	float StuckPersistBest = 1e30f; // mejor distancia horizontal al goal en este episodio
+	// Umbral: con el checkbox bCustomBotPathfindingFallback activo, un bot con
+	// StuckPersistTime >= este umbral consulta el navmesh (ruta de waypoints).
+	static constexpr float PathfindingFallbackStuckTime = 10.0f;
+
+	// --- Desatascado etapa "romper" ------------------------------------------
+	// Obstaculo/estructura detectado en TryBreakFront (etapa 4); si el swing del
+	// pico no abre paso, se fuerza su destruccion (DestroyTarget) como tope.
+	AActor* UnstickTarget = nullptr;
 
 	bool HasMoveRequest() const
 	{

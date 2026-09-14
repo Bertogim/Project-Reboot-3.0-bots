@@ -386,7 +386,8 @@ namespace CustomBotAIMidgame
 			return;
 		}
 
-		// Sin loot cerca: buscar un nuevo punto o explorar.
+		// Sin loot cerca: en vez de pasear en un radio corto, navegar al cofre
+		// sin abrir mas cercano del mapa (cache global CachedChests).
 		if (!Bot.HasMoveRequest() || Bot.HasArrived() || Bot.IsPathBlocked())
 		{
 			// Si el camino hacia el destino actual esta bloqueado, intentar
@@ -398,12 +399,45 @@ namespace CustomBotAIMidgame
 					return;
 			}
 
-			FVector Goal = Bot.Pawn->GetActorLocation() + CustomBotMovement::DirectionTo(
-				Bot.Pawn->GetActorLocation(),
-				CustomBotAI::GetSafeZoneCenter(Bot)) * 800.0f;
+			// Buscar el cofre sin abrir mas cercano del mapa.
+			const auto& Chests = CustomBotPerception::CachedChests();
+			FVector BotLoc = Bot.Pawn->GetActorLocation();
+			FVector BestChest = FVector{};
+			float BestDist = FLT_MAX;
 
-			FVector Wander = CustomBotAIMidgame::PickWanderTarget(Bot, Goal);
-			CustomBotMovement::MoveTo(Bot, Wander, 150.0f, true);
+			for (const auto& Chest : Chests)
+			{
+				if (Chest.bSearched)
+					continue;
+
+				float DX = Chest.Location.X - BotLoc.X;
+				float DY = Chest.Location.Y - BotLoc.Y;
+				float D2 = DX * DX + DY * DY;
+
+				if (D2 < BestDist)
+				{
+					BestDist = D2;
+					BestChest = Chest.Location;
+				}
+			}
+
+			// Si hay un cofre sin abrir en el mapa, ir a el.
+			if (BestDist < FLT_MAX)
+			{
+				LOG_INFO(LogBots, "[BotAI] looting: heading to distant unopened chest ({:.0f}u)",
+					FMath::Sqrt(BestDist));
+				CustomBotMovement::MoveTo(Bot, BestChest, 120.0f, true);
+			}
+			else
+			{
+				// Fallback: wander hacia la zona segura (no hay cofres sin abrir).
+				FVector Goal = BotLoc + CustomBotMovement::DirectionTo(
+					BotLoc,
+					CustomBotAI::GetSafeZoneCenter(Bot)) * 800.0f;
+
+				FVector Wander = CustomBotAIMidgame::PickWanderTarget(Bot, Goal);
+				CustomBotMovement::MoveTo(Bot, Wander, 150.0f, true);
+			}
 		}
 	}
 
@@ -950,7 +984,8 @@ namespace CustomBotAIMidgame
 	// --- Escaneo de loot / recursos (para decidir estado) ---------------------
 	static bool HasNearbyLoot(CustomBot& Bot, BotAIContext& Ctx, float Radius)
 	{
-		return CustomBotPerception::FindNearestPickup(Bot, Radius) != nullptr;
+		return CustomBotPerception::FindNearestPickup(Bot, Radius) != nullptr
+			|| CustomBotPerception::FindNearestUnopenedContainer(Bot, Radius) != nullptr;
 	}
 
 	static bool HasNearbyObstacle(CustomBot& Bot, float Radius)

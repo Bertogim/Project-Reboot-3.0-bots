@@ -114,11 +114,13 @@ namespace CustomBotInventory
 		return true;
 	}
 
-	// Equipa el item (por su instancia UFortItem*). Primaria: FortPawn:EquipWeaponDefinition
-	// directo sobre el pawn (funciona en servidor y SIN controller, requisito del fix
-	// RUNPHYS de research 08). Fallback: ServerExecuteInventoryItemHook, que REQUIERE
-	// Controller->GetPawn(); tras EnableServerSimulation el controller ya no posee pawn,
-	// asi que esa via sola no equipa nada. Verifica al final contra la definicion pedida.
+	// Equipa el item (por su instancia UFortItem*). Priores: con bots POSEIDOS
+	// (gBotPossessBots) se usa PRIMERO ServerExecuteInventoryItemHook (el path
+	// completo del jugador que requiere Controller->GetPawn(); con UnPossess ese
+	// GetPawn() es nullptr y no equipa nada). Sin possession se usa el path
+	// directo FortPawn:EquipWeaponDefinition (funciona sin controller, requisito
+	// del fix RUNPHYS de research 08). En ambos casos se verifica al final contra
+	// la definicion pedida y se prueba el camino alternativo si falla.
 	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
 	{
 		if (!Item)
@@ -131,14 +133,30 @@ namespace CustomBotInventory
 
 		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(Entry->GetItemDefinition());
 
-		if (WeaponDef && Bot.Pawn)
-			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
-
 		auto Verify = [&]() -> bool {
 			auto* W = Bot.IsReady() ? Bot.Pawn->GetCurrentWeapon() : nullptr;
 			auto* D = W ? W->GetWeaponData() : nullptr;
 			return D && Entry->GetItemDefinition() && D == Entry->GetItemDefinition();
 		};
+
+		if (gBotPossessBots)
+		{
+			// Poseido: el hook del controller replica/envida como un jugador real.
+			if (Bot.Controller)
+				Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, Entry->GetItemGuid());
+
+			if (!Verify() && WeaponDef && Bot.Pawn)
+				Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
+
+			if (!Verify())
+				LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED (possess): wanted={}",
+					Entry->GetItemDefinition()->GetPathName().c_str());
+
+			return Verify();
+		}
+
+		if (WeaponDef && Bot.Pawn)
+			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
 
 		if (!Verify())
 		{
@@ -152,23 +170,26 @@ namespace CustomBotInventory
 		return Verify();
 	}
 
-	// Equipa el pickaxe del bot. Usa la instancia de pickaxe ya existente en el
-	// WorldInventory (que SetupInventory crea en el spawn); AddPickaxeToInventory()
-	// devuelve nullptr si el pickaxe ya existe, asi que no sirve para re-equipar.
+	// Equipa el pickaxe del bot. Usa EquipItem (EquipWeaponDefinition directo
+	// sobre el pawn) en vez de EquipItemByGuid (ServerExecuteInventoryItemHook):
+	// tras EnableServerSimulation el controller ya no posee el pawn (UnPossess)
+	// y ServerExecuteInventoryItemHook falla silenciosamente (no equipa nada).
+	// EquipWeaponDefinition funciona SIEMPRE porque opera directamente sobre el
+	// pawn sin necesitar que el controller lo posea.
 	static bool EquipPickaxe(CustomBot& Bot)
 	{
-		if (!Bot.IsReady() || !Bot.Controller || !Bot.WorldInventory)
+		if (!Bot.IsReady() || !Bot.WorldInventory)
 			return false;
 
 		UFortItem* Pickaxe = Bot.WorldInventory->GetPickaxeInstance();
 
-		if (!Pickaxe)
+		if (!Pickaxe && Bot.Controller)
 			Pickaxe = Bot.Controller->AddPickaxeToInventory();
 
 		if (!Pickaxe)
 			return false;
 
-		return EquipItemByGuid(Bot, Pickaxe->GetItemEntry()->GetItemGuid());
+		return EquipItem(Bot, Pickaxe);
 	}
 
 	// Busca una arma en el inventario y la equipa.

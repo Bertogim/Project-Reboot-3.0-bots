@@ -104,9 +104,8 @@ namespace CustomBotCombat
 
 	static bool FireWeapon(CustomBot& Bot)
 	{
-		// Mientras este disparando con un arma (o con el pico) se permite apuntar
-		// con +-90 de pitch: el clamp a +-45 de SetRotation solo aplica en marcha.
 		Bot.bFiringWeapon = true;
+		Bot.bFiringWeaponTime = UGameplayStatics::GetTimeSeconds(GetWorld());
 		return ActivatePrimaryAbility(Bot);
 	}
 

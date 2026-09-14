@@ -346,7 +346,7 @@ static inline void CheckVictoryRoyale()
 		return;
 	}
 
-	if (bVictoryRoyaleHadTeams && AliveTeams.size() == 1 && !bVictoryRoyaleLogged)
+	if (bVictoryRoyaleHadTeams && AliveTeams.size() <= 1 && !bVictoryRoyaleLogged)
 	{
 		bVictoryRoyaleLogged = true;
 		LOG_INFO(LogDev, "[VictoryRoyale] 1");

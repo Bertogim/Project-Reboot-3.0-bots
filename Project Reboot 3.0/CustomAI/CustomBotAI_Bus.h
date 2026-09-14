@@ -214,6 +214,7 @@ namespace CustomBotAIBus
 
 		Bot.Pawn->TeleportTo(DropPos, Bot.Pawn->GetActorRotation());
 		ReapplySkinViz(Bot);
+		CustomBotAIMidgame::ResetToMatchHP(Bot);
 		StartSkydive(Bot, Ctx, Target);
 		Ctx.State = EBotState::Gliding;
 
@@ -333,6 +334,7 @@ namespace CustomBotAIBus
 
 		Bot.Pawn->TeleportTo(BusPos, Bot.Pawn->GetActorRotation());
 		ReapplySkinViz(Bot);
+		CustomBotAIMidgame::ResetToMatchHP(Bot);
 
 		if (!Ctx.bHasLandingPoint)
 		{

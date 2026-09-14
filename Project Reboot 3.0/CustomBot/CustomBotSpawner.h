@@ -641,20 +641,6 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		Bot.Pawn->SetMaxShield(100);
 		LOG_INFO(LogBots, "[CustomBot] Health/Shield set to 100/100 y 0/100");
 
-		// Capturar la gravedad de JUGADOR del CMC en este momento (recien
-		// spawnado, antes de que la fase de bus/skydive la reduzca). Se usa
-		// despues para restaurar al bot caigravedad/normal al tocar suelo.
-		if (auto* SpawnCM = CustomBotMovement::GetCharacterMovement(Bot))
-		{
-			int OffZ = SpawnCM->GetOffset(std::string("GravityZ"), false);
-			int OffS = SpawnCM->GetOffset(std::string("GravityScale"), false);
-			if (OffZ != -1)
-				Bot.GroundGravityZ = SpawnCM->Get<float>(OffZ);
-			if (OffS != -1)
-				Bot.GroundGravityScale = SpawnCM->Get<float>(OffS);
-			LOG_INFO(LogBots, "[CustomBot] Captured ground gravity: GravityZ={} GravityScale={}", Bot.GroundGravityZ, Bot.GroundGravityScale);
-		}
-
 		// Abilities.
 		LOG_INFO(LogBots, "[CustomBot] Granting abilities...");
 		GrantAbilities(Bot);
@@ -665,6 +651,21 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 
 		// Marcar como listo para que las funciones IsReady() funcionen abajo.
 		Bot.bInitialized = true;
+
+		// Capturar la gravedad de JUGADOR del CMC (recien spawnado, antes de que
+		// la fase de bus/skydive la reduzca). GetCharacterMovement exige
+		// IsReady()/bInitialized, asi que va DESPUES del flag. Se usa luego para
+		// restaurar la gravedad normal al tocar suelo.
+		if (auto* SpawnCM = CustomBotMovement::GetCharacterMovement(Bot))
+		{
+			int OffZ = SpawnCM->GetOffset(std::string("GravityZ"), false);
+			int OffS = SpawnCM->GetOffset(std::string("GravityScale"), false);
+			if (OffZ != -1)
+				Bot.GroundGravityZ = SpawnCM->Get<float>(OffZ);
+			if (OffS != -1)
+				Bot.GroundGravityScale = SpawnCM->Get<float>(OffS);
+			LOG_INFO(LogBots, "[CustomBot] Captured ground gravity: GravityZ={} GravityScale={}", Bot.GroundGravityZ, Bot.GroundGravityScale);
+		}
 
 		// Skin/cosmetico: ApplyHID con bUseServerChoosePart=true (ServerChoosePart).
 		gSpawnStage = "cosmetics";
@@ -677,9 +678,11 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		GameState->OnRep_PlayersLeft();
 
 		// FIX RUNPHYS: SetIsBot(false) + UnPossess + bRunPhysicsWithNoController.
+		// SIEMPRE se ejecuta (la serversimulation sigue aunque el bot quede
+		// poseido; el toggle solo controla el UnPossess interno).
 		gSpawnStage = "sim";
 		CustomBotMovement::EnableServerSimulation(Bot);
-		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done");
+		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done (possess={})", gBotPossessBots);
 
 		// La visualizacion del mesh (rebuild de character parts + replicacion) se
 		// DIFIERTE al tick del servidor: una rafaga de bots aplicando la skin

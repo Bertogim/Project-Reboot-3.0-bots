@@ -10,14 +10,14 @@ FString& APlayerState::GetSavedNetworkAddress()
 
 FString APlayerState::GetPlayerName()
 {
-	static auto GetPlayerNameFn = FindObject<UFunction>(L"/Script/Engine.PlayerState.GetPlayerName");
+	// En v3.5 el nombre vive en PlayerNamePrivate (no en PlayerName), y leerlo
+	// via ProcessEvent(GetPlayerName) devuelve un FString con puntero colgante
+	// (nombres garbled). Leer el offset directo es lo que ya usa
+	// FortServerBotManagerAthena para escribir el nombre de los bots.
+	static auto PlayerNamePrivateOffset = GetOffset("PlayerNamePrivate", false);
 
-	if (GetPlayerNameFn)
-	{
-		FString PlayerName;
-		this->ProcessEvent(GetPlayerNameFn, &PlayerName);
-		return PlayerName;
-	}
+	if (PlayerNamePrivateOffset != -1)
+		return Get<FString>(PlayerNamePrivateOffset);
 
 	static auto PlayerNameOffset = GetOffset("PlayerName");
 	return Get<FString>(PlayerNameOffset);

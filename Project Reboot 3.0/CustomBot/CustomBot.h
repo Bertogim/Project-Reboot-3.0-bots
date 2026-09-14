@@ -53,9 +53,13 @@ public:
 	CBT::EMovementState MoveState = CBT::EMovementState::Idle;
 	bool bMoveRequestActive = false;
 
-	// true mientras el bot dispara un arma (o agita el pico): el clamp de pitch
-	// a +-45 grados de SetRotation se desactiva si esta disparando (CustomBotCombat).
+	// true mientras el bot dispara un arma (o agita el pico): se resetea
+	// automaticamente tras un corto periodo (auto-reset de seguridad) para que
+	// no se quede pillado si StopFiring no se invoca (p.ej. melee sin kill).
+	// El clamp de pitch de SetRotation SIEMPRE aplica ±45° con o sin este flag.
 	bool bFiringWeapon = false;
+	float bFiringWeaponTime = 0.0f;   // BotTime en que se activo
+	static constexpr float kFiringWeaponTimeout = 0.5f; // duracion max del swing/disparo
 
 	// --- Contexto de IA (Parte 2) --------------------------------------------
 	// Motor de decisiones autonomas (estado, personalidad, objetivo actual, etc).
@@ -94,6 +98,12 @@ public:
 	// a ~80km flotando (modo Walking en el aire = sin gravedad). Se pone a
 	// true al ejectar/saltar y a false al aterrizar (OnLanded).
 	bool bInAirPhase = false;
+
+	// Gravedad de JUGADOR capturada al spawn del pawn (valores del CMC antes de
+	// que la fase de bus/skydive la reduzca). Despues de caer del avion se
+	// vuelve a aplicar para que el bot tenga la misma gravedad que los jugadores.
+	float GroundGravityZ = 0.0f;
+	float GroundGravityScale = 0.0f;
 
 	// --- Probe de movimiento (diagnostico) ----------------------------------
 	// CustomBotMovement::EnsureCMCActive registra cada ventana de ~60 ticks el
@@ -288,6 +298,17 @@ public:
 
 		if (!IsReady() || !IsValidActor())
 			return;
+
+		// Auto-reset de bFiringWeapon: si el flag lleva mas de kFiringWeaponTimeout
+		// segundos activo sin que StopFiring lo limpiara, se resetea automaticamente.
+		// Evita que el flag se quede pillado en true cuando el bot hace swing de
+		// pico sin matar al enemigo (StopFiring no se invoca en esa ruta).
+		if (bFiringWeapon)
+		{
+			float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+			if (Now - bFiringWeaponTime > kFiringWeaponTimeout)
+				bFiringWeapon = false;
+		}
 
 		// Secuencia de prueba (debugbot) si esta registrada.
 		if (DebugTick)

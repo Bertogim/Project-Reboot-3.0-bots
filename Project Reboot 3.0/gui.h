@@ -1505,6 +1505,13 @@ static inline void MainUI()
 			// (puertas / romper con pico).
 			ImGui::Checkbox("Pathfinding de bots (navmesh)", &bCustomBotPathfinding);
 			ImGui::Checkbox("Pathfinding solo si atascado (10s)", &bCustomBotPathfindingFallback);
+
+			ImGui::Separator();
+
+			// Posesion de bots: OFF = RUNPHYS (UnPossess + bRunPhysicsWithNoController,
+			// default, movimiento fiable); ON = bots poseidos tras el spawn (diagnostico,
+			// sin clientes el CMC puede no integrarse bien).
+			ImGui::Checkbox("Poseer bots (poseído en spawn, diagnóstico)", &gBotPossessBots);
 		}
 		else if (Tab == TEAMS_TAB)
 		{

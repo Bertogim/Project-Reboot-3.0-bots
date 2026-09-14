@@ -112,13 +112,18 @@ namespace CustomBotMovement
 	// Habilita la simulacion CMC en servidor para el bot (research 08).
 	// SetIsBot(false) + UnPossess + bRunPhysicsWithNoController=true.
 	// Sin ClaimLive — el handshake no es necesario para la fisica.
+	// La simulacion (bRunPhysicsWithNoController) SIEMPRE se aplica; solo el
+	// UnPossess es condicional al toggle gBotPossessBots (poseido = se mantiene
+	// el controller poseyendo el pawn, la serversimulation sigue intacta).
 	static bool EnableServerSimulation(CustomBot& Bot)
 	{
 		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
 			return false;
 
 		Bot.PlayerState->SetIsBot(false);
-		Bot.Controller->UnPossess();
+
+		if (!gBotPossessBots && Bot.Controller->GetPawn() == Bot.Pawn)
+			Bot.Controller->UnPossess();
 
 		// UnPossess() limpia Pawn->PlayerState (ACharacter::UnPossessed -> null).
 		// Se restaura el puntero para que el sistema de cosmeticos/tick del pawn
@@ -266,6 +271,21 @@ namespace CustomBotMovement
 				static int GroundOff = CME->GetOffset("GroundMovementMode", false);
 				if (GroundOff != -1) *(int*)(CMEAddr + GroundOff) = 1;
 			}
+
+			// GRAVEDAD: el skydive/caida desde el bus deja el GravityZ/GravityScale
+			// del CMC reducido (gravedad de gliding), y como el bot no pasa por el
+			// flujo nativo de aterrizaje de un jugador, nadie lo restaura. Cuando el
+			// bot ya esta en el suelo (no en el aire) se re-aplica la gravedad de
+			// jugador capturada al spawn.
+			if (Bot.GroundGravityZ != 0.0f || Bot.GroundGravityScale != 0.0f)
+			{
+				static int GravZOff = CME->GetOffset("GravityZ", false);
+				static int GravScaleOff = CME->GetOffset("GravityScale", false);
+				if (GravZOff != -1 && Bot.GroundGravityZ != 0.0f)
+					*(float*)(CMEAddr + GravZOff) = Bot.GroundGravityZ;
+				if (GravScaleOff != -1 && Bot.GroundGravityScale != 0.0f)
+					*(float*)(CMEAddr + GravScaleOff) = Bot.GroundGravityScale;
+			}
 		}
 
 		// Desbloquear gates que Fortnite pone en pawns sin cliente
@@ -379,9 +399,12 @@ namespace CustomBotMovement
 		// disparando con un arma (o agitando el pico): en combate/melee necesita
 		// apuntar al enemigo/estructura aunque este en alto, pero en marcha
 		// normal no quiere mirar al cielo mientras camina.
+		// NOTA: si bFiringWeapon se quedara clavado en true, este bypass dejaria
+		// de aplicar y el bot miraria al cielo al andar; CustomBot::Tick realiza
+		// un auto-reset del flag (kFiringWeaponTimeout) para que nunca pase.
 		FRotator Final = Rotation;
 		if (!Bot.bFiringWeapon)
-			Final.Pitch = FMath::Clamp(Final.Pitch, -45.0f, 45.0f);
+			Final.Pitch = FMath::Clamp(Final.Pitch, -20.0f, 20.0f);
 
 		// 1. Camara del controlador (SetControlRotation) -> direccion de disparo.
 		if (Bot.Controller)

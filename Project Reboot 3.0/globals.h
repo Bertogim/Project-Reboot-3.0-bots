@@ -50,6 +50,13 @@ extern inline bool bManualReplication = true;            // ON: el hook replica 
 // componente del tick que fuga.
 extern inline int gBotTickMode = 0;
 
+// Posesion de bots custom. Default OFF: EnableServerSimulation (RUNPHYS:
+// UnPossess + bRunPhysicsWithNoController). ON: mantener el bot poseido tras el
+// spawn (NO usar RUNPHYS). Util como toggle de diagnostico/debug; con bots
+// poseidos y sin clientes el CMC no se integra igual (ver research 08), asi que
+// el movimiento puede verse afectado.
+extern inline bool gBotPossessBots = false;
+
 extern inline std::string PlaylistName =
 "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo";
 // "/Game/Athena/Playlists/gg/Playlist_Gg_Reverse.Playlist_Gg_Reverse";

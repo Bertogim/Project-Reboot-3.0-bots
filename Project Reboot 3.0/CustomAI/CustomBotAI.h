@@ -172,8 +172,8 @@ struct BotAIContext
 };
 
 #include "CustomBotAI_SafeZone.h"
-#include "CustomBotAI_Bus.h"
 #include "CustomBotAI_Midgame.h"
+#include "CustomBotAI_Bus.h"
 
 // --- Implementaciones de CustomBotAI (declaradas arriba) ----------------------
 

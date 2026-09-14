@@ -290,3 +290,65 @@ public:
 	static void Athena_HandleStartingNewPlayerHook(AFortGameModeAthena* GameMode, AActor* NewPlayerActor);
 	static void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMaybeIDFK);
 };
+
+// Estado compartido (una sola instancia entre todas las TUs, C++17 inline).
+extern inline bool bVictoryRoyaleLogged = false;
+extern inline bool bVictoryRoyaleHadTeams = false;
+
+// Variable buena NUESTRA para el launcher: counts the alive teams from our own
+// AlivePlayers list (real players + custom bots) grouped by team index. Cuando
+// queda exactamente 1 equipo vivo y la partida ya empezo, emite:
+//   [VictoryRoyale] 1
+// que es lo unico que el launcher debe leer para saber que ya se hizo el
+// victory royal (reemplaza la heuristica "TeamsLeft: 1" del engine, que no
+// cuenta los equipos sinteticos de los bots custom).
+static inline void CheckVictoryRoyale()
+{
+	auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
+	if (!GameMode)
+		return;
+
+	auto GameState = GameMode->GetGameStateAthena();
+	if (!GameState)
+		return;
+
+	// Mientras sigue el warmup no hay victoria; ademas resetea el estado
+	// "hubo mas de un equipo" para que cada partida nueva empiece limpio.
+	if (GameState->GetGamePhase() <= EAthenaGamePhase::Warmup)
+	{
+		bVictoryRoyaleHadTeams = false;
+		return;
+	}
+
+	std::set<uint8> AliveTeams;
+
+	auto& Alive = GameMode->GetAlivePlayers();
+
+	for (int i = 0; i < Alive.Num(); ++i)
+	{
+		auto Controller = Alive.At(i);
+
+		if (!Controller)
+			continue;
+
+		auto PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState());
+
+		if (PlayerState)
+			AliveTeams.insert(PlayerState->GetTeamIndex());
+	}
+
+	// Todavia hay 2+ equipos en partida: se asegura de que alguna vez hubo
+	// varios equipos (evita victoria falsa si el host juega solo sin bots).
+	if (AliveTeams.size() >= 2)
+	{
+		bVictoryRoyaleHadTeams = true;
+		bVictoryRoyaleLogged = false;
+		return;
+	}
+
+	if (bVictoryRoyaleHadTeams && AliveTeams.size() == 1 && !bVictoryRoyaleLogged)
+	{
+		bVictoryRoyaleLogged = true;
+		LOG_INFO(LogDev, "[VictoryRoyale] 1");
+	}
+}

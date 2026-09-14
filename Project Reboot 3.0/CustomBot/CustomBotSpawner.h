@@ -206,6 +206,10 @@ namespace CustomBotSpawner
 			}
 		}
 
+		// Variable propia del DLL para el launcher: si tras esta muerte solo
+		// queda 1 equipo vivo, se loguea [VictoryRoyale].
+		CheckVictoryRoyale();
+
 		LOG_INFO(LogBots, "[CustomBot] [death] done playersLeft={} botsLeft={}",
 			GameState ? GameState->GetPlayersLeft() : -1, (int)AllCustomBots.size());
 	}
@@ -637,6 +641,20 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		Bot.Pawn->SetMaxShield(100);
 		LOG_INFO(LogBots, "[CustomBot] Health/Shield set to 100/100 y 0/100");
 
+		// Capturar la gravedad de JUGADOR del CMC en este momento (recien
+		// spawnado, antes de que la fase de bus/skydive la reduzca). Se usa
+		// despues para restaurar al bot caigravedad/normal al tocar suelo.
+		if (auto* SpawnCM = CustomBotMovement::GetCharacterMovement(Bot))
+		{
+			int OffZ = SpawnCM->GetOffset(std::string("GravityZ"), false);
+			int OffS = SpawnCM->GetOffset(std::string("GravityScale"), false);
+			if (OffZ != -1)
+				Bot.GroundGravityZ = SpawnCM->Get<float>(OffZ);
+			if (OffS != -1)
+				Bot.GroundGravityScale = SpawnCM->Get<float>(OffS);
+			LOG_INFO(LogBots, "[CustomBot] Captured ground gravity: GravityZ={} GravityScale={}", Bot.GroundGravityZ, Bot.GroundGravityScale);
+		}
+
 		// Abilities.
 		LOG_INFO(LogBots, "[CustomBot] Granting abilities...");
 		GrantAbilities(Bot);
@@ -949,6 +967,13 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		{
 			Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, PickaxeInstance->GetItemEntry()->GetItemGuid());
 		}
+
+		// 50 de madera al spawnear: los bots necesitan materiales para
+		// construir (rampas/paneles cuando estan atascados) y para que el
+		// sistema de building no les rechace las piezas por falta de mats.
+		static auto WoodItemData = FindObject<UFortItemDefinition>(L"/Game/Items/ResourcePickups/WoodItemData.WoodItemData");
+		if (WoodItemData)
+			Bot.WorldInventory->AddItem(WoodItemData, nullptr, 50);
 
 		Bot.WorldInventory->Update();
 

@@ -19,6 +19,7 @@
 #include <format>
 #include <imgui/imgui_internal.h>
 #include <set>
+#include <map>
 #include <fstream>
 #include <olectl.h>
 
@@ -71,6 +72,7 @@
 #define CREDITS_TAB 15
 #define BOTS_TAB 16
 #define HOST_TAB 17
+#define TEAMS_TAB 18
 
 #define MAIN_PLAYERTAB 1
 #define INVENTORY_PLAYERTAB 2
@@ -200,6 +202,8 @@ static inline void Restart() // todo move?
 	HostTeamAssignments.clear();
 	busCountdownSeconds = 300;
 	lastPlayerCountForBus = 0;
+	bVictoryRoyaleLogged = false;
+	bVictoryRoyaleHadTeams = false;
 	AmountOfRestarts++;
 
 	LOG_INFO(LogDev, "Switching!");
@@ -507,6 +511,14 @@ static inline void MainTabs()
 		if (ImGui::BeginTabItem("Bots"))
 		{
 			Tab = BOTS_TAB;
+			PlayerTab = -1;
+			bInformationTab = false;
+			ImGui::EndTabItem();
+		}
+
+		if (ImGui::BeginTabItem("Teams"))
+		{
+			Tab = TEAMS_TAB;
 			PlayerTab = -1;
 			bInformationTab = false;
 			ImGui::EndTabItem();
@@ -1493,6 +1505,75 @@ static inline void MainUI()
 			// (puertas / romper con pico).
 			ImGui::Checkbox("Pathfinding de bots (navmesh)", &bCustomBotPathfinding);
 			ImGui::Checkbox("Pathfinding solo si atascado (10s)", &bCustomBotPathfindingFallback);
+		}
+		else if (Tab == TEAMS_TAB)
+		{
+			auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
+
+			std::map<uint8, std::vector<std::string>> Teams;
+
+			if (GameMode)
+			{
+				auto& Alive = GameMode->GetAlivePlayers();
+
+				for (int i = 0; i < Alive.Num(); ++i)
+				{
+					auto Controller = Alive.At(i);
+
+					if (!Controller)
+						continue;
+
+					auto PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState());
+
+					if (!PlayerState)
+						continue;
+
+					Teams[PlayerState->GetTeamIndex()].push_back(PlayerState->GetPlayerName().ToString());
+				}
+			}
+
+			if (Teams.empty())
+			{
+				ImGui::Text("No teams found.");
+			}
+			else
+			{
+				for (auto& [TeamIndex, Names] : Teams)
+				{
+					int NumPlayers = (int)Names.size();
+					int NumColumns = (NumPlayers + 1) / 2;
+
+					ImGui::Text("Team %d (%d players)", (int)TeamIndex, NumPlayers);
+
+					if (ImGui::BeginTable(std::format("Team {} table", (int)TeamIndex).c_str(), NumColumns,
+						ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+					{
+						for (int r = 0; r < 2; ++r)
+						{
+							ImGui::TableNextRow();
+
+							for (int c = 0; c < NumColumns; ++c)
+							{
+								int index = r * NumColumns + c;
+
+								if (index >= NumPlayers)
+									continue;
+
+								ImGui::TableSetColumnIndex(c);
+								ImGui::Text("%s", Names[index].c_str());
+							}
+						}
+
+						ImGui::EndTable();
+					}
+
+					ImGui::NewLine();
+				}
+			}
+
+			// Varios newlines para que el scroll llegue al final.
+			for (int i = 0; i < 20; ++i)
+				ImGui::NewLine();
 		}
 		else if (Tab == LATEGAME_TAB)
 		{

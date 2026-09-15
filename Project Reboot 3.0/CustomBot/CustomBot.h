@@ -46,6 +46,8 @@ public:
 
 	bool bCMCInitialized = false;
 
+	bool bGhostHibernated = false;
+
 	unsigned RestorePSCounter = 0;
 
 	bool bInAirPhase = false;

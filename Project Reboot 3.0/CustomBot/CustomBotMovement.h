@@ -180,6 +180,30 @@ namespace CustomBotMovement
 		VirtualFree(Params, 0, MEM_RELEASE);
 	}
 
+	static void EnableComponentTick(UObject* Comp)
+	{
+		if (!Comp)
+			return;
+
+		static auto Fn = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
+
+		if (!Fn)
+			return;
+
+		static auto Off = FindOffsetStruct("/Script/Engine.ActorComponent.SetComponentTickEnabled", "bEnabled", false);
+
+		if (Off == -1)
+			return;
+
+		auto Params = Alloc(Fn->GetPropertiesSize());
+
+		*(bool*)(__int64(Params) + Off) = true;
+
+		Comp->ProcessEvent(Fn, Params);
+
+		VirtualFree(Params, 0, MEM_RELEASE);
+	}
+
 	static void SetWorldRotation(UObject* Actor, const FRotator& Rot)
 	{
 		if (!Actor)
@@ -570,6 +594,10 @@ namespace CustomBotMovement
 
 		if (!Bot.CosmeticPawn->IsActorBeingDestroyed() && Bot.Pawn && !Bot.Pawn->IsActorBeingDestroyed())
 		{
+			SetActorHiddenInGame(Bot.Pawn, true);
+
+			bool bOnBus = Bot.PlayerState && Bot.PlayerState->IsInAircraft();
+
 			auto* SrcCM = GetCharacterMovement(Bot.Pawn);
 			auto* DstCM = GetCharacterMovement(Bot.CosmeticPawn);
 
@@ -582,66 +610,117 @@ namespace CustomBotMovement
 
 			static auto ClearAccumulatedForcesFn = FindObject<UFunction>(L"/Script/Engine.MovementComponent.ClearAccumulatedForces");
 
-			if (SrcCM && DstCM)
+			if (bOnBus)
 			{
-				FVector SrcVel{};
-				if (SrcVelOff != -1)
-					SrcVel = SrcCM->Get<FVector>(SrcVelOff);
-
-				FVector SrcAcc{};
-				if (SrcAccOff != -1)
-					SrcAcc = SrcCM->Get<FVector>(SrcAccOff);
-
-				bool bGhostIdle = (SrcVel | SrcVel) < 4.0f && (SrcAcc | SrcAcc) < 4.0f;
-
-				int SrcMode = SrcModeOff != -1 ? SrcCM->Get<int>(SrcModeOff) : -1;
-
-				if (SrcMode != -1 && DstModeOff != -1)
-					DstCM->Get<int>(DstModeOff) = SrcMode;
-
-				if (DstVelOff != -1)
-					DstCM->Get<FVector>(DstVelOff) = SrcVel;
-
-				if (DstAccOff != -1)
-					DstCM->Get<FVector>(DstAccOff) = SrcAcc;
-
-				if (bGhostIdle)
+				if (SrcCM)
 				{
-					if (DstAccOff != -1)
-						DstCM->Get<FVector>(DstAccOff) = FVector{ 0.0f, 0.0f, 0.0f };
+					if (!Bot.bGhostHibernated)
+					{
+						DisableComponentTick(SrcCM);
+
+						if (ClearAccumulatedForcesFn)
+							SrcCM->ProcessEvent(ClearAccumulatedForcesFn);
+
+						Bot.bGhostHibernated = true;
+					}
+
+					if (SrcVelOff != -1)
+						SrcCM->Get<FVector>(SrcVelOff) = FVector{ 0.0f, 0.0f, 0.0f };
+
+					if (SrcAccOff != -1)
+						SrcCM->Get<FVector>(SrcAccOff) = FVector{ 0.0f, 0.0f, 0.0f };
+				}
+
+				FRotator CosRot = Bot.CosmeticPawn->GetActorRotation();
+				FRotator MoveRot = Bot.Pawn->GetActorRotation();
+
+				float Dy = FMath::Abs(MoveRot.Yaw - CosRot.Yaw);
+				if (Dy > 180.0f)
+					Dy = 360.0f - Dy;
+
+				float Dp = FMath::Abs(MoveRot.Pitch - CosRot.Pitch);
+				float Dr = FMath::Abs(MoveRot.Roll - CosRot.Roll);
+
+				if (Dp > 0.5f || Dy > 0.5f || Dr > 0.5f)
+					SetWorldRotation(Bot.Pawn, CosRot);
+
+				FVector MoveLoc = Bot.Pawn->GetActorLocation();
+				FVector CosLoc = Bot.CosmeticPawn->GetActorLocation();
+
+				FVector Delta = CosLoc - MoveLoc;
+
+				if ((Delta | Delta) > 0.0004f)
+					Bot.Pawn->TeleportTo(CosLoc, CosRot);
+			}
+			else
+			{
+				if (Bot.bGhostHibernated && SrcCM)
+				{
+					EnableComponentTick(SrcCM);
+					Bot.bGhostHibernated = false;
+				}
+
+				if (SrcCM && DstCM)
+				{
+					FVector SrcVel{};
+					if (SrcVelOff != -1)
+						SrcVel = SrcCM->Get<FVector>(SrcVelOff);
+
+					FVector SrcAcc{};
+					if (SrcAccOff != -1)
+						SrcAcc = SrcCM->Get<FVector>(SrcAccOff);
+
+					bool bGhostIdle = (SrcVel | SrcVel) < 4.0f && (SrcAcc | SrcAcc) < 4.0f;
+
+					int SrcMode = SrcModeOff != -1 ? SrcCM->Get<int>(SrcModeOff) : -1;
+
+					if (SrcMode != -1 && DstModeOff != -1)
+						DstCM->Get<int>(DstModeOff) = SrcMode;
 
 					if (DstVelOff != -1)
-						DstCM->Get<FVector>(DstVelOff) = FVector{ 0.0f, 0.0f, 0.0f };
+						DstCM->Get<FVector>(DstVelOff) = SrcVel;
 
-					if (ClearAccumulatedForcesFn)
-						DstCM->ProcessEvent(ClearAccumulatedForcesFn);
+					if (DstAccOff != -1)
+						DstCM->Get<FVector>(DstAccOff) = SrcAcc;
+
+					if (bGhostIdle)
+					{
+						if (DstAccOff != -1)
+							DstCM->Get<FVector>(DstAccOff) = FVector{ 0.0f, 0.0f, 0.0f };
+
+						if (DstVelOff != -1)
+							DstCM->Get<FVector>(DstVelOff) = FVector{ 0.0f, 0.0f, 0.0f };
+
+						if (ClearAccumulatedForcesFn)
+							DstCM->ProcessEvent(ClearAccumulatedForcesFn);
+					}
 				}
-			}
 
-			FRotator MoveRot = Bot.Pawn->GetActorRotation();
-			FRotator CosRot = Bot.CosmeticPawn->GetActorRotation();
+				FRotator MoveRot = Bot.Pawn->GetActorRotation();
+				FRotator CosRot = Bot.CosmeticPawn->GetActorRotation();
 
-			float Dy = FMath::Abs(CosRot.Yaw - MoveRot.Yaw);
-			if (Dy > 180.0f)
-				Dy = 360.0f - Dy;
+				float Dy = FMath::Abs(CosRot.Yaw - MoveRot.Yaw);
+				if (Dy > 180.0f)
+					Dy = 360.0f - Dy;
 
-			float Dp = FMath::Abs(CosRot.Pitch - MoveRot.Pitch);
-			float Dr = FMath::Abs(CosRot.Roll - MoveRot.Roll);
+				float Dp = FMath::Abs(CosRot.Pitch - MoveRot.Pitch);
+				float Dr = FMath::Abs(CosRot.Roll - MoveRot.Roll);
 
-			if (Dp > 0.5f || Dy > 0.5f || Dr > 0.5f)
-				SetWorldRotation(Bot.CosmeticPawn, MoveRot);
+				if (Dp > 0.5f || Dy > 0.5f || Dr > 0.5f)
+					SetWorldRotation(Bot.CosmeticPawn, MoveRot);
 
-			FVector MoveLoc = Bot.Pawn->GetActorLocation();
-			FVector CosLoc = Bot.CosmeticPawn->GetActorLocation();
+				FVector MoveLoc = Bot.Pawn->GetActorLocation();
+				FVector CosLoc = Bot.CosmeticPawn->GetActorLocation();
 
-			FVector Delta = MoveLoc - CosLoc;
+				FVector Delta = MoveLoc - CosLoc;
 
-			if ((Delta | Delta) > 0.0004f)
-			{
-				Bot.CosmeticPawn->TeleportTo(MoveLoc, MoveRot);
+				if ((Delta | Delta) > 0.0004f)
+				{
+					Bot.CosmeticPawn->TeleportTo(MoveLoc, MoveRot);
 
-				if (DstCM && SrcVelOff != -1 && DstVelOff != -1 && SrcCM)
-					DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
+					if (DstCM && SrcVelOff != -1 && DstVelOff != -1 && SrcCM)
+						DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
+				}
 			}
 		}
 

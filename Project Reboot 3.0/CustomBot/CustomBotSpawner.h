@@ -534,11 +534,10 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		GameState->OnRep_PlayersLeft();
 
 		// FIX RUNPHYS: SetIsBot(false) + UnPossess + bRunPhysicsWithNoController.
-		// SIEMPRE se ejecuta (la serversimulation sigue aunque el bot quede
-		// poseido; el toggle solo controla el UnPossess interno).
+		// Los bots SIEMPRE se desposeen; el servidor simula el CMC sin controller.
 		gSpawnStage = "sim";
 		CustomBotMovement::EnableServerSimulation(Bot);
-		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done (possess={})", gBotPossessBots);
+		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done");
 
 		Bot.bSkinPending = true;
 		LOG_INFO(LogBots, "[CustomBot] skin pending (deferred to tick)");

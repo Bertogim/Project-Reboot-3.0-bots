@@ -38,14 +38,6 @@ public:
 
 	BotAIContext* AI = nullptr;
 
-	// --- Posesion (Parte 2) ---------------------------------------------------
-	// Cuando es true, el bot se mantiene POSEIDO durante la fase de bus para
-	// poder saltar del avion. Cuando es false, CustomBotMovement::EnableServerSimulation
-	// aplica el RUNPHYS: UnPossess + bRunPhysicsWithNoController (el servidor simula
-	// el CMC "sin controller"). El bot en el bus desactiva este bool justo despues
-	// de saltar para que la caida/planeo los gestione la simulacion real.
-	bool bKeepPossessed = false;
-
 	bool bClaimLiveDone = false;
 
 	bool bCMCInitialized = false;

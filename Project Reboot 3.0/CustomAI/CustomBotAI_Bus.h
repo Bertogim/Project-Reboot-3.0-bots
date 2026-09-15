@@ -63,20 +63,6 @@ namespace CustomBotAIBus
 		return L;
 	}
 
-	// Suelta la posesion y activa el modo de simulacion de servidor (RUNPHYS) para
-	// que el CMC siga integrando Velocity/Acceleration durante la caida y el
-	// midgame. Se llama al salir del avion (solo si el bot estaba poseido).
-	static void ReleaseForSimulation(CustomBot& Bot)
-	{
-		if (!Bot.bKeepPossessed)
-			return;
-
-		Bot.bKeepPossessed = false;
-
-		if (Bot.Controller && Bot.Pawn && Bot.Controller->GetPawn() == Bot.Pawn)
-			Bot.Controller->UnPossess();
-	}
-
 	static void ReapplySkinViz(CustomBot& Bot)
 	{
 		if (!Bot.Pawn || !Bot.PlayerState)
@@ -141,7 +127,6 @@ namespace CustomBotAIBus
 		if (Bot.PlayerState)
 			Bot.PlayerState->SetInAircraft(false);
 
-		ReleaseForSimulation(Bot);
 		Bot.bInAirPhase = true;
 
 		if (!Ctx.bHasLandingPoint)
@@ -239,7 +224,6 @@ namespace CustomBotAIBus
 		if (Bot.PlayerState)
 			Bot.PlayerState->SetInAircraft(false);
 
-		ReleaseForSimulation(Bot);
 		Bot.bInAirPhase = true;
 
 		FVector BusPos{-47557.0f, -62295.0f, 80936.0f};

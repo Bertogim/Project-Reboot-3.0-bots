@@ -83,9 +83,7 @@ namespace CustomBotMovement
 	// Habilita la simulacion CMC en servidor para el bot (research 08).
 	// SetIsBot(false) + UnPossess + bRunPhysicsWithNoController=true.
 	// Sin ClaimLive — el handshake no es necesario para la fisica.
-	// La simulacion (bRunPhysicsWithNoController) SIEMPRE se aplica; solo el
-	// UnPossess es condicional al toggle gBotPossessBots (poseido = se mantiene
-	// el controller poseyendo el pawn, la serversimulation sigue intacta).
+	// Los bots SIEMPRE se desposeen; el servidor simula el CMC sin controller.
 	static bool EnableServerSimulation(CustomBot& Bot)
 	{
 		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
@@ -93,7 +91,7 @@ namespace CustomBotMovement
 
 		Bot.PlayerState->SetIsBot(false);
 
-		if (!gBotPossessBots && Bot.Controller->GetPawn() == Bot.Pawn)
+		if (Bot.Controller->GetPawn() == Bot.Pawn)
 			Bot.Controller->UnPossess();
 
 		// UnPossess() limpia Pawn->PlayerState (ACharacter::UnPossessed -> null).

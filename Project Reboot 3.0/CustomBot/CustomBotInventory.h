@@ -122,21 +122,6 @@ namespace CustomBotInventory
 			return D && Entry->GetItemDefinition() && D == Entry->GetItemDefinition();
 		};
 
-		if (gBotPossessBots)
-		{
-			if (Bot.Controller)
-				Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, Entry->GetItemGuid());
-
-			if (!Verify() && WeaponDef && Bot.Pawn)
-				Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
-
-			if (!Verify())
-				LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED (possess): wanted={}",
-					Entry->GetItemDefinition()->GetPathName().c_str());
-
-			return Verify();
-		}
-
 		if (WeaponDef && Bot.Pawn)
 			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
 

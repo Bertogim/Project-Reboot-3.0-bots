@@ -80,10 +80,7 @@ namespace CustomBotMovement
 			Bot.Pawn->Get<UObject*>(PSOff) = (UObject*)Bot.PlayerState;
 	}
 
-	// Habilita la simulacion CMC en servidor para el bot (research 08).
-	// SetIsBot(false) + UnPossess + bRunPhysicsWithNoController=true.
-	// Sin ClaimLive — el handshake no es necesario para la fisica.
-	// Los bots SIEMPRE se desposeen; el servidor simula el CMC sin controller.
+	// EXPERIMENTAL (rama possession-input): bot POSSESSED, movimiento en tierra por input.
 	static bool EnableServerSimulation(CustomBot& Bot)
 	{
 		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
@@ -91,30 +88,13 @@ namespace CustomBotMovement
 
 		Bot.PlayerState->SetIsBot(false);
 
-		if (Bot.Controller->GetPawn() == Bot.Pawn)
-			Bot.Controller->UnPossess();
-
 		// UnPossess() limpia Pawn->PlayerState (ACharacter::UnPossessed -> null).
-		// Se restaura el puntero para que el sistema de cosmeticos/tick del pawn
-		// lo vea (sin el, el mesh re-intenta cargar parts cada tick).
+		// Aqui no se desposee, pero restaurar el puntero no hace dano.
 		RestorePawnPlayerState(Bot);
 
-		bool bBitOK = false;
-		if (auto* CMR = GetCharacterMovement(Bot))
-		{
-			auto* Prop = CMR->GetProperty("bRunPhysicsWithNoController");
-			int Off = CMR->GetOffset("bRunPhysicsWithNoController", false);
-			if (Prop && Off != -1)
-			{
-				CMR->SetBitfieldValue(Off, GetFieldMask(Prop), true);
-				bBitOK = true;
-			}
-		}
+		LOG_WARN(LogBots, "[CustomBot] EXP-POSSESS: IsBot=false, bot POSSESSED (movimiento por input)");
 
-		LOG_WARN(LogBots, "[CustomBot] RUNPHYS-FIX: IsBot=false, UnPossess, bRunPhysicsWithNoController={}",
-			bBitOK);
-
-		return bBitOK;
+		return true;
 	}
 
 	static void EnsureCMCActive(CustomBot& Bot, bool bPerTickWork = true, bool bDoClaim = true)
@@ -376,6 +356,53 @@ namespace CustomBotMovement
 
 		if (bRotateTowardsMove)
 			LookAt(Bot, Destination);
+
+		// EXPERIMENTAL: movimiento por input del pawn (AddMovementInput), el CMC
+		// integra con su fisica (escaleras/rampas/collision). Fallback: CMC
+		// AddInputVector; ultimo recurso: escritura directa de velocity.
+		static auto AddMovementInputFn = FindObject<UFunction>(L"/Script/Engine.Character.AddMovementInput");
+
+		if (AddMovementInputFn)
+		{
+			static auto WorldDirectionOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "WorldDirection");
+			static auto ScaleValueOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "ScaleValue");
+			static auto bForceOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "bForce");
+
+			if (WorldDirectionOffset != -1 && ScaleValueOffset != -1 && bForceOffset != -1)
+			{
+				auto Params = Alloc(AddMovementInputFn->GetPropertiesSize());
+
+				*(FVector*)(__int64(Params) + WorldDirectionOffset) = Dir;
+				*(float*)(__int64(Params) + ScaleValueOffset) = 1.0f;
+				*(uint8_t*)(__int64(Params) + bForceOffset) = 1;
+
+				Bot.Pawn->ProcessEvent(AddMovementInputFn, Params);
+
+				VirtualFree(Params, 0, MEM_RELEASE);
+				return;
+			}
+		}
+
+		static auto AddInputVectorFn = FindObject<UFunction>(L"/Script/Engine.MovementComponent.AddInputVector");
+
+		if (AddInputVectorFn)
+		{
+			static auto WorldVectorOffset = FindOffsetStruct("/Script/Engine.MovementComponent.AddInputVector", "WorldVector");
+			static auto bForceOffset = FindOffsetStruct("/Script/Engine.MovementComponent.AddInputVector", "bForce");
+
+			if (WorldVectorOffset != -1 && bForceOffset != -1)
+			{
+				auto Params = Alloc(AddInputVectorFn->GetPropertiesSize());
+
+				*(FVector*)(__int64(Params) + WorldVectorOffset) = Dir;
+				*(uint8_t*)(__int64(Params) + bForceOffset) = 1;
+
+				CharacterMovement->ProcessEvent(AddInputVectorFn, Params);
+
+				VirtualFree(Params, 0, MEM_RELEASE);
+				return;
+			}
+		}
 
 		FVector NewVelocity{ Dir.X * Speed, Dir.Y * Speed, 0.0f };
 

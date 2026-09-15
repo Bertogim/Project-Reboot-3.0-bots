@@ -188,6 +188,20 @@ namespace CustomBotBuilding
 		return BuildPiece(Bot, GetPieceClass(EPieceType::Roof), Location, Rotation, bMirrored);
 	}
 
+	static EPieceType PieceTypeOf(UClass* BuildingClass)
+	{
+		if (BuildingClass == GetPieceClass(EPieceType::Wall))
+			return EPieceType::Wall;
+
+		if (BuildingClass == GetPieceClass(EPieceType::Floor))
+			return EPieceType::Floor;
+
+		if (BuildingClass == GetPieceClass(EPieceType::Ramp))
+			return EPieceType::Ramp;
+
+		return EPieceType::Roof;
+	}
+
 	static ABuildingSMActor* BuildPiece(CustomBot& Bot, UClass* BuildingClass, const FVector& Location, const FRotator& Rotation, bool bMirrored, bool bKeepOverlaps)
 	{
 		if (!Bot.IsReady() || !Bot.Controller || !Bot.WorldInventory)
@@ -198,6 +212,8 @@ namespace CustomBotBuilding
 			LOG_WARN(LogBots, "[BuildPiece] gate=null class (piece type not found in this version)");
 			return nullptr;
 		}
+
+		SelectPiece(Bot, PieceTypeOf(BuildingClass));
 
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 		auto PlayerStateAthena = Bot.PlayerState;

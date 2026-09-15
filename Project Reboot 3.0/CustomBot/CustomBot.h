@@ -107,6 +107,11 @@ public:
 
 	AActor* UnstickTarget = nullptr;
 
+	bool bPendingEquip = false;
+	FGuid PendingEquipGuid{};
+	float PendingEquipTime = 0.0f;
+	int PendingEquipAttempts = 0;
+
 	bool HasMoveRequest() const
 	{
 		return bMoveRequestActive;

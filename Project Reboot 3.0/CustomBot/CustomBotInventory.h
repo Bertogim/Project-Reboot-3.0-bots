@@ -95,14 +95,7 @@ namespace CustomBotInventory
 		return nullptr;
 	}
 
-	static bool EquipItemByGuid(CustomBot& Bot, const FGuid& ItemGuid)
-	{
-		if (!Bot.IsReady() || !Bot.Controller)
-			return false;
-
-		Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, ItemGuid);
-		return true;
-	}
+	static constexpr float kEquipVerifyTimeout = 1.5f;
 
 	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
 	{
@@ -125,16 +118,62 @@ namespace CustomBotInventory
 		if (WeaponDef && Bot.Pawn)
 			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
 
-		if (!Verify())
+		if (Verify())
 		{
-			EquipItemByGuid(Bot, Entry->GetItemGuid());
-
-			if (!Verify())
-				LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED: wanted={}",
-					Entry->GetItemDefinition()->GetPathName().c_str());
+			Bot.bPendingEquip = false;
+			return true;
 		}
 
-		return Verify();
+		Bot.bPendingEquip = true;
+		Bot.PendingEquipGuid = Entry->GetItemGuid();
+		Bot.PendingEquipTime = UGameplayStatics::GetTimeSeconds(GetWorld());
+		return false;
+	}
+
+	static void TickPendingEquips(CustomBot& Bot)
+	{
+		if (!Bot.bPendingEquip)
+			return;
+
+		if (!Bot.IsReady() || !Bot.Pawn || !Bot.WorldInventory)
+			return;
+
+		UFortItem* Pending = Bot.WorldInventory->FindItemInstance(Bot.PendingEquipGuid);
+
+		if (!Pending || !Pending->GetItemEntry())
+		{
+			Bot.bPendingEquip = false;
+			return;
+		}
+
+		auto* Current = Bot.Pawn->GetCurrentWeapon();
+		auto* CurrentDef = Current ? Current->GetWeaponData() : nullptr;
+
+		if (CurrentDef == Pending->GetItemEntry()->GetItemDefinition())
+		{
+			Bot.bPendingEquip = false;
+			return;
+		}
+
+		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+
+		if (Now - Bot.PendingEquipTime < kEquipVerifyTimeout)
+			return;
+
+		Bot.PendingEquipTime = Now;
+
+		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(Pending->GetItemEntry()->GetItemDefinition());
+
+		if (WeaponDef)
+			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Bot.PendingEquipGuid);
+
+		if (++Bot.PendingEquipAttempts >= 2)
+		{
+			LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED: wanted={}",
+				Pending->GetItemEntry()->GetItemDefinition()->GetPathName().c_str());
+			Bot.bPendingEquip = false;
+			Bot.PendingEquipAttempts = 0;
+		}
 	}
 
 	static bool EquipPickaxe(CustomBot& Bot)

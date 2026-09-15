@@ -292,6 +292,8 @@ namespace CustomBotAI
 		if (!Bot.IsReady())
 			return;
 
+		CustomBotInventory::TickPendingEquips(Bot);
+
 		if (Ctx.State == EBotState::Dead)
 			return;
 

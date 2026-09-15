@@ -1599,6 +1599,16 @@ static void BotTickCallbackImpl(void* data)
 		if (Mode <= 2)
 			CustomBotMovement::EnsureCMCActive(*Bot, true, true);
 
+		if (Bot->AI)
+		{
+			EBotState St = Bot->AI->State;
+			bool bBusAir = St == EBotState::InBus || St == EBotState::Ejecting
+				|| St == EBotState::Gliding || St == EBotState::Landing;
+			bool bBoardingEdge = CustomBotAI::IsInAircraftPhase() && St == EBotState::Warmup;
+
+			CustomBotMovement::SetCosmeticPossession(*Bot, !(bBusAir || bBoardingEdge));
+		}
+
 		Bot->Tick();
 
 		if (Mode <= 1)

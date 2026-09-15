@@ -261,6 +261,41 @@ namespace CustomBotMovement
 		return bBitOK;
 	}
 
+	static void SetCosmeticPossession(CustomBot& Bot, bool bPossess)
+	{
+		if (!Bot.Controller || !Bot.CosmeticPawn || Bot.CosmeticPawn->IsActorBeingDestroyed())
+			return;
+
+		bool bCurrentlyPossessed = (Bot.Controller->GetPawn() == Bot.CosmeticPawn);
+
+		if (bPossess)
+		{
+			if (!bCurrentlyPossessed)
+			{
+				Bot.Controller->Possess(Bot.CosmeticPawn);
+
+				if (auto* CM = GetCharacterMovement(Bot.CosmeticPawn))
+					DisableComponentTick(CM);
+			}
+
+			SetActorEnableCollision(Bot.CosmeticPawn, false);
+		}
+		else if (bCurrentlyPossessed)
+		{
+			Bot.Controller->UnPossess();
+
+			if (auto* PS = (UObject*)Bot.Controller->GetPlayerState())
+			{
+				int PSOff = Bot.CosmeticPawn->GetOffset("PlayerState", false);
+
+				if (PSOff != -1 && Bot.CosmeticPawn->Get<UObject*>(PSOff) != PS)
+					Bot.CosmeticPawn->Get<UObject*>(PSOff) = PS;
+			}
+
+			SetActorHiddenInGame(Bot.Pawn, true);
+		}
+	}
+
 	static void EnsureCMCActive(CustomBot& Bot, bool bPerTickWork = true, bool bDoClaim = true)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)

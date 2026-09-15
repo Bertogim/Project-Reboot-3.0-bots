@@ -101,7 +101,7 @@ namespace CustomBotAI
 
 struct BotAIContext
 {
-	EBotState State = EBotState::InBus;
+	EBotState State = EBotState::Warmup;
 	EBotPersonalityType PersonalityType = EBotPersonalityType::Casual;
 	EBotDifficulty Difficulty = EBotDifficulty::Normal;
 	BotPersonality Personality;

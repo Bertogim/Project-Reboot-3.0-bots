@@ -1833,6 +1833,79 @@ static inline void PregameUI()
 		
 	if (!Globals::bCreative)
 		ImGui::InputText("Playlist", &PlaylistName);
+
+	ImGui::NewLine();
+	ImGui::Separator();
+	ImGui::Text("Playlists");
+
+	static std::vector<UObject*> PregamePlaylists;
+	static bool bPregamePlaylistsBuilt = false;
+
+	if (!bPregamePlaylistsBuilt)
+	{
+		bPregamePlaylistsBuilt = true;
+
+		static auto FortPlaylistClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlaylist");
+		auto AllObjects = GetAllObjectsOfClass(FortPlaylistClass);
+
+		for (int i = 0; i < AllObjects.size(); ++i)
+		{
+			auto Object = AllObjects.at(i);
+
+			if (!Object)
+				continue;
+
+			auto UIDisplayNameOffset = Object->GetOffset("UIDisplayName");
+
+			if (UIDisplayNameOffset == -1)
+				continue;
+
+			FString PlaylistNameFStr = UKismetTextLibrary::Conv_TextToString(Object->Get<FText>(UIDisplayNameOffset));
+
+			if (!PlaylistNameFStr.Data.Data)
+				continue;
+
+			PregamePlaylists.push_back(Object);
+		}
+
+		if (PregamePlaylists.empty())
+			bPregamePlaylistsBuilt = false;
+	}
+
+	if (ImGui::BeginChild("##PregamePlaylists", ImVec2(0, 260), true))
+	{
+		for (int i = 0; i < PregamePlaylists.size(); ++i)
+		{
+			auto Object = PregamePlaylists.at(i);
+
+			if (!Object)
+				continue;
+
+			auto UIDisplayNameOffset = Object->GetOffset("UIDisplayName");
+
+			if (UIDisplayNameOffset == -1)
+				continue;
+
+			FString PlaylistNameFStr = UKismetTextLibrary::Conv_TextToString(Object->Get<FText>(UIDisplayNameOffset));
+
+			if (!PlaylistNameFStr.Data.Data)
+				continue;
+
+			if (ImGui::Button(PlaylistNameFStr.ToString().c_str()))
+			{
+				PlaylistName = Object->GetPathName();
+
+				bPregameLocked = false;
+				bStartPregame = true;
+
+				if (hostState == "idle")
+					hostState = "starting";
+
+				LOG_INFO(LogMatchmaker, "[HostClient] Force Start pressed locally (playlist={}).", PlaylistName);
+			}
+		}
+	}
+	ImGui::EndChild();
 }
 
 static inline HICON LoadIconFromMemory(const char* bytes, int bytes_size, const wchar_t* IconName) {

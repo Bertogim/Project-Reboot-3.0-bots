@@ -28,11 +28,6 @@ public:
 	AFortPlayerStateAthena* MovePlayerState = nullptr;
 	AFortPlayerPawnAthena* CosmeticPawn = nullptr;
 
-	float SyncPrevMoveHealth = -1.0f;
-	float SyncPrevMoveShield = -1.0f;
-	float SyncPrevCosHealth = -1.0f;
-	float SyncPrevCosShield = -1.0f;
-
 	bool bInitialized = false;
 
 	bool bDeathHandled = false;

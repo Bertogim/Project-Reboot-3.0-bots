@@ -132,62 +132,101 @@ namespace CustomBotMovement
 		}
 	}
 
-	static void AddMovementInput(APawn* InPawn, const FVector& Dir)
+	static void SetActorEnableCollision(UObject* Actor, bool bEnabled)
 	{
-		if (!InPawn)
+		if (!Actor)
 			return;
 
-		static auto AddMovementInputFn = FindObject<UFunction>(L"/Script/Engine.Character.AddMovementInput");
+		static auto Fn = FindObject<UFunction>(L"/Script/Engine.Actor.SetActorEnableCollision");
 
-		if (AddMovementInputFn)
-		{
-			static auto WorldDirectionOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "WorldDirection");
-			static auto ScaleValueOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "ScaleValue");
-			static auto bForceOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "bForce");
+		if (!Fn)
+			return;
 
-			if (WorldDirectionOffset != -1 && ScaleValueOffset != -1 && bForceOffset != -1)
-			{
-				auto Params = Alloc(AddMovementInputFn->GetPropertiesSize());
+		static auto Off = FindOffsetStruct("/Script/Engine.Actor.SetActorEnableCollision", "bNewCollisionEnabled", false);
 
-				*(FVector*)(__int64(Params) + WorldDirectionOffset) = Dir;
-				*(float*)(__int64(Params) + ScaleValueOffset) = 1.0f;
-				*(uint8_t*)(__int64(Params) + bForceOffset) = 1;
+		if (Off == -1)
+			return;
 
-				InPawn->ProcessEvent(AddMovementInputFn, Params);
+		auto Params = Alloc(Fn->GetPropertiesSize());
 
-				VirtualFree(Params, 0, MEM_RELEASE);
-				return;
-			}
-		}
+		*(bool*)(__int64(Params) + Off) = bEnabled;
 
-		if (auto* CM = GetCharacterMovement(InPawn))
-		{
-			static auto AddInputVectorFn = FindObject<UFunction>(L"/Script/Engine.MovementComponent.AddInputVector");
+		Actor->ProcessEvent(Fn, Params);
 
-			if (AddInputVectorFn)
-			{
-				static auto WorldVectorOffset = FindOffsetStruct("/Script/Engine.MovementComponent.AddInputVector", "WorldVector");
-				static auto bForceOffset = FindOffsetStruct("/Script/Engine.MovementComponent.AddInputVector", "bForce");
-
-				if (WorldVectorOffset != -1 && bForceOffset != -1)
-				{
-					auto Params = Alloc(AddInputVectorFn->GetPropertiesSize());
-
-					*(FVector*)(__int64(Params) + WorldVectorOffset) = Dir;
-					*(uint8_t*)(__int64(Params) + bForceOffset) = 1;
-
-					CM->ProcessEvent(AddInputVectorFn, Params);
-
-					VirtualFree(Params, 0, MEM_RELEASE);
-				}
-			}
-		}
+		VirtualFree(Params, 0, MEM_RELEASE);
 	}
 
-	static void MirrorCosmeticInput(CustomBot& Bot, const FVector& Dir)
+	static void DisableComponentTick(UObject* Comp)
 	{
-		if (Bot.CosmeticPawn && (Dir | Dir))
-			AddMovementInput(Bot.CosmeticPawn, Dir);
+		if (!Comp)
+			return;
+
+		static auto Fn = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
+
+		if (!Fn)
+			return;
+
+		static auto Off = FindOffsetStruct("/Script/Engine.ActorComponent.SetComponentTickEnabled", "bEnabled", false);
+
+		if (Off == -1)
+			return;
+
+		auto Params = Alloc(Fn->GetPropertiesSize());
+
+		*(bool*)(__int64(Params) + Off) = false;
+
+		Comp->ProcessEvent(Fn, Params);
+
+		VirtualFree(Params, 0, MEM_RELEASE);
+	}
+
+	static void SetWorldRotation(UObject* Actor, const FRotator& Rot)
+	{
+		if (!Actor)
+			return;
+
+		int RootOff = Actor->GetOffset("RootComponent", false);
+
+		if (RootOff == -1)
+			return;
+
+		auto Root = (UObject*)Actor->Get(RootOff);
+
+		if (!Root)
+			return;
+
+		static auto K2_SetWorldRotationFn = FindObject<UFunction>(L"/Script/Engine.SceneComponent.K2_SetWorldRotation");
+
+		if (!K2_SetWorldRotationFn)
+			return;
+
+		static auto NewRotationOffset = FindOffsetStruct("/Script/Engine.SceneComponent.K2_SetWorldRotation", "NewRotation", false);
+		static auto bSweepOffset = FindOffsetStruct("/Script/Engine.SceneComponent.K2_SetWorldRotation", "bSweep", false);
+		static auto bTeleportOffset = FindOffsetStruct("/Script/Engine.SceneComponent.K2_SetWorldRotation", "bTeleport", false);
+
+		if (NewRotationOffset == -1 || bSweepOffset == -1 || bTeleportOffset == -1)
+			return;
+
+		auto Params = Alloc(K2_SetWorldRotationFn->GetPropertiesSize());
+
+		*(FRotator*)(__int64(Params) + NewRotationOffset) = Rot;
+		*(bool*)(__int64(Params) + bSweepOffset) = false;
+		*(bool*)(__int64(Params) + bTeleportOffset) = false;
+
+		Root->ProcessEvent(K2_SetWorldRotationFn, Params);
+
+		VirtualFree(Params, 0, MEM_RELEASE);
+	}
+
+	static void SetupCosmeticFollower(CustomBot& Bot)
+	{
+		if (!Bot.CosmeticPawn)
+			return;
+
+		SetActorEnableCollision(Bot.CosmeticPawn, false);
+
+		if (auto* CME = GetCharacterMovement(Bot.CosmeticPawn))
+			DisableComponentTick(CME);
 	}
 
 	static bool SetupGhostSim(AFortPlayerControllerAthena* Ctrl, AFortPlayerPawnAthena* Pawn)
@@ -484,8 +523,6 @@ namespace CustomBotMovement
 		if (bRotateTowardsMove)
 			LookAt(Bot, Destination);
 
-		MirrorCosmeticInput(Bot, Dir);
-
 		FVector NewVelocity{ Dir.X * Speed, Dir.Y * Speed, 0.0f };
 
 		static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
@@ -510,41 +547,20 @@ namespace CustomBotMovement
 		float CosH = Bot.CosmeticPawn->GetHealth();
 		float CosS = Bot.CosmeticPawn->GetShield();
 
-		bool bMoveHChanged = Bot.SyncPrevMoveHealth >= 0.0f && FMath::Abs(MoveH - Bot.SyncPrevMoveHealth) > 0.01f;
-		bool bMoveSChanged = Bot.SyncPrevMoveShield >= 0.0f && FMath::Abs(MoveS - Bot.SyncPrevMoveShield) > 0.05f;
-		bool bCosHChanged = Bot.SyncPrevCosHealth >= 0.0f && FMath::Abs(CosH - Bot.SyncPrevCosHealth) > 0.01f;
-		bool bCosSChanged = Bot.SyncPrevCosShield >= 0.0f && FMath::Abs(CosS - Bot.SyncPrevCosShield) > 0.05f;
+		float H = FMath::Min(MoveH, CosH);
+		float S = FMath::Min(MoveS, CosS);
 
-		bool bMoveChanged = bMoveHChanged || bMoveSChanged;
-		bool bCosChanged = bCosHChanged || bCosSChanged;
-
-		if (bMoveChanged || bCosChanged)
+		if (FMath::Abs(MoveH - H) > 0.01f || FMath::Abs(MoveS - S) > 0.05f)
 		{
-			if (bMoveChanged && !bCosChanged)
-			{
-				Bot.CosmeticPawn->SetHealth(MoveH);
-				Bot.CosmeticPawn->SetShield(MoveS);
-			}
-			else if (bCosChanged && !bMoveChanged)
-			{
-				Bot.Pawn->SetHealth(CosH);
-				Bot.Pawn->SetShield(CosS);
-			}
-			else
-			{
-				float H = FMath::Min(MoveH, CosH);
-				float S = FMath::Min(MoveS, CosS);
-				Bot.Pawn->SetHealth(H);
-				Bot.Pawn->SetShield(S);
-				Bot.CosmeticPawn->SetHealth(H);
-				Bot.CosmeticPawn->SetShield(S);
-			}
+			Bot.Pawn->SetHealth(H);
+			Bot.Pawn->SetShield(S);
 		}
 
-		Bot.SyncPrevMoveHealth = Bot.Pawn->GetHealth();
-		Bot.SyncPrevMoveShield = Bot.Pawn->GetShield();
-		Bot.SyncPrevCosHealth = Bot.CosmeticPawn->GetHealth();
-		Bot.SyncPrevCosShield = Bot.CosmeticPawn->GetShield();
+		if (FMath::Abs(CosH - H) > 0.01f || FMath::Abs(CosS - S) > 0.05f)
+		{
+			Bot.CosmeticPawn->SetHealth(H);
+			Bot.CosmeticPawn->SetShield(S);
+		}
 	}
 
 	static void SyncCosmetic(CustomBot& Bot)
@@ -602,14 +618,27 @@ namespace CustomBotMovement
 				}
 			}
 
+			FRotator MoveRot = Bot.Pawn->GetActorRotation();
+			FRotator CosRot = Bot.CosmeticPawn->GetActorRotation();
+
+			float Dy = FMath::Abs(CosRot.Yaw - MoveRot.Yaw);
+			if (Dy > 180.0f)
+				Dy = 360.0f - Dy;
+
+			float Dp = FMath::Abs(CosRot.Pitch - MoveRot.Pitch);
+			float Dr = FMath::Abs(CosRot.Roll - MoveRot.Roll);
+
+			if (Dp > 0.5f || Dy > 0.5f || Dr > 0.5f)
+				SetWorldRotation(Bot.CosmeticPawn, MoveRot);
+
 			FVector MoveLoc = Bot.Pawn->GetActorLocation();
 			FVector CosLoc = Bot.CosmeticPawn->GetActorLocation();
 
 			FVector Delta = MoveLoc - CosLoc;
 
-			if ((Delta | Delta) > 1.0f)
+			if ((Delta | Delta) > 0.0004f)
 			{
-				Bot.CosmeticPawn->TeleportTo(MoveLoc, Bot.Pawn->GetActorRotation());
+				Bot.CosmeticPawn->TeleportTo(MoveLoc, MoveRot);
 
 				if (DstCM && SrcVelOff != -1 && DstVelOff != -1 && SrcCM)
 					DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
@@ -836,9 +865,6 @@ namespace CustomBotMovement
 		static auto JumpFn = FindObject<UFunction>(L"/Script/Engine.Character.Jump");
 		if (JumpFn)
 			Bot.Pawn->ProcessEvent(JumpFn);
-
-		if (Bot.CosmeticPawn && JumpFn)
-			Bot.CosmeticPawn->ProcessEvent(JumpFn);
 	}
 
 	static void Launch(CustomBot& Bot, const FVector& LaunchVelocity, bool bXYOverride = false, bool bZOverride = false)

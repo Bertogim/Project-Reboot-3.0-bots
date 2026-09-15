@@ -1,11 +1,5 @@
 #pragma once
 
-// CustomBot Manager - Parte 2.
-//
-// Sistema central de gestion de los bots custom (Section 29-31). La UI (pestana
-// "Bots") consulta este manager; las decisiones de cada bot viven en su propia
-// BotAIContext (CustomBot.AI). No duplica sistemas del proyecto: reutiliza
-// CustomBotSpawner::AllCustomBots como almacen de instancias.
 
 #include <atomic>
 
@@ -16,35 +10,24 @@
 
 namespace CustomBotManager
 {
-	// --- Configuracion global -------------------------------------------------
-	inline int DesiredBotCount = 5;   // cuantos bots quiere el operador
+	inline int DesiredBotCount = 5;
 	inline EBotDifficulty Difficulty = EBotDifficulty::Normal;
 	inline EBotPersonalityType PersonalityPool = EBotPersonalityType::Random;
 	inline bool bAutoSpawnInProgress = false;
 
-	// --- Cola diferida (GUI/render thread -> game thread) ----------------------
-	// La UI corre en el hilo render/GUI. Spawinear o destruir Fort actors desde
-	// ahi crashea (AssembleReferenceTokenStream en non-game thread). La GUI solo
-	// encola aqui; CustomBotSpawner::TickAll (game thread, via NetDriver) consume
-	// la cola un bot/op por tick.
 	inline std::atomic<int> PendingSpawnCount = 0;
 	inline std::atomic<bool> bPendingFillTo100 = false;
 	inline std::atomic<bool> bPendingRemoveAll = false;
 
-	// Teleports pedidos desde la GUI (hilo render). Se ejecutan en el game
-	// thread via ProcessPendingOps: mover Fort actors fuera del game thread
-	// crashea, igual que al spawnear.
-	inline std::atomic<bool> bPendingTeleportToBot = false;   // jugador -> bot aleatorio
-	inline std::atomic<bool> bPendingBringRandomBot = false;  // bot aleatorio -> jugador
+	inline std::atomic<bool> bPendingTeleportToBot = false;
+	inline std::atomic<bool> bPendingBringRandomBot = false;
 
-	// --- Acceso a las instancias ----------------------------------------------
 
 	static std::vector<CustomBot>& GetBots()
 	{
 		return CustomBotSpawner::AllCustomBots;
 	}
 
-	// Logica viva: un bot "vivo" es aquel cuyo estado de vida no es Dead.
 	static bool IsBotAlive(CustomBot& Bot)
 	{
 		if (!Bot.IsReady())
@@ -59,7 +42,6 @@ namespace CustomBotManager
 		return true;
 	}
 
-	// Obtiene los bots vivos.
 	static std::vector<CustomBot*> GetAliveBots()
 	{
 		std::vector<CustomBot*> Alive;
@@ -74,7 +56,6 @@ namespace CustomBotManager
 		return Alive;
 	}
 
-	// Obtiene los bots muertos.
 	static std::vector<CustomBot*> GetDeadBots()
 	{
 		std::vector<CustomBot*> Dead;
@@ -89,9 +70,6 @@ namespace CustomBotManager
 		return Dead;
 	}
 
-	// --- Contadores de estado (Section 28) ------------------------------------
-	// Devuelve el recuento real de bots por estado. Los estados con 0 se pueden
-	// mostrar u ocultar, pero los numeros SON los reales.
 	struct FStateCounts
 	{
 		int InBus = 0;
@@ -165,7 +143,6 @@ namespace CustomBotManager
 		return (int)GetDeadBots().size();
 	}
 
-	// --- Creacion de la IA de un bot al spawnear ------------------------------
 	static void InitializeAI(CustomBot& Bot)
 	{
 		if (Bot.AI)
@@ -180,15 +157,10 @@ namespace CustomBotManager
 
 		CustomBotAI::BuildPersonality(Bot.AI->Personality, PersonalityPool, Difficulty);
 
-		// Estado inicial: subir al bus (entrar en la fase de avion).
 		Bot.AI->State = EBotState::InBus;
 	}
 
-	// --- Spawn ----------------------------------------------------------------
-	// La GUI NUNCA llama a estos directamente: usa Queue* (ejecucion segura en
-	// el game thread via CustomBotSpawner::TickAll).
 
-	// Encola peticiones para el game thread.
 	static void QueueSpawnBots(int Count)
 	{
 		PendingSpawnCount += Count;
@@ -207,22 +179,18 @@ namespace CustomBotManager
 		LOG_INFO(LogBots, "[BotManager] Queued RemoveAllBots");
 	}
 
-	// Encola "teletransportar al jugador real al bot aleatorio".
 	static void QueueTeleportToRandomBot()
 	{
 		bPendingTeleportToBot = true;
 		LOG_INFO(LogBots, "[BotManager] Queued TeleportToRandomBot");
 	}
 
-	// Encola "traer un bot aleatorio junto al jugador real".
 	static void QueueBringRandomBot()
 	{
 		bPendingBringRandomBot = true;
 		LOG_INFO(LogBots, "[BotManager] Queued BringRandomBot");
 	}
 
-	// El primer jugador REAL de la lista de conexiones (salta los controllers
-	// de los bots custom).
 	static AFortPlayerControllerAthena* GetFirstRealPlayerController()
 	{
 		auto World = GetWorld();
@@ -263,7 +231,6 @@ namespace CustomBotManager
 		return nullptr;
 	}
 
-	// Un bot vivo aleatorio con pawn valido.
 	static CustomBot* GetRandomAliveBot()
 	{
 		auto Alive = GetAliveBots();
@@ -281,7 +248,6 @@ namespace CustomBotManager
 		return Valid[std::rand() % Valid.size()];
 	}
 
-	// Teletransporta el pawn del primer jugador real hasta un bot aleatorio.
 	static void TeleportToRandomBot()
 	{
 		auto* PC = GetFirstRealPlayerController();
@@ -311,7 +277,6 @@ namespace CustomBotManager
 			Dest.X, Dest.Y, Dest.Z);
 	}
 
-	// Teletransporta un bot aleatorio hasta el pawn del primer jugador real.
 	static void BringRandomBotToPlayer()
 	{
 		auto* PC = GetFirstRealPlayerController();
@@ -341,14 +306,10 @@ namespace CustomBotManager
 			Dest.X, Dest.Y, Dest.Z);
 	}
 
-	// Spawnea un bot en la posicion dada (como un jugador real) y le crea su IA.
-	// Devuelve nullptr si fallo.
 	static CustomBot* SpawnBotAt(const FVector& Location, const FRotator& Rotation)
 	{
 		CustomBot* Bot = nullptr;
 
-		// Posiciones de spawn de jugador si no se indica una ubicacion.
-		// fallback: el jugador local.
 		FTransform SpawnTransform{};
 		SpawnTransform.Translation = Location;
 		SpawnTransform.Rotation = Rotation.Quaternion();
@@ -369,7 +330,6 @@ namespace CustomBotManager
 		return Bot;
 	}
 
-	// Spawnea un bot en un PlayerStart (respeta los puntos de spawn nativos de Fortnite).
 	static CustomBot* SpawnBotNearLocalPlayer()
 	{
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
@@ -380,7 +340,6 @@ namespace CustomBotManager
 			return nullptr;
 		}
 
-		// Buscar un PlayerStart existente en el mapa.
 		static auto PlayerStartClass = FindObject<UClass>(L"/Script/Engine.PlayerStart");
 		auto AllPlayerStarts = GetAllObjectsOfClass(PlayerStartClass);
 
@@ -390,7 +349,6 @@ namespace CustomBotManager
 			return nullptr;
 		}
 
-		// Elegir un PlayerStart aleatorio.
 		AActor* ChosenStart = (AActor*)AllPlayerStarts[std::rand() % AllPlayerStarts.size()];
 		FVector SpawnLoc = ChosenStart->GetActorLocation();
 		FRotator SpawnRot = ChosenStart->GetActorRotation();
@@ -398,8 +356,6 @@ namespace CustomBotManager
 		return SpawnBotAt(SpawnLoc, SpawnRot);
 	}
 
-	// Spawnea Count bots (sin duplicar los ya existentes).
-	// Usa Sleep() entre spawns para dar tiempo al engine a procesar cada bot.
 	static int SpawnBots(int Count)
 	{
 		int Spawned = 0;
@@ -409,19 +365,17 @@ namespace CustomBotManager
 			if (SpawnBotNearLocalPlayer())
 				++Spawned;
 			else
-				break; // si un bot falla, paramos (el engine esta saturado)
+				break;
 
 			if (i < Count - 1)
-				Sleep(200); // 200ms entre spawns para no saturar el engine
+				Sleep(200);
 		}
 
 		LOG_INFO(LogBots, "[BotManager] Spawned {} bots (total={})", Spawned, GetTotalCount());
 		return Spawned;
 	}
 
-	// --- Eliminacion ------------------------------------------------------------
 
-	// Destruye un bot concreto (lo borra de la partida).
 	static void RemoveBot(CustomBot& Bot)
 	{
 		Bot.Destroy();
@@ -438,19 +392,14 @@ namespace CustomBotManager
 		}
 	}
 
-	// Marca todos como muertos / los destruye.
 	static void RemoveAllBots()
 	{
 		auto& Bots = GetBots();
 
-		// Destruir es invalido si el vector se modifica; copiamos y vaciamos.
 		while (!Bots.empty())
 		{
 			CustomBot& Bot = Bots.back();
 
-			// Decrementa PlayersLeft / quita de GetAlivePlayers de cada bot para
-			// que el marcador y los vivos queden consistentes al limpiar. No
-			// spamea feed/chat (bCountOnly=true).
 			CustomBotSpawner::ProcessBotDeathCounters(Bot, true);
 
 			Bot.Destroy();
@@ -458,7 +407,6 @@ namespace CustomBotManager
 		}
 	}
 
-	// Rellena la partida hasta 100 jugadores (contando jugadores reales + bots).
 	static int FillTo100()
 	{
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
@@ -479,19 +427,14 @@ namespace CustomBotManager
 		return SpawnBots(Needed);
 	}
 
-	// --- Consumo de la cola (1 invocacion por TickAll, game thread) -----------
-	// Registrada abajo como CustomBotSpawner::DeferredBotOps. Prioridad:
-	// vaciar todo -> fill -> spawn de UN bot por tick (sin Sleep; el propio
-	// ritmo del engine da tiempo a procesar cada bot).
 	static void ProcessPendingOps()
 	{
 		if (bPendingRemoveAll.exchange(false))
 		{
 			RemoveAllBots();
-			return; // un op por tick; el spawn pendiente se atiende al siguiente
+			return;
 		}
 
-		// Teleports pedidos desde la GUI (un op por tick).
 		if (bPendingTeleportToBot.exchange(false))
 		{
 			TeleportToRandomBot();
@@ -534,7 +477,7 @@ namespace CustomBotManager
 			if (!Bot)
 			{
 				LOG_ERROR(LogBots, "[BotManager] Failed to spawn custom bot!");
-				PendingSpawnCount = 0; // si un bot falla, paramos (engine saturado)
+				PendingSpawnCount = 0;
 			}
 			else
 			{
@@ -544,6 +487,5 @@ namespace CustomBotManager
 		}
 	}
 
-	// Registra el consumidor en el hook del game thread (una vez por TU).
 	inline bool bBotOpsHook = (CustomBotSpawner::DeferredBotOps = &ProcessPendingOps, true);
 }

@@ -1,16 +1,5 @@
 #pragma once
 
-// CustomBot AI - Parte 2.
-//
-// Motor de decisiones del Custom Bot para convertirlo en un jugador autonomo de
-// Battle Royale (Season 3). Se apoya EXCLUSIVAMENTE en las capacidades del
-// CustomBot de la Parte 1 (CustomBot/CustomBot*.h). NO usa el sistema antiguo
-// (PlayerBot / AFortAthenaAIBotController).
-//
-// Este archivo define los TIPOS compartidos (estado, personalidad, dificultad) y
-// el contexto de IA por bot (BotAIContext). Los modulos de fase (Bus / Midgame /
-// Combat / SafeZone) se incluyen al final y exponen sus updates; el master tick
-// CustomBotAI::Tick() enruta segun el estado actual.
 
 #include "reboot.h"
 #include "CustomBot/CustomBot.h"
@@ -29,24 +18,23 @@
 #include "GameplayStatics.h"
 #include "FortAthenaMapInfo.h"
 
-// Estado de juego en el que se encuentra el bot (maquina de estados).
 enum class EBotState : uint8_t
 {
-	InBus,            // dentro del Battle Bus, esperando
-	Ejecting,         // salto del bus: eject custom a la posicion del avion
-	Gliding,          // planeando con el glider hacia el destino
-	Landing,          // aterrizando (frenando cerca del suelo)
-	Looting,          // buscando/recogiendo loot
-	Farming,          // recogiendo materiales
-	Exploring,        // explorando el mapa / buscando objetivos
-	SearchingEnemy,   // buscando combate activamente
-	Fighting,         // combatiendo
-	Defending,        // defendiendose / buscando cobertura
-	Healing,          // curandose
-	Rotating,         // rotando hacia la zona segura
-	EndGame,          // endgame (pocos jugadores)
-	Warmup,           // pre-partida (lobby): pasea, lootea y dispara por diversion
-	Dead,             // eliminado
+	InBus,
+	Ejecting,
+	Gliding,
+	Landing,
+	Looting,
+	Farming,
+	Exploring,
+	SearchingEnemy,
+	Fighting,
+	Defending,
+	Healing,
+	Rotating,
+	EndGame,
+	Warmup,
+	Dead,
 };
 
 inline const TCHAR* CustomBotStateName(EBotState State)
@@ -72,15 +60,14 @@ inline const TCHAR* CustomBotStateName(EBotState State)
 	return L"Unknown";
 }
 
-// Parámetros de personalidad (Section 18). Valores en [0, 1].
 struct BotPersonality
 {
-	float Aggression = 0.5f;     // busca combate vs evita
-	float AimSkill = 0.5f;       // precision al disparar
-	float BuildSkill = 0.5f;     // velocidad/calidad de construccion
-	float LootSkill = 0.5f;      // evaluacion y preferencia de loot
-	float Awareness = 0.5f;      // rango/tiempo de deteccion
-	float RiskTolerance = 0.5f;  // tolerancia a situaciones de riesgo
+	float Aggression = 0.5f;
+	float AimSkill = 0.5f;
+	float BuildSkill = 0.5f;
+	float LootSkill = 0.5f;
+	float Awareness = 0.5f;
+	float RiskTolerance = 0.5f;
 };
 
 enum class EBotPersonalityType : uint8_t
@@ -102,36 +89,23 @@ enum class EBotDifficulty : uint8_t
 
 namespace CustomBotAI
 {
-	// Rellena la personalidad segun el tipo y la dificultad.
 	static void BuildPersonality(BotPersonality& P, EBotPersonalityType Type, EBotDifficulty Difficulty);
-	// Elige un tipo de personalidad (Random escoge uno al azar).
 	static EBotPersonalityType ResolveType(EBotPersonalityType Type);
 
-	// --- Objetivo de seleccion de destino/exploracion ------------------------
-	// Devuelve una posicion de destino/aterrizaje razonable. Usa el centro de la
-	// zona segura final (SafeZoneLocations) con una desviacion aleatoria, para
-	// que los bots aterricen repartidos y cerca de donde habra que rotar.
-	// El radio de la zona se sesga por la personalidad (Seccion 3): un bot
-	// agresivo tiende a aterrizar cerca del centro (zona caliente), mientras que
-	// uno que no asume riesgo se dispersa mas (zonas tranquilas).
 	static FVector PickLandingPoint(float Aggression = 0.5f, float RiskTolerance = 0.5f);
 
-	// Master tick: enruta al bot al update de su estado actual.
 	static void Tick(CustomBot& Bot, BotAIContext& Ctx);
 	static void TickBus(CustomBot& Bot, BotAIContext& Ctx);
 	static void TickMidgame(CustomBot& Bot, BotAIContext& Ctx);
 }
 
-// Contexto de IA por bot (definicion completa aqui; CustomBot.h solo tiene el fwd).
 struct BotAIContext
 {
-	// Estado y personalidad
 	EBotState State = EBotState::InBus;
 	EBotPersonalityType PersonalityType = EBotPersonalityType::Casual;
 	EBotDifficulty Difficulty = EBotDifficulty::Normal;
 	BotPersonality Personality;
 
-	// Objetivos seleccionados
 	FVector LandingPoint{};
 	bool bHasLandingPoint = false;
 	FVector ExploreTarget{};
@@ -141,31 +115,25 @@ struct BotAIContext
 	AActor* FarmTarget = nullptr;
 	AActor* HealTarget = nullptr;
 
-	// Temporizacion (intervalos para no correr IA pesada cada frame)
 	float DecisionTimer = 0.0f;
 	float ScanTimer = 0.0f;
-	float ReactTimer = 0.0f;   // retraso de reaccion humano
-	float ActionTimer = 0.0f;  // cooldown entre acciones de combate
+	float ReactTimer = 0.0f;
+	float ActionTimer = 0.0f;
 
-	// Deteccion de "siendo atacado": caida de vida entre ticks de IA.
-	float LastDamageTime = -999.0f; // BotTime() del ultimo disparo recibido
-	float CheckedHealth = -1.0f;    // vida registrada en el ultimo tick de IA
+	float LastDamageTime = -999.0f;
+	float CheckedHealth = -1.0f;
 
-	// Battle bus / glider
-	float JumpDelay = 0.0f;    // momento (tiempo) en que decide saltar del bus
-	bool bFiredGlider = false; // ya desplego el glider
-	float InBusSince = -1.0f;  // momento en que entro en InBus (stagger del eject)
+	float JumpDelay = 0.0f;
+	bool bFiredGlider = false;
+	float InBusSince = -1.0f;
 
-	// Combate
 	bool bIsFiring = false;
 	bool bBuildingBarricade = false;
 	float LastAimYaw = 0.0f;
 
-	// Rotacion / zona segura
 	FVector SafeZoneCenter{};
 	float SafeZoneRadius = 0.0f;
 
-	// Contadores
 	int Kills = 0;
 	int LootedItems = 0;
 	int FarmedResources = 0;
@@ -175,24 +143,20 @@ struct BotAIContext
 #include "CustomBotAI_Midgame.h"
 #include "CustomBotAI_Bus.h"
 
-// --- Implementaciones de CustomBotAI (declaradas arriba) ----------------------
 
 namespace CustomBotAI
 {
-	// Elige el tipo concreto: si el tipo es Random, escoge uno al azar.
 	static EBotPersonalityType ResolveType(EBotPersonalityType Type)
 	{
 		if (Type == EBotPersonalityType::Random)
 		{
 			int R = std::rand() % 5;
-			return (EBotPersonalityType)R; // Novato..Pro (0..4)
+			return (EBotPersonalityType)R;
 		}
 
 		return Type;
 	}
 
-	// Rellena la personalidad segun tipo + dificultad. Los valores base suben o
-	// bajan con la dificultad (mejor/bastante, pero NUNCA perfecto).
 	static void BuildPersonality(BotPersonality& P, EBotPersonalityType Type, EBotDifficulty Difficulty)
 	{
 		Type = ResolveType(Type);
@@ -221,7 +185,6 @@ namespace CustomBotAI
 			break;
 		case EBotPersonalityType::Random:
 		default:
-			// Aleatorio: cada parametro independiente.
 			P.Aggression = float(std::rand() % 1000) / 1000.0f;
 			P.AimSkill = float(std::rand() % 1000) / 1000.0f;
 			P.BuildSkill = float(std::rand() % 1000) / 1000.0f;
@@ -231,7 +194,6 @@ namespace CustomBotAI
 			break;
 		}
 
-		// Ajuste por dificultad (sin dar informacion ilegal).
 		switch (Difficulty)
 		{
 		case EBotDifficulty::Easy:
@@ -250,12 +212,6 @@ namespace CustomBotAI
 		}
 	}
 
-	// Punto de aterrizaje / destino. PRIMERO intenta aterrizar CERCA DE UN COFRE
-	// sin abrir dentro de la zona segura prevista: los cofres estan en POIs y
-	// edificios DENTRO del mapa, asi que el bot toca suelo con loot a la mano y
-	// ya no cae en mitad del mar / fuera del mapa (el mprobe mostraba bots en
-	// Looting con 'moved 0u': el destino aleatorio no era alcanzable a pie).
-	// Si no hay cofres cerca, fallback a la logica aleatoria original.
 	static FVector PickLandingPoint(float Aggression, float RiskTolerance)
 	{
 		FVector Center = GetSafeZoneCenter();
@@ -263,8 +219,6 @@ namespace CustomBotAI
 		if ((Center | Center) == 0.0f)
 			Center = FVector{};
 
-		// Intento 1: aterrizar junto a un cofre sin abrir (mas cercano al centro,
-		// sesgado por personalidad: agresivo -> zona caliente cerca del centro).
 		if (CustomBotPerception::BotTime() > 0.0f)
 		{
 			const auto& Chests = CustomBotPerception::CachedChests();
@@ -303,7 +257,6 @@ namespace CustomBotAI
 			}
 		}
 
-		// Fallback: la logica aleatoria original alrededor del centro.
 		float BaseRadius = 3000.0f;
 		float RadiusScale = 1.0f - (Aggression * 0.4f) + ((1.0f - RiskTolerance) * 0.4f);
 		RadiusScale = FMath::Clamp(RadiusScale, 0.35f, 1.6f);
@@ -334,7 +287,6 @@ namespace CustomBotAI
 		CustomBotAIMidgame::Update(Bot, Ctx);
 	}
 
-	// Master tick: enruta segun el estado (bus vs midgame).
 	static void Tick(CustomBot& Bot, BotAIContext& Ctx)
 	{
 		if (!Bot.IsReady())
@@ -343,11 +295,8 @@ namespace CustomBotAI
 		if (Ctx.State == EBotState::Dead)
 			return;
 
-		// El warmup termino: volver al flujo normal (bus si arranco el avion, o
-		// directamente al suelo si la partida paso a zonas seguras sin avion).
 		if (Ctx.State == EBotState::Warmup && !CustomBotAI::IsWarmupPhase())
 		{
-			// Fuera del lobby: vida normal de partida (100 de vida, 0 de escudo).
 			CustomBotAIMidgame::ResetToMatchHP(Bot);
 
 			Ctx.State = CustomBotAI::IsInAircraftPhase() ? EBotState::InBus : EBotState::Looting;

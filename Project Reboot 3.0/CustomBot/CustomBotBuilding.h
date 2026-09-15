@@ -8,35 +8,19 @@
 
 #include <cmath>
 
-// CustomBot - Construccion.
-//
-// Selecciona la pieza como un jugador (equipa el BuildingItemData correspondiente)
-// y construye el actor replicando el pipeline de ServerCreateBuildingActorHook
-// (spawn del ABuildingSMActor + consumo de materiales + inicializacion + team).
-//
-// NOTA: el BuildingClass del actor construible (wall/floor/ramp/roof) varia por
-// version y no esta hardcodeado en el repo. BuildPiece() acepta la clase del actor;
-// GetPieceClass() devuelve la clase por convencion (rutas comunes). El debug command
-// cbbuild acepta un ClassPath opcional para esta version.
 
 namespace CustomBotBuilding
 {
-	// BuildPiece (definida mas abajo; BuildWall/BuildFloor/BuildRamp/BuildRoof la usan).
-	// bKeepOverlaps=true deja las estructuras solapadas intactas (la demo del DebBot
-	// construye un suelo bajo el bot en la misma celda que la rampa y quiere ambas
-	// para destruirlas luego con el pico).
 	static ABuildingSMActor* BuildPiece(CustomBot& Bot, UClass* BuildingClass, const FVector& Location, const FRotator& Rotation, bool bMirrored = false, bool bKeepOverlaps = false);
 
-	// Tipo de pieza construible.
 	enum class EPieceType : uint8_t
 	{
 		Wall,
 		Floor,
-		Ramp,   // escalera/rampa
+		Ramp,
 		Roof,
 	};
 
-	// Item definition de la pieza (lo que "selecciona" el jugador en el build mode).
 	static UObject* GetPieceItemDefinition(EPieceType Type)
 	{
 		switch (Type)
@@ -53,7 +37,6 @@ namespace CustomBotBuilding
 		}
 	}
 
-	// Metadata de edicion asociada a la pieza (usada por el building tool).
 	static UObject* GetPieceMetadata(EPieceType Type)
 	{
 		switch (Type)
@@ -70,12 +53,6 @@ namespace CustomBotBuilding
 		}
 	}
 
-	// Devuelve la clase del ABuildingSMActor para la pieza (best-effort).
-	// Las rutas de las clases de pieza cambian por version y no estan garantizadas;
-	// si devuelve nullptr el llamador debe proveer la clase (p.ej. el debug command
-	// cbbuild acepta un ClassPath). Confirmadas en ObjectsDump.txt de esta version
-	// (v3.5): las piezas de jugador estan en /Game/Building/ActorBlueprints/Player/
-	// Wood/L1/PBWA_W1_* (los paths SM_Stair_Base/etc. viejos dan 0 matches).
 	static UClass* GetPieceClass(EPieceType Type)
 	{
 		switch (Type)
@@ -92,18 +69,7 @@ namespace CustomBotBuilding
 		}
 	}
 
-	// --- Grid de construccion: mismo snap que el juego ---
-	// El servidor NO aplica un snap al spawn (spawna el BuildLoc/BuildRot que le
-	// llegan); el que ajusta al grid es el cliente del jugador real. Para el bot
-	// replicamos ese ajuste usando las funciones nativas del grid del juego
-	// (UBuildingStructuralSupportSystem, presentes en ObjectsDump v3.5):
-	//   K2_GetGridIndicesFromWorldLoc(WorldLoc)->(bool, OutGridIndices)
-	//   K2_GetWorldLocFromGridIndices(GridIndices)->(bool, OutWorldLoc)
-	//   GetGridBox(CellIndex)->FBox
-	// Activo en BuildPiece (todas las builds) y usado por el debug sequence para
-	// elegir la celda (la rampa se coloca en la celda inmediatamente adelante).
 
-	// Indices de la celda que contiene un punto del mundo.
 	static bool GridIndicesFromWorldLocation(UObject* SSS, const FVector& WorldLoc, int& OutX, int& OutY)
 	{
 		if (!SSS)
@@ -125,7 +91,6 @@ namespace CustomBotBuilding
 		return true;
 	}
 
-	// Centro + mitad del tamano de una celda (via GetGridBox; FBox = 2x FVector).
 	static bool CellBoxFromIndices(UObject* SSS, int X, int Y, FVector& OutCenter, FVector& OutHalfExtent)
 	{
 		if (!SSS)
@@ -149,7 +114,6 @@ namespace CustomBotBuilding
 		return true;
 	}
 
-	// Snap X/Y de un punto al centro de la celda del grid que lo CONTAINE.
 	static bool SnapLocationToGrid(UObject* SSS, FVector& Loc)
 	{
 		int X, Y;
@@ -163,13 +127,11 @@ namespace CustomBotBuilding
 		return true;
 	}
 
-	// Redondea un yaw a la cardinal mas cercana (90 grados).
 	static float SnapYawToCardinal(float Yaw)
 	{
 		return std::round(Yaw / 90.0f) * 90.0f;
 	}
 
-	// Centro de la celda Steps pasos adelante de From en la direccion cardinal.
 	static bool CellCenterAhead(UObject* SSS, const FVector& From, float CardinalYaw, int Steps, FVector& OutCenter)
 	{
 		int BaseX, BaseY;
@@ -179,18 +141,16 @@ namespace CustomBotBuilding
 		int DX = 0, DY = 0;
 		switch (((((int)std::round(CardinalYaw / 90.0f)) % 4) + 4) % 4)
 		{
-		case 0: DX = 1; break;   // +X
-		case 1: DY = 1; break;   // +Y
-		case 2: DX = -1; break;  // -X
-		default: DY = -1; break; // -Y
+		case 0: DX = 1; break;
+		case 1: DY = 1; break;
+		case 2: DX = -1; break;
+		default: DY = -1; break;
 		}
 
 		FVector Center, Half;
 		return CellBoxFromIndices(SSS, BaseX + DX * Steps, BaseY + DY * Steps, OutCenter, Half);
 	}
 
-	// Selecciona la pieza: da el item al inventario y lo equipa. Esto, junto con
-	// el building tool equipado, cambia la piece seleccionada (ServerExecuteInventoryItemHook).
 	static void SelectPiece(CustomBot& Bot, EPieceType Type)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory)
@@ -208,7 +168,6 @@ namespace CustomBotBuilding
 			Bot.WorldInventory->Update();
 	}
 
-	// Construye una rampa (`BuildRamp`) para superar terreno (Section 15).
 	static ABuildingSMActor* BuildWall(CustomBot& Bot, const FVector& Location, const FRotator& Rotation, bool bMirrored = false)
 	{
 		return BuildPiece(Bot, GetPieceClass(EPieceType::Wall), Location, Rotation, bMirrored);
@@ -229,12 +188,6 @@ namespace CustomBotBuilding
 		return BuildPiece(Bot, GetPieceClass(EPieceType::Roof), Location, Rotation, bMirrored);
 	}
 
-	// Construye una pieza en Location/Rotation:
-	//   1. valida (IsWorldLocValid / IsPlayerBuildableClass) igual que el hook
-	//   2. spawna el ABuildingSMActor
-	//   3. consume material (Wood/Stone/Metal segun GetResourceType)
-	//   4. SetPlayerPlaced + InitializeBuildingActor + SetTeam
-	// Devuelve el actor construido (o nullptr si fallo).
 	static ABuildingSMActor* BuildPiece(CustomBot& Bot, UClass* BuildingClass, const FVector& Location, const FRotator& Rotation, bool bMirrored, bool bKeepOverlaps)
 	{
 		if (!Bot.IsReady() || !Bot.Controller || !Bot.WorldInventory)
@@ -252,13 +205,10 @@ namespace CustomBotBuilding
 		if (!GameState || !PlayerStateAthena)
 			return nullptr;
 
-		// Validaciones de zona (opcionales pero iguales al hook).
 		auto StructuralSupportSystem = GameState->GetStructuralSupportSystem();
 
 		std::string ClassName = BuildingClass ? BuildingClass->GetFullName() : "null";
 
-		// Snap de TODAS las builds al grid del juego (X/Y al centro de celda) y
-		// rotacion a cardinales (90 grados), como hace el cliente real al colocar.
 		FVector BuildLoc = Location;
 		FRotator BuildRot = Rotation;
 		if (StructuralSupportSystem && SnapLocationToGrid(StructuralSupportSystem, BuildLoc))
@@ -290,11 +240,6 @@ namespace CustomBotBuilding
 
 		if (Addresses::CantBuild)
 		{
-			// El hook del jugador real usa CantBuild como validacion anti-trampa de
-			// colocacion legal. Para el bot NO bloqueamos su resultado (la demo necesita
-			// construir aunque el sitio no sea legal para un jugador), pero SI se ejecuta
-			// para obtener las estructuras solapadas que luego se destruyen y para
-			// diagnosticar el motivo (idk) de un rechazo eventual.
 			char idk;
 			static __int64 (*CantBuild)(UObject*, UObject*, FVector, FRotator, char, TArray<ABuildingSMActor*>*, char*) = decltype(CantBuild)(Addresses::CantBuild);
 			bool bCanBuild = !CantBuild(GetWorld(), BuildingClass, BuildLoc, BuildRot, bMirrored, &ExistingBuildings, &idk);
@@ -320,7 +265,6 @@ namespace CustomBotBuilding
 			return nullptr;
 		}
 
-		// Consumo de materiales.
 		bool bBuildFree = Bot.Controller->DoesBuildFree();
 
 		if (!bBuildFree)
@@ -345,8 +289,6 @@ namespace CustomBotBuilding
 				Bot.WorldInventory->Update();
 		}
 
-		// Destruir estructuras que ocupen el lugar (a menos que la pieza pida
-		// conservarlas, p.ej. el suelo de la demo que comparte celda con la rampa).
 		for (int i = 0; i < ExistingBuildings.Num(); ++i)
 		{
 			auto ExistingBuilding = ExistingBuildings.At(i);

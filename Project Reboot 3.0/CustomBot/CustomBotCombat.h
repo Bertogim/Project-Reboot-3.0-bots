@@ -6,29 +6,15 @@
 #include "CustomBotInventory.h"
 #include "CustomBotPerception.h"
 
-// CustomBot - Combate.
-//
-// Equipa el arma, consulta y ajusta municion, apunta y dispara usando el
-// pipeline GAS real (AbilitySystemComponent). Recarga restableciendo la
-// municion cargada del arma.
-//
-// NOTA (research 04): no existe un helper end-to-end de disparo en el repo.
-// El disparo real del jugador ocurre via la weapon ability (GAS). Para el bot
-// activamos esa ability una vez que el arma esta equipada.
 
 namespace CustomBotCombat
 {
-	// Devuelve true si el pawn tiene un arma equipada.
 	static bool IsWeaponEquipped(CustomBot& Bot)
 	{
 		auto Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
 		return Weapon != nullptr;
 	}
 
-	// Devuelve true si el arma equipada es el PICAXE (harvest tool del bot).
-	// El pico hereda de FortWeaponItemDefinition, asi que IsWeaponEquipped()
-	// devuelve true tambien con el pico; con este check se distingue "melee"
-	// (pico/cuerpo a cuerpo) de un arma real (de fuego, con municion).
 	static bool IsPickaxeEquipped(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -48,9 +34,6 @@ namespace CustomBotCombat
 		return FortWeaponMeleeItemDefinitionClass && WeaponDef->IsA(FortWeaponMeleeItemDefinitionClass);
 	}
 
-	// Devuelve true si Enemy (cualquier pawn enemigo) tiene un arma REAL
-	// equipada (de fuego). El pico/melee NO cuenta: aunque tambien es un
-	// FortWeapon, es cuerpo a cuerpo y no puede dispararte desde lejos.
 	static bool EnemyHasRealWeapon(AActor* Enemy)
 	{
 		if (!Enemy)
@@ -75,15 +58,12 @@ namespace CustomBotCombat
 		return FortWeaponMeleeItemDefinitionClass && !WeaponDef->IsA(FortWeaponMeleeItemDefinitionClass);
 	}
 
-	// Municion actual del arma equipada.
 	static int GetCurrentAmmo(CustomBot& Bot)
 	{
 		auto Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
 		return Weapon ? Weapon->GetAmmoCount() : 0;
 	}
 
-	// Recarga: restablece la municion cargada del arma equipada (capacidad cosmetica;
-	// el almacen real se gestiona por el inventario). Devuelve la new ammo.
 	static int Reload(CustomBot& Bot, int NewAmmoCount)
 	{
 		auto Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
@@ -97,9 +77,7 @@ namespace CustomBotCombat
 		return NewAmmoCount;
 	}
 
-	// Dispara el arma equipada activando su weapon ability via GAS.
 
-	// Activa la primera spec activable del ASC (definida debajo; FireWeapon la usa).
 	static bool ActivatePrimaryAbility(CustomBot& Bot);
 
 	static bool FireWeapon(CustomBot& Bot)
@@ -109,9 +87,6 @@ namespace CustomBotCombat
 		return ActivatePrimaryAbility(Bot);
 	}
 
-	// Activa la primer spec activable del ASC (mejor esfuerzo; en la practica
-	// tras equipar el arma su ability es la que hay que disparar, y tras equipar
-	// un consumible es la ability de consumo). Pipeline GAS real (research 04).
 	static bool ActivatePrimaryAbility(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.PlayerState)
@@ -132,8 +107,6 @@ namespace CustomBotCombat
 		if (Items.Num() == 0)
 			return false;
 
-		// Intentar activar la primer spec activable (habitualmente la weapon ability
-		// del arma equipada tras EquipWeapon).
 		auto& Spec = Items.At(0, FGameplayAbilitySpec::GetStructSize());
 		FGameplayAbilitySpecHandle Handle = Spec.GetHandle();
 
@@ -144,7 +117,6 @@ namespace CustomBotCombat
 			ASC, Handle, PredictionKey, &OutInstancedAbility, nullptr, nullptr);
 	}
 
-	// Suelta el gatillo (detiene el disparo del arma actual) via la UFunction nativa.
 	static void StopFiring(CustomBot& Bot)
 	{
 		auto Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
@@ -158,7 +130,6 @@ namespace CustomBotCombat
 		Weapon->ProcessEvent(ServerReleaseWeaponAbilityFn);
 	}
 
-	// Apunta el pawn hacia el objetivo (rota el control via LookAt del movimiento).
 	static void AimAt(CustomBot& Bot, const FVector& TargetLocation)
 	{
 		CustomBotMovement::LookAt(Bot, TargetLocation);

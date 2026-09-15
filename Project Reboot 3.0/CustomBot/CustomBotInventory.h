@@ -8,14 +8,9 @@
 #include "FortWeaponItemDefinition.h"
 #include "BuildingSMActor.h"
 
-// CustomBot - Inventario.
-//
-// Recoge, suelta, equipa, cambia y consulta items usando el WorldInventory real
-// del bot y las APIs nativas del jugador.
 
 namespace CustomBotInventory
 {
-	// Devuelve el item actualmente equipado (arma) del pawn.
 	static AFortWeapon* GetCurrentWeapon(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -24,7 +19,6 @@ namespace CustomBotInventory
 		return Bot.Pawn->GetCurrentWeapon();
 	}
 
-	// Consulta la cantidad total de un item dado por su definicion.
 	static int GetItemCount(CustomBot& Bot, UFortItemDefinition* ItemDefinition)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory || !ItemDefinition)
@@ -52,7 +46,6 @@ namespace CustomBotInventory
 		return Total;
 	}
 
-	// Devuelve el primer UFortItem del inventario cuya definicion coincida.
 	static UFortItem* FindItemByDefinition(CustomBot& Bot, UFortItemDefinition* ItemDefinition)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory || !ItemDefinition)
@@ -76,8 +69,6 @@ namespace CustomBotInventory
 		return nullptr;
 	}
 
-	// Devuelve el primer item del inventario cuya definicion sea de un tipo dado.
-	// El tipo se clasifica con CustomBotPerception::ClassifyItemDefinition.
 	static UFortItem* FindItemByType(CustomBot& Bot, CustomBotPerception::EItemType Type)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory)
@@ -104,7 +95,6 @@ namespace CustomBotInventory
 		return nullptr;
 	}
 
-	// Equipa el item dado por su GUID (arma, deco, building piece, gadget...).
 	static bool EquipItemByGuid(CustomBot& Bot, const FGuid& ItemGuid)
 	{
 		if (!Bot.IsReady() || !Bot.Controller)
@@ -114,13 +104,6 @@ namespace CustomBotInventory
 		return true;
 	}
 
-	// Equipa el item (por su instancia UFortItem*). Priores: con bots POSEIDOS
-	// (gBotPossessBots) se usa PRIMERO ServerExecuteInventoryItemHook (el path
-	// completo del jugador que requiere Controller->GetPawn(); con UnPossess ese
-	// GetPawn() es nullptr y no equipa nada). Sin possession se usa el path
-	// directo FortPawn:EquipWeaponDefinition (funciona sin controller, requisito
-	// del fix RUNPHYS de research 08). En ambos casos se verifica al final contra
-	// la definicion pedida y se prueba el camino alternativo si falla.
 	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
 	{
 		if (!Item)
@@ -141,7 +124,6 @@ namespace CustomBotInventory
 
 		if (gBotPossessBots)
 		{
-			// Poseido: el hook del controller replica/envida como un jugador real.
 			if (Bot.Controller)
 				Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, Entry->GetItemGuid());
 
@@ -170,12 +152,6 @@ namespace CustomBotInventory
 		return Verify();
 	}
 
-	// Equipa el pickaxe del bot. Usa EquipItem (EquipWeaponDefinition directo
-	// sobre el pawn) en vez de EquipItemByGuid (ServerExecuteInventoryItemHook):
-	// tras EnableServerSimulation el controller ya no posee el pawn (UnPossess)
-	// y ServerExecuteInventoryItemHook falla silenciosamente (no equipa nada).
-	// EquipWeaponDefinition funciona SIEMPRE porque opera directamente sobre el
-	// pawn sin necesitar que el controller lo posea.
 	static bool EquipPickaxe(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory)
@@ -192,14 +168,12 @@ namespace CustomBotInventory
 		return EquipItem(Bot, Pickaxe);
 	}
 
-	// Busca una arma en el inventario y la equipa.
 	static bool EquipFirstWeapon(CustomBot& Bot)
 	{
 		UFortItem* Weapon = FindItemByType(Bot, CustomBotPerception::EItemType::Weapon);
 		return Weapon ? EquipItem(Bot, Weapon) : false;
 	}
 
-	// Da (anade) un item al inventario del bot. Devuelve true si se anadio.
 	static bool GiveItem(CustomBot& Bot, UFortItemDefinition* ItemDefinition, int Count = 1, int LoadedAmmo = -1)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory || !ItemDefinition || Count <= 0)
@@ -214,7 +188,6 @@ namespace CustomBotInventory
 		return true;
 	}
 
-	// Elimina un item del inventario del bot.
 	static bool RemoveItemByGuid(CustomBot& Bot, const FGuid& ItemGuid, int Count = 1, bool bForceRemoval = false)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory)
@@ -229,8 +202,6 @@ namespace CustomBotInventory
 		return bRemoved;
 	}
 
-	// Suelta (droppea) un item del inventario al suelo, como un jugador real
-	// (ServerAttemptInventoryDropHook). Devuelve true si habia item que soltar.
 	static bool DropItem(CustomBot& Bot, UFortItem* Item, int Count = 1)
 	{
 		if (!Bot.IsReady() || !Bot.Controller || !Item || Count <= 0)
@@ -245,14 +216,12 @@ namespace CustomBotInventory
 		return true;
 	}
 
-	// Suelta Count unidades del item con la definicion dada (si existe en el bot).
 	static bool DropItemByDefinition(CustomBot& Bot, UFortItemDefinition* ItemDefinition, int Count = 1)
 	{
 		UFortItem* Item = FindItemByDefinition(Bot, ItemDefinition);
 		return Item ? DropItem(Bot, Item, Count) : false;
 	}
 
-	// Cambia la municion cargada del item dado por su GUID.
 	static void SetLoadedAmmo(CustomBot& Bot, const FGuid& ItemGuid, int NewAmmoCount)
 	{
 		if (!Bot.IsReady() || !Bot.WorldInventory)

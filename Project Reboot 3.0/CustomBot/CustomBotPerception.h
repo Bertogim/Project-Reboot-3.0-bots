@@ -13,26 +13,13 @@
 #include "FortWeaponItemDefinition.h"
 #include "KismetSystemLibrary.h"
 
-// CustomBot - Percepcion.
-//
-// Escanea el mundo alrededor del bot y clasifica lo que encuentra (loot, cofres,
-// estructuras, jugadores). Son capacidades puras (sin decisiones de IA).
 
 namespace CustomBotPerception
 {
-	// Forward declarations (usadas antes de su definicion al final del modulo).
 	static bool IsAlly(CustomBot& Bot, AFortPlayerStateAthena* Other);
 	static bool IsEnemy(CustomBot& Bot, AFortPlayerStateAthena* Other);
 	static AFortPlayerStateAthena* GetPlayerStateOf(AActor* Actor);
 
-	// Path completo de un item definition, CACHEADO por definicion.
-	// OJO LEAK: GetPathName() ejecuta ProcessEvent (KismetSystemLibrary) que aloca
-	// un buffer FString en la arena del juego, y cada llamada convertia a
-	// std::string. En los bucles calientes (scan de loot por bot cada 0.35s,
-	// EquipBestWeapon cada tick) eso era una alocacion de string por pickup/item
-	// por tick -> la arena del malloc del juego crecia sin parar (~180MB/s a 50
-	// bots). Con este cache GetPathName() se pide UNA vez por definition unica en
-	// toda la sesion; el resto de accesos devuelve el path ya convertido.
 	static const std::string& CachedPathForDef(UFortItemDefinition* Def)
 	{
 		static std::unordered_map<UFortItemDefinition*, std::string> Cache;
@@ -49,7 +36,6 @@ namespace CustomBotPerception
 		return Cache.find(Def)->second;
 	}
 
-	// Tipos de item que puede contener un pickup / inventory.
 	enum class EItemType : uint8_t
 	{
 		Weapon,
@@ -63,7 +49,6 @@ namespace CustomBotPerception
 		Other,
 	};
 
-	// Clasifica un UFortItemDefinition en EItemType (sin asumir tipos C++ concretos).
 	static EItemType ClassifyItemDefinition(UFortItemDefinition* ItemDefinition)
 	{
 		if (!ItemDefinition)
@@ -81,10 +66,6 @@ namespace CustomBotPerception
 
 	#define IS(Class) (Class && ItemDefinition->IsA(Class))
 
-		// OJO: orden importa. En esta version building pieces (p.ej.
-		// BuildingItemData_Wall) heredan de FortWeaponItemDefinition, asi que
-		// hay que comprobar los tipos de construccion/edicion ANTES que Weapon,
-		// si no EquipFirstWeapon agarra el EditTool/Wall como "arma".
 		if (IS(FortBuildingItemDefinitionClass))   return EItemType::BuildingPiece;
 		if (IS(FortEditToolItemDefinitionClass))   return EItemType::BuildingPiece;
 		if (IS(FortWeaponItemDefinitionClass))     return EItemType::Weapon;
@@ -100,7 +81,6 @@ namespace CustomBotPerception
 		return EItemType::Other;
 	}
 
-	// Devuelve el tipo de item de un pickup (AFortPickup) en el suelo.
 	static EItemType GetPickupItemType(AFortPickup* Pickup)
 	{
 		if (!Pickup)
@@ -110,7 +90,6 @@ namespace CustomBotPerception
 		return Entry ? ClassifyItemDefinition(Entry->GetItemDefinition()) : EItemType::Other;
 	}
 
-	// Distancia (3D) desde el bot hasta un actor.
 	static float DistanceToActor(CustomBot& Bot, AActor* Actor)
 	{
 		if (!Bot.IsReady() || !Actor)
@@ -119,13 +98,6 @@ namespace CustomBotPerception
 		return Bot.Pawn->GetDistanceTo(Actor);
 	}
 
-	// --- Cache GLOBAL de barridos de mundo (perf con N bots) ------------------
-	// Cada finder (loot/cofres/jugadores/obstaculos) hacía su PROPIO
-	// GetAllActorsOfClass sobre el mundo entero por bot: con 50 bots eso eran
-	// ~50 barridos por bucket cada ScanCooldown -> solo el tick de bots costaba
-	// 130-211ms/frame. Aqui la barrida de cada clase se hace UNA vez a nivel
-	// global y se refresca cada SharedCooldown; todos los bots filtran sobre la
-	// MISMA lista compartida (solo distancia cuadrada, sin native calls frias).
 
 	inline constexpr float SharedCooldown = 0.5f;
 
@@ -134,7 +106,7 @@ namespace CustomBotPerception
 		UClass* Cls = nullptr;
 		float Time = -1.0f;
 		TArray<AActor*> Actors;
-		std::vector<FVector> Locations; // misma posicion que Actors (cache para filtros baratos)
+		std::vector<FVector> Locations;
 	};
 
 	static std::vector<SharedBucket>& SharedBuckets()
@@ -143,10 +115,6 @@ namespace CustomBotPerception
 		return Buckets;
 	}
 
-	// Lista compartida de actores de una clase: UNA barrida de mundo por
-	// SharedCooldown, usada por todos los bots. Cachea tambien la ubicacion de
-	// cada actor en el propio bucket: asi el filtro por distancia de cada bot
-	// NO hace llamadas nativas (GetActorLocation/GetDistanceTo son ProcessEvent).
 	static SharedBucket& SharedBucketByClass(UClass* Cls)
 	{
 		static SharedBucket Empty;
@@ -186,16 +154,12 @@ namespace CustomBotPerception
 		return NewBucket;
 	}
 
-	// Posicion global de un cofre, cacheada para el landing/el loot.
 	struct CachedChest
 	{
 		FVector Location;
 		bool bSearched;
 	};
 
-	// Cache GLOBAL de cofres del mundo (BuildingContainer). La IA lo usa para
-	// aterrizar cerca de un cofre (PickLandingPoint) y evitar caer en el mar o
-	// fuera del mapa. Refresco ligado al bucket global compartido.
 	static const std::vector<CachedChest>& CachedChests()
 	{
 		static std::vector<CachedChest> Chests;
@@ -228,12 +192,6 @@ namespace CustomBotPerception
 		return Chests;
 	}
 
-	// Puntuacion heuristica de VALOR de un pickup suelto (para elegir el que
-	// "mas le renta" coger, no solo el mas cercano): nivel (tier) del item +
-	// bonus por categoria de arma (sniper/launcher > pistola) y por consumible
-	// (pocion de escudo > medkit > vendas). Mismo estilo que el ItemLootScore
-	// de la IA (CustomBotAI_Midgame). TODO-PATH: si en el futuro el bot llena
-	// la quickbar por calidad + distancia, migrar aqui una puntuacion comun.
 	static int LootValueScore(AFortPickup* Pickup)
 	{
 		if (!Pickup)
@@ -275,8 +233,6 @@ namespace CustomBotPerception
 		return Score;
 	}
 
-	// Compara dos pickups candidatos: primero por valor (LootValueScore), con
-	// empate gana el mas cercano.
 	static bool IsBetterPickup(CustomBot& Bot, AFortPickup* Cand, AFortPickup* Cur)
 	{
 		int CandScore = LootValueScore(Cand);
@@ -288,10 +244,6 @@ namespace CustomBotPerception
 		return !Cur || DistanceToActor(Bot, Cand) < DistanceToActor(Bot, Cur);
 	}
 
-	// Barrido: obtiene una clase de actor dentro del radio alrededor del bot.
-	// Usa el cache GLOBAL compartido (una sola barrida de mundo por clase y
-	// cooldown, no una por bot) y filtra por distancia cuadrada sobre las
-	// ubicaciones cacheadas (sin llamadas nativas).
 	static TArray<AActor*> GetAllActorsOfClassWithin(CustomBot& Bot, UClass* ActorClass, float Radius)
 	{
 		TArray<AActor*> Result;
@@ -323,7 +275,6 @@ namespace CustomBotPerception
 		return Result;
 	}
 
-	// Encuentra el actor de la clase dada mas cercano al bot dentro de Radius.
 	static AActor* FindNearestActorOfClass(CustomBot& Bot, UClass* ActorClass, float Radius)
 	{
 		if (!Bot.IsReady() || !ActorClass)
@@ -356,13 +307,6 @@ namespace CustomBotPerception
 		return Nearest;
 	}
 
-	// --- Cache de barridos (bots pesados) -----------------------------------
-	// Los barridos GetActorsOfClass sobre el mundo entero son lo mas caro del
-	// bot (DoLooting hacia 4+ por frame; con 10 bots el servidor perdia ticks
-	// -> movimiento lento/a saltos). Cada bucket (loot/jugadores/obstaculos)
-	// refresca su cache UNA vez por ScanCooldown y el resto de finders del mismo
-	// bucket (que miran los MISMOS actores del mundo) lo reutilizan sin volver a
-	// barrer. Los refreshes viven en CustomBot (LootScanTime/...).
 
 	inline constexpr float ScanCooldown = 0.35f;
 
@@ -371,15 +315,11 @@ namespace CustomBotPerception
 		return UGameplayStatics::GetTimeSeconds(GetWorld());
 	}
 
-	// Pickup en cache utilizable (no destruido entre refrescos).
 	static AFortPickup* UsablePickup(AFortPickup* Pickup)
 	{
 		return (Pickup && !Pickup->IsActorBeingDestroyed()) ? Pickup : nullptr;
 	}
 
-	// Refresca el cache de loot (pickups + cofres) si expiro. Con UN barrido de
-	// FortPickup se clasifican todas las tipos de pickup en la misma pasada, y
-	// con otro los cofres sin abrir. Antes eran 4+ barridos por frame.
 	static void RefreshLootCache(CustomBot& Bot, float Radius)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -391,7 +331,6 @@ namespace CustomBotPerception
 		Bot.LootScanTime = BotTime();
 		Bot.LootScanRadius = Radius;
 
-		// Pickups: un solo barrido, clasificando todos en una pasada.
 		Bot.CachedNearestWeapon = nullptr;
 		Bot.CachedNearestConsumable = nullptr;
 		Bot.CachedNearestPickup = nullptr;
@@ -413,9 +352,6 @@ namespace CustomBotPerception
 
 			EItemType Type = GetPickupItemType(Pickup);
 
-			// TODO-PATH (elegir el loot que "mas vale"): ya no se guarda solo el
-			// mas cercano sino el de mejor LootValueScore (tier + categoria), con
-			// la distancia como desempate.
 			if (Type == EItemType::Weapon && D <= Radius && IsBetterPickup(Bot, Pickup, Bot.CachedNearestWeapon))
 				Bot.CachedNearestWeapon = Pickup;
 
@@ -425,7 +361,6 @@ namespace CustomBotPerception
 
 		All.FreeEngine();
 
-		// Cofres: un solo barrido.
 		Bot.CachedNearestContainer = nullptr;
 
 		static auto BuildingContainerClass = FindObject<UClass>(L"/Script/FortniteGame.BuildingContainer");
@@ -447,10 +382,8 @@ namespace CustomBotPerception
 		AllContainers.FreeEngine();
 	}
 
-	// Pickup (loot en el suelo) mas cercano, opcionalmente filtrando por tipo de item.
 	static AFortPickup* FindNearestPickup(CustomBot& Bot, float Radius, EItemType ItemTypeFilter = EItemType::Other, bool bAnyType = true)
 	{
-		// Tipos usados por la IA: leen el cache de loot (un barrido cada cooldown).
 		if (bAnyType)
 		{
 			RefreshLootCache(Bot, Radius);
@@ -469,7 +402,6 @@ namespace CustomBotPerception
 			return UsablePickup(Bot.CachedNearestConsumable);
 		}
 
-		// Filtros poco usados (Ammo/Resource/...): barrido directo sin cache.
 		static auto FortPickupClass = FindObject<UClass>(L"/Script/FortniteGame.FortPickup");
 		TArray<AActor*> All = GetAllActorsOfClassWithin(Bot, FortPickupClass, Radius);
 
@@ -500,7 +432,6 @@ namespace CustomBotPerception
 		return Nearest;
 	}
 
-	// Cofre (BuildingContainer) sin abrir mas cercano dentro del radio.
 	static ABuildingContainer* FindNearestUnopenedContainer(CustomBot& Bot, float Radius)
 	{
 		RefreshLootCache(Bot, Radius);
@@ -512,8 +443,6 @@ namespace CustomBotPerception
 		return Bot.CachedNearestContainer;
 	}
 
-	// Jugador (AFortPlayerPawn / AFortPlayerPawnAthena) mas cercano dentro del radio.
-	// Excluye a otros bots custom y al propio bot.
 	static AActor* FindNearestPlayer(CustomBot& Bot, float Radius)
 	{
 		static auto FortPlayerPawnClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerPawn");
@@ -543,15 +472,13 @@ namespace CustomBotPerception
 		return Nearest;
 	}
 
-	// Comprueba linea de vision (LOS) entre el bot y TargetLocation usando line trace.
-	// Devuelve true si NO hay obstaculo (visibilidad clara).
 	static bool HasLineOfSight(CustomBot& Bot, const FVector& TargetLocation, AActor* ActorToIgnore = nullptr)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return false;
 
 		FVector Start = Bot.Pawn->GetActorLocation();
-		Start.Z += 60.0f; // altura de la cabeza
+		Start.Z += 60.0f;
 
 		FVector End = TargetLocation;
 		End.Z += 60.0f;
@@ -581,17 +508,12 @@ namespace CustomBotPerception
 		return bHit;
 	}
 
-	// Devuelve true si hay un obstaculo bloqueante directo hacia TargetLocation.
 	static bool HasBlockingObstacle(CustomBot& Bot, const FVector& TargetLocation, float TraceRadius = 40.0f)
 	{
 		return !HasLineOfSight(Bot, TargetLocation);
 	}
 
-	// --- Escaneo generico ----------------------------------------------------
 
-	// Barrido generico: todos los actores dentro del radio (FScanResult).
-	// La IA (Parte 2) puede clasificar cada actor con ClassifyObstacle /
-	// ClassifyItemDefinition segun lo que encuentre.
 	static CBT::FScanResult ScanNearbyObjects(CustomBot& Bot, float Radius)
 	{
 		CBT::FScanResult Result;
@@ -604,9 +526,7 @@ namespace CustomBotPerception
 		return Result;
 	}
 
-	// --- Finders de loot (Section 11) -----------------------------------------
 
-	// Cualquier pickup (loot en el suelo) mas cercano.
 	static AFortPickup* FindNearbyLoot(CustomBot& Bot, float Radius)
 	{
 		return FindNearestPickup(Bot, Radius);
@@ -632,7 +552,6 @@ namespace CustomBotPerception
 		return FindNearestPickup(Bot, Radius, EItemType::Resource, false);
 	}
 
-	// --- Equipos / relacion aliado-enemigo ------------------------------------
 
 	static int GetBuildingTeam(ABuildingActor* Building)
 	{
@@ -652,7 +571,6 @@ namespace CustomBotPerception
 		return (int)Building->Get<uint8_t>(TeamOffset);
 	}
 
-	// Team de cualquier actor: playerstate/pawn/controller o BuildingActor.
 	static int GetActorTeam(AActor* Actor)
 	{
 		if (!Actor)
@@ -675,7 +593,6 @@ namespace CustomBotPerception
 		return -1;
 	}
 
-	// Clasifica un actor como obstaculo (EObstacleType) para la futura IA.
 	static CBT::EObstacleType ClassifyObstacle(CustomBot& Bot, AActor* Actor)
 	{
 		if (!Actor)
@@ -688,7 +605,6 @@ namespace CustomBotPerception
 
 		auto SMActor = Cast<ABuildingSMActor>(Actor);
 
-		// Estructura construida por un jugador/bot.
 		if (SMActor && SMActor->IsPlayerPlaced())
 		{
 			int BotTeam = Bot.PlayerState ? (int)Bot.PlayerState->GetTeamIndex() : -1;
@@ -703,11 +619,9 @@ namespace CustomBotPerception
 			return CBT::EObstacleType::Structure;
 		}
 
-		// Objeto del mundo no colocado por un jugador (arboles, rocas, etc.).
 		return CBT::EObstacleType::WorldObject;
 	}
 
-	// Refresca el cache de obstaculos (BuildingSMActor) si expiro.
 	static void RefreshObstacleCache(CustomBot& Bot, float Radius)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -744,8 +658,6 @@ namespace CustomBotPerception
 		All.FreeEngine();
 	}
 
-	// Estructura/obstaculo (ABuildingSMActor o ABuildingFoundation) mas cercano
-	// dentro del radio, con su tipo clasificado.
 	static AActor* FindNearestObstacle(CustomBot& Bot, float Radius, CBT::EObstacleType& OutType)
 	{
 		RefreshObstacleCache(Bot, Radius);
@@ -757,16 +669,6 @@ namespace CustomBotPerception
 		return Bot.CachedNearestObstacle;
 	}
 
-	// Obstaculo (ABuildingSMActor) mas cercano que este DELANTE del bot: dentro
-	// del cono frontal horizontal definido por FacingDir/MinDot. A diferencia de
-	// FindNearestObstacle (UN unico candidato global), elige entre TODOS los de
-	// Radio el que ademas cumple el cono: asi una pared delante no se ignora
-	// porque haya un arbol mas cercano al lado (TryBreakFront la usara para
-	// romper el muro que de verdad bloquea). Un barrido fresco; solo llamar en
-	// desatascado (no por cada viaje normal).
-	// Filter: predicado opcional que descarta candidatos (p.ej. excluir piezas
-	// no destructibles como el suelo del terreno a los pies del bot, que es el
-	// "obstaculo mas cercano" en el cono pero no es lo que bloquea el paso).
 	static AActor* FindFrontObstacle(CustomBot& Bot, float Radius, const FVector& FacingDir, float MinDot, CBT::EObstacleType& OutType, bool (*Filter)(AActor*) = nullptr)
 	{
 		OutType = CBT::EObstacleType::None;
@@ -776,8 +678,6 @@ namespace CustomBotPerception
 
 		FVector BotLoc = Bot.Pawn->GetActorLocation();
 
-		// Direccion frontal HORIZONTAL normalizada a mano (el FVector del repo no
-		// expone Size/Normalize; mismo patron que DirectionTo).
 		FVector Fwd{ FacingDir.X, FacingDir.Y, 0.0f };
 		float FwdLenSq = Fwd | Fwd;
 
@@ -804,7 +704,6 @@ namespace CustomBotPerception
 			if (Filter && !Filter(Actor))
 				continue;
 
-			// Cono frontal horizontal (deja fuera arboles/rocas a los lados).
 			FVector ToObj = Actor->GetActorLocation() - BotLoc;
 			ToObj.Z = 0.0f;
 			float LenSq = ToObj | ToObj;
@@ -834,14 +733,11 @@ namespace CustomBotPerception
 		return Best;
 	}
 
-	// Devuelve true si el camino directo hacia TargetLocation esta bloqueado.
 	static bool IsPathBlocked(CustomBot& Bot, const FVector& TargetLocation)
 	{
 		return !HasLineOfSight(Bot, TargetLocation);
 	}
 
-	// Diferencia de altura (Z del objetivo - Z del bot). Positivo = subir,
-	// negativo = bajar. Util para detectar montanas/pendientes (Section 9).
 	static float GetHeightDifference(CustomBot& Bot, const FVector& TargetLocation)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -850,9 +746,6 @@ namespace CustomBotPerception
 		return TargetLocation.Z - Bot.Pawn->GetActorLocation().Z;
 	}
 
-	// Busca un punto alternativo alcanzable por la IA para rodear un obstaculo.
-	// Si hay LOS directo devuelve TargetLocation; si no, prueba un anillo de
-	// puntos alrededor y devuelve el primero con LOS (o el objetivo si ninguno).
 	static FVector FindReachablePoint(CustomBot& Bot, const FVector& TargetLocation, float ProbeRadius = 250.0f)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -875,10 +768,7 @@ namespace CustomBotPerception
 		return TargetLocation;
 	}
 
-	// --- Jugadores / bots cercanos (con relacion de equipo) --------------------
 
-	// Refresca el cache de jugadores (FortPlayerPawn) si expiro. UN barrido
-	// clasifica en la misma pasada aliados y enemigos.
 	static void RefreshPlayerCache(CustomBot& Bot, float Radius)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn || !Bot.PlayerState)
@@ -969,13 +859,6 @@ namespace CustomBotPerception
 					return PlayerState;
 			}
 
-			// Bot custom UnPossess al activar simulacion de servidor: su Pawn ya
-			// NO tiene Controller, asi que GetController() devuelve nullptr y el
-			// Pawn se descartaba en RefreshPlayerCache (IsEnemy/IsAlly devolvian
-			// false). Consecuencia: los bots NO se detectaban entre si, solo
-			// veian al jugador humano (que SI tiene controller). Aqui resolvemos
-			// el PlayerState directamente de la propiedad "PlayerState" del Pawn
-			// (restaurada al spawn por RestorePawnPlayerState).
 			static int PSOffset = -1;
 			if (PSOffset == -1)
 				PSOffset = Pawn->GetOffset("PlayerState", false);

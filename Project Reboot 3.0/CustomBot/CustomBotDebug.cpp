@@ -24,8 +24,6 @@
 
 namespace
 {
-	// Envia un mensaje al chat del jugador (misma tecnica que SendMessageToConsole
-	// de commands.h, pero local para no arrastrar el sistema antiguo de bots).
 	void SendBotMessage(AFortPlayerController* PlayerController, const wchar_t* Msg)
 	{
 		if (!PlayerController)
@@ -72,7 +70,6 @@ namespace
 		}
 	}
 
-	// Convierte el nombre de clase (std::string, UTF-8/ASCII) a wchar para SendBotMessage.
 	std::wstring ToWide(const std::string& Text)
 	{
 		if (Text.empty())
@@ -86,7 +83,6 @@ namespace
 		return Out;
 	}
 
-	// Bot objetivo de los comandos (el primer bot custom valido).
 	CustomBot* GetFirstValidBot()
 	{
 		auto& Bots = CustomBotSpawner::AllCustomBots;
@@ -101,11 +97,6 @@ namespace
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Secuencia de prueba "debugbot" (Parte 1): maquina de estados + timers.
-// Un unico debugbot activo; cada paso ocurre en el orden esperado usando los
-// sistemas reales (movimiento, salto, construccion, destruccion, armas...).
-// ---------------------------------------------------------------------------
 namespace
 {
 	enum class DebugBotState : uint8_t
@@ -127,7 +118,6 @@ namespace
 		Finished,
 	};
 
-	// Nombre (narrow) del estado para los logs spdlog.
 	const char* DebugBotStateName(DebugBotState State)
 	{
 		switch (State)
@@ -151,25 +141,22 @@ namespace
 		}
 	}
 
-	// Estado global de la secuencia (unico debugbot activo a la vez).
 	struct DebugBotContext
 	{
 		DebugBotState Step = DebugBotState::None;
-		double NextActionTime = 0.0;      // timestamp (GetTimeSeconds) del proximo cambio
-		ABuildingSMActor* RampActor = nullptr; // la rampa construida (referencia real)
-		ABuildingSMActor* FloorActor = nullptr; // el suelo construido debajo del bot
+		double NextActionTime = 0.0;
+		ABuildingSMActor* RampActor = nullptr;
+		ABuildingSMActor* FloorActor = nullptr;
 		int ShotsFired = 0;
-		// --- Experimento de fisica: hacer el CM del bot identico al de un jugador
-		// real (tick habilitado + Walking + velocidades maximas) a cada frame. ----
 		bool bMoveExperimentDone = false;
-		int ModeForceCount = 0;           // veces que el watchdog relego el modo a Falling
-		double LastModeReLog = -1.0;      // throtling del log de revert
-		double PauseUntil = -1.0;         // pausa de pacing (3s) entre fases de la demo
-		bool bClimbStarted = false;       // si ya se arranco a caminar hacia la rampa
+		int ModeForceCount = 0;
+		double LastModeReLog = -1.0;
+		double PauseUntil = -1.0;
+		bool bClimbStarted = false;
 
-		bool bRampFacingLogged = false;   // guarda la orientacion real de la rampa
-		int RampAttempts = 0;             // intentos de construir la rampa (anti-spam)
-		int MaxRampAttempts = 5;          // tope para evitar loop infinito de BuildingRamp
+		bool bRampFacingLogged = false;
+		int RampAttempts = 0;
+		int MaxRampAttempts = 5;
 	};
 
 	static DebugBotContext gDebugBot;
@@ -179,8 +166,6 @@ namespace
 		return UGameplayStatics::GetTimeSeconds(GetWorld());
 	}
 
-	// Primer jugador real valido de la partida (para colocar el bot junto a el).
-	// Se excluyen los bots (nuevos custom bots y AFortAthenaAIBotController).
 	static AFortPlayerControllerAthena* FindFirstValidPlayer()
 	{
 		static auto AIControllerClass = FindObject<UClass>(L"/Script/FortniteGame.AFortAthenaAIBotController");
@@ -199,7 +184,7 @@ namespace
 					continue;
 
 				if (AIControllerClass && Candidate->IsA(AIControllerClass))
-					continue; // bots del sistema antiguo
+					continue;
 
 				bool bIsCustomBot = false;
 
@@ -213,13 +198,12 @@ namespace
 				}
 
 				if (bIsCustomBot)
-					continue; // bot custom del sistema nuevo
+					continue;
 
-				return Candidate; // primer jugador real valido
+				return Candidate;
 			}
 		}
 
-		// Fallback: host / local player.
 		auto* Local = Cast<AFortPlayerControllerAthena>(GetLocalPlayerController());
 
 		if (Local && !Local->IsActorBeingDestroyed() && Local->GetPawn())
@@ -228,9 +212,6 @@ namespace
 		return nullptr;
 	}
 
-	// Busca una definicion de arma valida para la prueba (best-effort).
-	// Primero rutas conocidas (varian por version); si ninguna carga, escanea
-	// GObjects y elige la primera "gun" de Athena (excluyendo herramientas).
 	static UFortItemDefinition* FindTestWeaponDefinition()
 	{
 		LOG_INFO(LogBots, "[DebugBot] Searching for weapon definition...");
@@ -258,7 +239,6 @@ namespace
 
 		LOG_INFO(LogBots, "[DebugBot] Found {} WeaponItemDefinitions total", All.size());
 
-		// Categorias de armas reales (preferidas) y nombres a excluir (herramientas/depuradores).
 		static const char* GunDirs[] = { "/Guns/", "/Rifle/", "/Pistol/", "/SMG/", "/Shotgun/", "/Launchers/", "/Sniper/" };
 		static const char* Excludes[] = {
 			"Pickaxe", "BuildingTools", "EditTool", "Aimlaser", "Melee", "StatDebugger",
@@ -279,7 +259,6 @@ namespace
 			return false;
 		};
 
-		// Primera pasada: preferir paths en carpetas de armas reales (/Guns/, /Rifle/,...).
 		for (auto* Def : All)
 		{
 			if (!Def)
@@ -298,7 +277,6 @@ namespace
 			return Def;
 		}
 
-		// Segunda pasada: cualquier arma de Athena que no sea herramienta/depurador.
 		for (auto* Def : All)
 		{
 			if (!Def)
@@ -319,17 +297,14 @@ namespace
 		return nullptr;
 	}
 
-	// Da al bot arma, municion, materiales y escudo. Devuelve false si no hay arma.
 	static bool DebugBotGrantLoadout(CustomBot& Bot)
 	{
 		LOG_INFO(LogBots, "[DebugBot] === Granting loadout ===");
 
-		// 1) Equipar pico PRIMERO para salir del build mode (EditTool de starting items).
 		LOG_INFO(LogBots, "[DebugBot] Step 1: Equipping pickaxe to exit build mode...");
 		bool bPickaxeEquipped = CustomBotInventory::EquipPickaxe(Bot);
 		LOG_INFO(LogBots, "[DebugBot] Pickaxe equipped: {}", bPickaxeEquipped ? "YES" : "NO");
 
-		// 2) Materiales.
 		LOG_INFO(LogBots, "[DebugBot] Step 2: Granting materials...");
 		CustomBotResources::GiveResource(Bot, EFortResourceType::Wood, 1000);
 		CustomBotResources::GiveResource(Bot, EFortResourceType::Stone, 1000);
@@ -339,7 +314,6 @@ namespace
 			CustomBotResources::GetResourceCount(Bot, EFortResourceType::Stone),
 			CustomBotResources::GetResourceCount(Bot, EFortResourceType::Metal));
 
-		// 3) Arma real.
 		LOG_INFO(LogBots, "[DebugBot] Step 3: Finding weapon...");
 		UFortItemDefinition* WeaponDef = FindTestWeaponDefinition();
 
@@ -352,10 +326,6 @@ namespace
 		LOG_INFO(LogBots, "[DebugBot] Giving weapon: {}", WeaponDef->GetPathName());
 		CustomBotInventory::GiveItem(Bot, WeaponDef, 1, 999);
 
-		// Equipar EXACTAMENTE la arma otorgada, NO "la primera arma": el pickaxe
-		// (FortWeaponItemDefinition) se clasifica como Weapon y al ser el primer item
-		// del inventario, EquipFirstWeapon equipaba el pickaxe (current=pickaxe,
-		// "OK" contra el pickaxe) y la sniper jamas se equipaba.
 		UFortItem* GrantedWeapon = CustomBotInventory::FindItemByDefinition(Bot, WeaponDef);
 
 		if (!GrantedWeapon)
@@ -371,7 +341,6 @@ namespace
 			return false;
 		}
 
-		// Verificar que el arma equipada es la correcta (no el EditTool).
 		auto* CurrentWeapon = CustomBotInventory::GetCurrentWeapon(Bot);
 		if (CurrentWeapon)
 		{
@@ -384,12 +353,10 @@ namespace
 			LOG_WARN(LogBots, "[DebugBot] No weapon equipped after EquipFirstWeapon!");
 		}
 
-		// 4) Municion.
 		LOG_INFO(LogBots, "[DebugBot] Step 4: Reloading weapon...");
 		CustomBotCombat::Reload(Bot, 999);
 		LOG_INFO(LogBots, "[DebugBot] Weapon ammo: {}", CustomBotCombat::GetCurrentAmmo(Bot));
 
-		// 5) Escudo.
 		LOG_INFO(LogBots, "[DebugBot] Step 5: Setting shield...");
 		Bot.Pawn->SetMaxShield(100);
 		Bot.Pawn->SetShield(100);
@@ -399,7 +366,6 @@ namespace
 		return true;
 	}
 
-	// Elimina el bot de la partida limpiando estado, listas y actores.
 	static void DebugBotRemove(CustomBot& Bot)
 	{
 		LOG_INFO(LogBots, "[DebugBot] Removing bot");
@@ -407,7 +373,6 @@ namespace
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 
-		// Quitar del listado de jugadores vivos (mirror del spawn).
 		if (GameMode)
 		{
 			auto& Alive = GameMode->GetAlivePlayers();
@@ -422,30 +387,26 @@ namespace
 			}
 		}
 
-		// Decrementar el contador de jugadores restantes (mirror del spawn).
 		if (GameState)
 		{
 			GameState->GetPlayersLeft() = FMath::Clamp(GameState->GetPlayersLeft() - 1, 0, 9999);
 			GameState->OnRep_PlayersLeft();
 		}
 
-		// Estado interno.
 		Bot.DebugTick = nullptr;
 		Bot.MoveRequest = CBT::FMoveRequest{};
 		Bot.bMoveRequestActive = false;
 		Bot.MoveState = CBT::EMovementState::Idle;
 		gDebugBot = DebugBotContext{};
 
-		// Actores: inventario, pawn y controller.
 		if (Bot.WorldInventory)
 			Bot.WorldInventory->K2_DestroyActor();
 
-		Bot.Destroy(); // pawn + controller (K2_DestroyActor y null de punteros)
+		Bot.Destroy();
 
 		LOG_INFO(LogBots, "[DebugBot] Finished");
 	}
 
-	// Aborta la secuencia: log de error y desaparicion limpia poco despues.
 	static void DebugBotError(CustomBot& Bot, const char* Reason)
 	{
 		LOG_ERROR(LogBots, "[DebugBot] ERROR during {}: {}", DebugBotStateName(gDebugBot.Step), Reason);
@@ -453,13 +414,7 @@ namespace
 		gDebugBot.Step = DebugBotState::WaitingToDisappear;
 	}
 
-	// -----------------------------------------------------------------------
-	// Diagnostico: JUGADOR REAL vs BOT CUSTOM (comparativa de estado completo).
-	// Esto permite ver, lado a lado, que tiene el pawn del jugador real (que se
-	// mueve) y que le falta al pawn del bot (que a veces se queda congelado).
-	// -----------------------------------------------------------------------
 
-	// Volcado plano del estado de un pawn (jugador real o bot).
 	struct ProbeSnapshot
 	{
 		FVector Loc{}, Rot{};
@@ -467,8 +422,8 @@ namespace
 		int Mode = -1;
 		float GravScale = -1.f;
 		float MaxWalk = -1.f;
-		int Crouch = -1;      // bIsCrouching
-		int WantsCrouch = -1; // bWantsToCrouch
+		int Crouch = -1;
+		int WantsCrouch = -1;
 		int NetDorm = -1;
 		int Rep = -1;
 		int TearOff = -1;
@@ -477,24 +432,21 @@ namespace
 		int UsesOwnerRel = -1;
 		int NetFreq = -1;
 		int MinNetFreq = -1;
-		int GravGate = -1;   // bSimGravityDisabled
-		int MoveGate = -1;   // bDisableMovementAndTurnInPlace
-		int AllowGate = -1;  // bAllowMovement
+		int GravGate = -1;
+		int MoveGate = -1;
+		int AllowGate = -1;
 		int CMStartTick = -1;
-		int CMIsTicking = -1;  // IsComponentTickEnabled() AHORA (real), no el bit de arranque
-		int CMIsActive = -1;   // IsActive() AHORA
-		int RunPhys = -1;      // bRunPhysicsWithNoController
-		UObject* CMObj = nullptr;   // el CM real (para ptrs)
-		int CharOwner = 0;     // CM->CharacterOwner != 0 ?
-		int UpdComp = 0;       // CM->UpdatedComponent != 0 ?
-		int AckPawn = -1;      // el controller reconoce este pawn (AcknowledgedPawn == Pawn)?
+		int CMIsTicking = -1;
+		int CMIsActive = -1;
+		int RunPhys = -1;
+		UObject* CMObj = nullptr;
+		int CharOwner = 0;
+		int UpdComp = 0;
+		int AckPawn = -1;
 		bool NetConn = false;
 		int Health = -1;
 	};
 
-	// Llama a la UFUNCTION /Script/Engine.ActorComponent.IsComponentTickEnabled sobre
-	// el componente (movement) y devuelve 1=habilitado, 0=deshabilitado, -1=sin fn.
-	// Distingue el caso clave "CM sin tick = fisica muerta pese a escribirle estado".
 	static int DebugBotCMIsTickEnabled(UObject* CM)
 	{
 		static auto Fn = FindObject<UFunction>(L"/Script/Engine.ActorComponent.IsComponentTickEnabled");
@@ -504,9 +456,6 @@ namespace
 		return Params.Buf[0] ? 1 : 0;
 	}
 
-	// Fuerza (idempotente) el tick del componente: SetComponentTickEnabled(true) +
-	// Activate(true) (Activate registra el componente si no lo esta). Devuelve el
-	// estado de IsComponentTickEnabled tras el refuerzo.
 	static int DebugBotCMForceTick(UObject* CM)
 	{
 		static auto FnSet = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
@@ -521,13 +470,12 @@ namespace
 		if (FnActivate && CM)
 		{
 			struct { char Buf[32]; } Params{};
-			Params.Buf[0] = 1; // Activate(bool bReset)
+			Params.Buf[0] = 1;
 			CM->ProcessEvent(FnActivate, &Params);
 		}
 		return DebugBotCMIsTickEnabled(CM);
 	}
 
-	// Como DebugBotCMIsTickEnabled pero para /Script/Engine.ActorComponent.IsActive.
 	static int DebugBotCMIsActive(UObject* CM)
 	{
 		static auto Fn = FindObject<UFunction>(L"/Script/Engine.ActorComponent.IsActive");
@@ -537,11 +485,6 @@ namespace
 		return Params.Buf[0] ? 1 : 0;
 	}
 
-	// "CLAIM-LIVE": un pawn de jugador real se marca "vivo" cuando su controller hace
-	// ServerAcknowledgePossession (replica la confirmacion del cliente). Un bot de
-	// servidor exclusivo nunca la recibe -> Fortnite lo mantiene congelado (mismas
-	// señales: Falling re-aplicado + fisica inmovil). Aqui se fuerza ese handshake
-	// exactamente igual que lo haria un cliente real.
 	static void DebugBotClaimLive(AFortPlayerControllerAthena* Controller, APawn* Pawn, bool bCallUFunction)
 	{
 		if (!Controller || !Pawn || !bCallUFunction)
@@ -555,7 +498,6 @@ namespace
 			LOG_WARN(LogBots, "[DebugBot] CLAIM-LIVE: ServerAcknowledgePossession invoked on bot controller");
 		}
 
-		// Blindaje por si el UFunction no actualizo el campo (siempre que el offset exista).
 		auto AckOff = Controller->GetOffset("AcknowledgedPawn", false);
 		if (AckOff != -1 && Controller->Get<APawn*>(AckOff) != Pawn)
 		{
@@ -594,7 +536,6 @@ namespace
 		S.MoveGate = ReadByte("bDisableMovementAndTurnInPlace");
 		S.AllowGate = ReadByte("bAllowMovement");
 
-		// CharacterMovement del pawn.
 		int CMOff = Pawn->GetOffset(std::string("CharacterMovement"), false);
 
 		if (CMOff != -1)
@@ -633,7 +574,6 @@ namespace
 				S.CMIsActive = DebugBotCMIsActive(CM);
 				S.CMObj = CM;
 
-				// Punteros que el CM necesita para simular (si fallan -> tick no-op).
 				auto OffChar = CM->GetOffset(std::string("CharacterOwner"), false);
 				auto OffUpd = CM->GetOffset(std::string("UpdatedComponent"), false);
 				auto OffPhys = CM->GetOffset(std::string("bRunPhysicsWithNoController"), false);
@@ -643,8 +583,6 @@ namespace
 			}
 		}
 
-		// Reconocimiento de posesion del controller (el juego lo marca al recibir
-		// ServerAcknowledgePossession; los pawns "no-live" lo tienen sin setear).
 		auto* Ctrl = Pawn->GetController();
 		int AckOff = Ctrl ? Ctrl->GetOffset(std::string("AcknowledgedPawn"), false) : -1;
 		if (AckOff != -1)
@@ -655,13 +593,8 @@ namespace
 		return S;
 	}
 
-	// Tick de la secuencia (registrado en CustomBot::DebugTick; corre cada frame
-	// del servidor dentro de CustomBotSpawner::TickAll).
 	static void TickDebugBot(CustomBot& Bot)
 	{
-		// Diagnostico: confirma que la secuencia se invoca (contador, ~1 vez cada
-		// 120 frames, en cualquier estado). Si esto no aparece, el problema es que
-		// DebugTick no se esta llamando (TickAll / Bot.Tick), no la maquina de estados.
 		static unsigned DebugTickCounter = 0;
 		if ((++DebugTickCounter) % 120 == 0)
 			LOG_INFO(LogBots, "[DebugBot] [seq.tick] step={} ready={} valid={} life={}",
@@ -698,8 +631,6 @@ namespace
 				WeaponData ? WeaponData->GetPathName().c_str() : (CurrentWeapon ? "UNKNOWN" : "NONE"),
 				Bot.bMoveRequestActive);
 
-			// Diagnostico: estado real del sistema de movimiento para ver por que
-			// la fisica no se simula (gravedad/velocity no mueven el pawn).
 			if (auto* CM = CustomBotMovement::GetCharacterMovement(Bot))
 			{
 				static auto VelocityOffset = CM->GetOffset("Velocity");
@@ -713,7 +644,6 @@ namespace
 				LOG_INFO(LogBots, "[DebugBot] CM: vel=({:.0f},{:.0f},{:.0f}) acc=({:.0f},{:.0f},{:.0f}) mode={}",
 					V.X, V.Y, V.Z, A.X, A.Y, A.Z, Mode);
 
-				// Estado de tick del componente (por que no se simula):
 				auto CMAddr = __int64(CM);
 				LOG_INFO(LogBots, "[DebugBot] CM state: addr=0x{:x}",
 					CMAddr);
@@ -723,11 +653,9 @@ namespace
 					return *(uint8_t*)(CMAddr + off);
 				};
 				auto ProbeTickFlags = [&](const char* StructField, const char* SubField) -> int {
-					// algunos campos de FTickFunction estan logicamente antes; probe por nombre
 					int off = CM->GetOffset(StructField, false);
 					if (off == -1) off = CM->GetOffset(SubField, false);
 					if (off == -1) return -1;
-					// bCanEverTick/bStartWithTickEnabled son bits consecutivos en FTickFunction
 					return *(uint8_t*)(CMAddr + off);
 				};
 				LOG_INFO(LogBots, "[DebugBot] CM flags: bMovementEnabled={} bComponentShouldTick={} bRegistered={} bNeedUROUpdate={} GravityScaleField={}",
@@ -735,7 +663,6 @@ namespace
 					ProbeByte("bRegistered"), ProbeByte("bNeedUROUpdate"),
 					ProbeTickFlags("PrimaryComponentTick", "bStartWithTickEnabled"));
 
-				// Estado del pawn (actor tick / control).
 				LOG_INFO(LogBots, "[DebugBot] Pawn: dormancy={} bTearOff={} bReplicates={} controllerPawnMatch={} netConnection={}",
 					(int)Bot.Pawn->GetNetDormancy(),
 					(int)Bot.Pawn->IsTearOff(),
@@ -743,10 +670,6 @@ namespace
 					Bot.Controller && Bot.Controller->GetPawn() == Bot.Pawn,
 					Bot.Controller ? (bool)Bot.Controller->GetNetConnection() : false);
 
-				// Gates de gravedad/movimiento de Fortnite AFortPawn: si el pawn se
-				// materializo fuera del flujo de jugador (bus/skydive), el juego deja
-				// la gravedad desactivada (bSimGravityDisabled) y no se mueve. Se
-				// sondearon y, si estan puestos, se desactivan.
 				int GravOff = Bot.Pawn->GetOffset("bSimGravityDisabled", false);
 				int StopOff = Bot.Pawn->GetOffset("bDisableMovementAndTurnInPlace", false);
 				int AllowOff = Bot.Pawn->GetOffset("bAllowMovement", false);
@@ -773,7 +696,6 @@ namespace
 					LOG_INFO(LogBots, "[DebugBot] FORCED bAllowMovement=true");
 				}
 
-				// Gravedad configurada en el movement component.
 				auto GetCmFloat = [&](const char* Field) -> float {
 					int Off = CM->GetOffset(Field, false);
 					if (Off == -1) return -99999.0f;
@@ -787,13 +709,10 @@ namespace
 				LOG_ERROR(LogBots, "[DebugBot] ERROR: CharacterMovement is NULL on bot pawn!");
 			}
 
-			// Configurados en el comando; arranca el avance real.
 			gDebugBot.Step = DebugBotState::MovingForward;
 
 			LOG_INFO(LogBots, "[DebugBot] -> MovingForward");
 
-			// EXPERIMENTO: impulso nativo (LaunchCharacter Z puro) para ver si la
-			// fisica del pawn responde. Si sube y cae: la fisica funciona.
 			LOG_INFO(LogBots, "[DebugBot] PHYSICS-PROBE: LaunchCharacter impulse Z=300");
 			CustomBotMovement::Launch(Bot, FVector(0, 0, 300), false, false);
 
@@ -802,18 +721,12 @@ namespace
 			FVector Dest{ Start.X + Fwd.X * 250.0f, Start.Y + Fwd.Y * 250.0f, Start.Z };
 			LOG_INFO(LogBots, "[DebugBot] MoveTo dest=({:.0f},{:.0f},{:.0f}) radius=120", Dest.X, Dest.Y, Dest.Z);
 			CustomBotMovement::MoveTo(Bot, Dest, 120.0f);
-			gDebugBot.NextActionTime = T + 8.0; // watchdog si no llega
+			gDebugBot.NextActionTime = T + 8.0;
 			break;
 		}
 
 		case DebugBotState::MovingForward:
 		{
-			// EXPERIMENTO "BOT = JUGADOR REAL": clonar el arranque de un pawn vivo.
-			// A) Handshake de live: al entrar, forzar el ServerAcknowledgePossession
-			//    que envía un cliente real (el servidor exclusivo del bot nunca lo hace).
-			// B) Mantener el CM del bot idéntico al de un pawn vivo: tick habilitado,
-			//    MovementMode Walking y velocidades máximas, reaplicado cada frame si
-			//    el watchdog del juego lo revierte (los reverts se loguean).
 			auto* CME = CustomBotMovement::GetCharacterMovement(Bot);
 
 			if (!gDebugBot.bMoveExperimentDone)
@@ -822,13 +735,6 @@ namespace
 				DebugBotClaimLive(Bot.Controller, Bot.Pawn, true);
 			}
 
-			// EXPERIMENTO "RUNPHYS": probar la rama del CMC que simula fisica en servidor
-			// para pawns sin controller. Requisito: bIsABot=false + soltar el pose +
-			// bit bRunPhysicsWithNoController=true (la prueba de UnPossess previa no
-			// lo activo -> la rama quedo inerte). Si fisica integra la Velocity/
-			// Acceleration escritas por MoveTo, el CMC simula para el bot.
-			// RESUELTO en research 08: ahora se aplica SIEMPRE en SpawnCustomBot
-			// (CustomBotMovement::EnableServerSimulation), ya en el spawn de todo bot.
 
 			if (CME)
 			{
@@ -852,7 +758,6 @@ namespace
 				SetFloatIfPresent("MaxFlySpeed", CustomBotMovement::WalkSpeed);
 				SetFloatIfPresent("MaxAcceleration", 2048.0f);
 
-				// Refuerzo de Walking si el juego relega el pawn no-live a Falling.
 				int Mode = -1;
 				int ModeOff = CME->GetOffset("MovementMode", false);
 				if (ModeOff != -1) Mode = *(int*)(CMEAddr + ModeOff);
@@ -884,15 +789,13 @@ if (T >= gDebugBot.PauseUntil)
 			{
 				gDebugBot.Step = DebugBotState::BuildingRamp;
 				LOG_INFO(LogBots, "[DebugBot] -> BuildingRamp");
-				gDebugBot.NextActionTime = T + 3.0; // pausa 3s antes de construir
+				gDebugBot.NextActionTime = T + 3.0;
 				break;
 			}
 				break;
 			}
 			else
 			{
-				// Log de progreso cada 2 segundos, incluyendo Velocity real y
-				// MovementMode para seguir el probe de fisica.
 				static double LastMoveLog = 0;
 				auto* GameStateDBG = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 				if (T - LastMoveLog >= 2.0)
@@ -945,9 +848,6 @@ if (GameStateDBG)
 
 				if (TotalMat < 10)
 				{
-					// Los materiales otorgados al spawn pueden volatilizarse si la
-					// sesion hace una transicion de fase/reset del inventario; se
-					// re-otorgan justo antes de construir para lidiar con ello.
 					LOG_WARN(LogBots, "[DebugBot] Refreshing materials (was {})...", TotalMat);
 					CustomBotResources::GiveResource(Bot, EFortResourceType::Wood, 1000);
 					CustomBotResources::GiveResource(Bot, EFortResourceType::Stone, 1000);
@@ -967,16 +867,10 @@ if (GameStateDBG)
 				auto GS_Build = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 				auto SSS_Build = GS_Build ? GS_Build->GetStructuralSupportSystem() : nullptr;
 
-				// Rampa SIEMPRE mirando hacia el bot (los StairW suben hacia +X local):
-				// la DERECHA de la rampa queda enfrente nuestra (perpendicular al
-				// avance del bot, NO 180 grados).
 				float FacingCardinal = CustomBotBuilding::SnapYawToCardinal(Bot.Pawn->GetActorRotation().Yaw);
 				FRotator RampRot = Bot.Pawn->GetActorRotation();
 				RampRot.Yaw = CustomBotBuilding::SnapYawToCardinal(FacingCardinal + 90.0f);
 
-				// Posicion: la celda del grid inmediatamente adelante del bot, con
-				// el Z del TERRENO (el Z de la celda del grid es una referencia, no
-				// la superficie donde el bot camina).
 				FVector RampLoc = Start;
 				if (SSS_Build && !CustomBotBuilding::CellCenterAhead(SSS_Build, Start, FacingCardinal, 1, RampLoc))
 				{
@@ -1010,10 +904,9 @@ if (GameStateDBG)
 						Bot.Pawn->GetActorLocation().X, Bot.Pawn->GetActorLocation().Y, Bot.Pawn->GetActorLocation().Z);
 				}
 
-				// Pausa de 3s antes de empezar a caminar hacia la rampa (pacing de la demo).
-				gDebugBot.RampAttempts = 0; // reset counter on success
+				gDebugBot.RampAttempts = 0;
 				gDebugBot.Step = DebugBotState::WalkToRampStart;
-				gDebugBot.PauseUntil = -1; // WalkToRampStart dispara la pausa
+				gDebugBot.PauseUntil = -1;
 				gDebugBot.bClimbStarted = false;
 				LOG_INFO(LogBots, "[DebugBot] -> WalkToRampStart (3s pause)");
 			}
@@ -1022,7 +915,6 @@ if (GameStateDBG)
 
 		case DebugBotState::WalkToRampStart:
 		{
-			// Pausa de 3s tras construir la rampa antes de caminar a su inicio.
 			if (gDebugBot.PauseUntil < 0)
 			{
 				gDebugBot.PauseUntil = T + 3.0;
@@ -1034,13 +926,11 @@ if (GameStateDBG)
 			{
 				gDebugBot.bClimbStarted = true;
 
-				// Andar hacia el INICIO de la rampa: la ENTRADA (borde bajo) esta en
-				// el punto medio entre el bot y el centro de la celda de la rampa.
 				FVector StartPos = Bot.Pawn->GetActorLocation();
 				FVector RampPos = gDebugBot.RampActor ? gDebugBot.RampActor->GetActorLocation() : Bot.Pawn->GetActorLocation();
 				FVector Entrance{ (StartPos.X + RampPos.X) * 0.5f, (StartPos.Y + RampPos.Y) * 0.5f, StartPos.Z };
 				CustomBotMovement::MoveTo(Bot, Entrance, 150.0f);
-				gDebugBot.NextActionTime = T + 9.0; // watchdog
+				gDebugBot.NextActionTime = T + 9.0;
 				LOG_INFO(LogBots, "[DebugBot] walking to ramp start/entrance ({:.0f},{:.0f},{:.0f})", Entrance.X, Entrance.Y, Entrance.Z);
 				break;
 			}
@@ -1059,15 +949,13 @@ if (GameStateDBG)
 
 		case DebugBotState::WalkToRampMiddle:
 		{
-			// Ir al MEDIO de la rampa: andar hacia delante hacia el centro de la
-			// celda y el juego sube al bot por la pendiente (sin precomputar Z).
 			if (!gDebugBot.bClimbStarted)
 			{
 				gDebugBot.bClimbStarted = true;
 				FVector RampPos = gDebugBot.RampActor ? gDebugBot.RampActor->GetActorLocation() : Bot.Pawn->GetActorLocation();
 				FVector Middle{ RampPos.X, RampPos.Y, Bot.Pawn->GetActorLocation().Z };
 				CustomBotMovement::MoveTo(Bot, Middle, 150.0f);
-				gDebugBot.NextActionTime = T + 9.0; // watchdog
+				gDebugBot.NextActionTime = T + 9.0;
 				LOG_INFO(LogBots, "[DebugBot] walking to ramp middle ({:.0f},{:.0f},{:.0f})", Middle.X, Middle.Y, Middle.Z);
 				break;
 			}
@@ -1081,7 +969,7 @@ if (GameStateDBG)
 				gDebugBot.bClimbStarted = false;
 				LOG_INFO(LogBots, "[DebugBot] -> Jumping (on ramp middle)");
 				CustomBotMovement::Jump(Bot);
-				gDebugBot.NextActionTime = T + 1.0; // 1s para poner el suelo debajo
+				gDebugBot.NextActionTime = T + 1.0;
 			}
 			break;
 		}
@@ -1100,8 +988,6 @@ if (GameStateDBG)
 		{
 			LOG_INFO(LogBots, "[DebugBot] [BuildingFloor] pos=({:.0f},{:.0f},{:.0f})", Pos.X, Pos.Y, Pos.Z);
 
-			// Poner un SUELO justo debajo del bot (misma celda X/Y del grid, a ras de
-			// suelo = Z de la base de la rampa), para luego destruirlo con el pico.
 			FVector FloorLoc = FVector{ Pos.X, Pos.Y, (gDebugBot.RampActor ? gDebugBot.RampActor->GetActorLocation().Z : Pos.Z - 16.0f) };
 			auto GS_Floor = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 			auto SSS_Floor = GS_Floor ? GS_Floor->GetStructuralSupportSystem() : nullptr;
@@ -1141,14 +1027,13 @@ if (GameStateDBG)
 					break;
 				}
 
-				// Acercarse a la rampa/floor para golpearlas.
 				if (gDebugBot.RampActor)
 				{
 					FVector RampPos = gDebugBot.RampActor->GetActorLocation();
 					CustomBotMovement::MoveTo(Bot, FVector{ RampPos.X, RampPos.Y, RampPos.Z + 20.0f }, 140.0f);
 				}
 
-				gDebugBot.NextActionTime = T + 3.0; // watchdog de acercamiento
+				gDebugBot.NextActionTime = T + 3.0;
 			}
 			break;
 		}
@@ -1163,7 +1048,6 @@ if (GameStateDBG)
 					break;
 				}
 
-				// Destruir la RAMPA con el pico.
 				float BeforeR = CustomBotDestruction::GetStructureHealth(gDebugBot.RampActor);
 				bool bDestroyedR = CustomBotDestruction::DestroyTarget(gDebugBot.RampActor);
 				float AfterR = CustomBotDestruction::GetStructureHealth(gDebugBot.RampActor);
@@ -1177,7 +1061,6 @@ if (GameStateDBG)
 					LOG_INFO(LogBots, "[DebugBot] Ramp destroyed: {:.0f} -> {:.0f}", BeforeR, AfterR);
 				}
 
-				// Destruir el SUELO con el pico.
 				if (gDebugBot.FloorActor && !CustomBotDestruction::IsStructureDestroyed(gDebugBot.FloorActor))
 				{
 					float BeforeF = CustomBotDestruction::GetStructureHealth(gDebugBot.FloorActor);
@@ -1201,7 +1084,7 @@ if (GameStateDBG)
 				}
 
 				gDebugBot.Step = DebugBotState::EquippingWeapon;
-				gDebugBot.PauseUntil = -1; // EquippingWeapon arranca el re-equip
+				gDebugBot.PauseUntil = -1;
 				LOG_INFO(LogBots, "[DebugBot] -> EquippingWeapon");
 			}
 			break;
@@ -1209,8 +1092,6 @@ if (GameStateDBG)
 
 		case DebugBotState::EquippingWeapon:
 		{
-			// Re-equipar el arma tras destruir las estructuras con el pico y
-			// pausar 3s antes de empezar a disparar.
 			if (gDebugBot.PauseUntil < 0)
 			{
 				gDebugBot.PauseUntil = T + 3.0;
@@ -1238,7 +1119,7 @@ if (GameStateDBG)
 				CustomBotCombat::AimAt(Bot, FVector{ Start.X + Fwd.X * 1500.0f, Start.Y + Fwd.Y * 1500.0f, Start.Z });
 
 				LOG_INFO(LogBots, "[DebugBot] Shooting");
-				gDebugBot.NextActionTime = T + 0.3; // primer disparo
+				gDebugBot.NextActionTime = T + 0.3;
 			}
 			break;
 		}
@@ -1299,7 +1180,6 @@ if (GameStateDBG)
 	}
 }
 
-// Inicia la secuencia de prueba "debugbot" (un solo debugbot activo a la vez).
 void CustomBotDebug::StartDebugBot(AFortPlayerControllerAthena* ContextPlayer)
 {
 	if (gDebugBot.Step != DebugBotState::None && gDebugBot.Step != DebugBotState::Finished)
@@ -1309,7 +1189,6 @@ void CustomBotDebug::StartDebugBot(AFortPlayerControllerAthena* ContextPlayer)
 		return;
 	}
 
-	// Buscar el primer jugador valido ANTES de crear el bot.
 	AFortPlayerControllerAthena* TargetPlayer = FindFirstValidPlayer();
 
 	if (!TargetPlayer || !TargetPlayer->GetPawn())
@@ -1326,9 +1205,6 @@ void CustomBotDebug::StartDebugBot(AFortPlayerControllerAthena* ContextPlayer)
 	FRotator PlayerRot = TargetPawn->GetActorRotation();
 	FVector Fwd = TargetPawn->GetActorForwardVector();
 
-	// Aparicion "como un jugador real": mismo suelo (Z) que el jugador, separado
-	// solo en horizontal. Antes se sumaba +50 en Z y el bot quedaba flotando 50cm
-	// (modo Falling congelado). Este es el unico teletransporte del debugbot.
 	FVector BotSpawn = PlayerLoc + Fwd * 250.0f;
 
 	FTransform SpawnTransform{};
@@ -1347,7 +1223,6 @@ void CustomBotDebug::StartDebugBot(AFortPlayerControllerAthena* ContextPlayer)
 	DebugBot->Pawn->TeleportTo(BotSpawn, PlayerRot);
 	LOG_INFO(LogBots, "[DebugBot] Teleported to player ({}, {}, {})", BotSpawn.X, BotSpawn.Y, BotSpawn.Z);
 
-	// Arma, municion, materiales y escudo.
 	if (!DebugBotGrantLoadout(*DebugBot))
 	{
 		DebugBotRemove(*DebugBot);
@@ -1358,13 +1233,11 @@ void CustomBotDebug::StartDebugBot(AFortPlayerControllerAthena* ContextPlayer)
 	LOG_INFO(LogBots, "[DebugBot] Spawned");
 	SendBotMessage(ContextPlayer, L"[DebugBot] Sequence started!");
 
-	// Registrar la secuencia en el bot (Tick la ejecutara cada frame).
 	gDebugBot = DebugBotContext{};
 	gDebugBot.Step = DebugBotState::Spawned;
 	DebugBot->DebugTick = &TickDebugBot;
 }
 
-// Devuelve true si Arguments[0] es un comando de CustomBot y se ejecuto.
 bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController, const std::vector<std::string>& Arguments, size_t NumArgs)
 {
 	if (!PlayerController || Arguments.empty())
@@ -1396,7 +1269,6 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 		return true;
 	}
 
-	// El resto de comandos requieren un bot existente.
 	CustomBot* ActiveBot = GetFirstValidBot();
 
 	if (!ActiveBot)
@@ -1554,7 +1426,6 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 			return true;
 		}
 
-		// Posicionar la estructura justo al frente del bot.
 		FVector Forward = Bot.Pawn->GetActorForwardVector();
 		FVector BotLocation = Bot.Pawn->GetActorLocation();
 
@@ -1667,7 +1538,6 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 			return true;
 		}
 
-		// Construir N rampas hacia arriba.
 		const float StepHoriz = 300.0f;
 		const float StepZ = 96.0f;
 
@@ -1704,8 +1574,6 @@ bool CustomBotDebug::HandleCommand(AFortPlayerControllerAthena* PlayerController
 	return false;
 }
 
-// SEH-safe bot tick: TickBotSafeSEH lives in CustomBotSEH.cpp (pure C TU).
-// BotTickCallbackImpl is the C++ callback; TickCustomBotSafe is the public API.
 
 extern "C" void TickBotSafeSEH(void (*cb)(void*), void* data);
 
@@ -1715,18 +1583,9 @@ static void BotTickCallbackImpl(void* data)
 	if (!Bot || !Bot->IsValidActor() || !Bot->IsReady())
 		return;
 
-	// Cadaver en espera de que el engine lo reclame (muerte procesada con
-	// Health<=0 pero pawn aun vivo): no tick de mov/IA/CMC para no arrastrar al
-	// pawn en medio de la animacion de muerte. TickAll limpia cuando el pawn
-	// quede invalido.
 	if (Bot->GetLifeState() == CBT::ELifeState::Dead)
 		return;
 
-	// Aislamiento del leak (A/B en vivo): el slider de la GUI cambia
-	// gBotTickMode (0=full | 1=sin IA | 2=sin IA/mov | 3=sin IA/mov/CMC |
-	// 4=existencia | 5=CMC init-only sin writes | 6=idem sin CLAIM-LIVE).
-	// Cada cambio se loguea para correlar la pendiente de committed/WS de
-	// memdiag con la fase.
 	static int LastMode = -1;
 	int Mode = gBotTickMode;
 	if (Mode != LastMode)
@@ -1746,13 +1605,8 @@ static void BotTickCallbackImpl(void* data)
 		{
 			CustomBotMovement::UpdateMovement(*Bot);
 
-			// Desatascado fisico (retroceder 2m + carrerilla 1m + salto + romper
-			// con pico) cuando el bot lleva >umbral bloqueado en linea recta.
-			// Corre DESPUES de UpdateMovement: solo re-apunta el move si lo necesita.
 			CustomBotBreak::TickUnstuck(*Bot);
 
-			// Skin diferida: aplicar como maximo PendingSkinBudget skins por TickAll
-			// (se reinicia en CustomBotSpawner::TickAll). Todo esto corre bajo SEH.
 			if (Bot->bSkinPending && CustomBotSpawner::PendingSkinBudget > 0)
 			{
 				--CustomBotSpawner::PendingSkinBudget;
@@ -1767,11 +1621,8 @@ static void BotTickCallbackImpl(void* data)
 	}
 
 	if (Mode == 4)
-		return; // existencia pura: el pawn sigue su tick nativo, nosotros no hacemos nada
+		return;
 
-	// Modos 5/6: SOLO la inicializacion una vez (claim + activar CMC) y ningun
-	// trabajo por tick despues. Aisla "el estado de pawn live" de "nuestros
-	// writes por tick" (5) y el CLAIM-LIVE del CMC (6).
 	bool bClaim = (Mode == 5);
 	CustomBotMovement::EnsureCMCActive(*Bot, false, bClaim);
 	Bot->Tick();

@@ -10,41 +10,24 @@
 #include <chrono>
 #include <utility>
 
-// CustomBot - Movimiento.
-//
-// Mueve al pawn del bot como un jugador usando el sistema de movimiento nativo
-// del Character (CharacterMovement component -> Velocity). NO usa teletransporte
-// como movimiento normal.
-//
-// Nota (research 06): no hay wrapper AddMovementInput en el repo; el pawn hereda
-// el CharacterMovement del Character. En el lado servidor, manipular la Velocity
-// del CharacterMovement produce movimiento real de jugador.
 
 namespace CustomBotMovement
 {
-	// Constantes de movimiento (valores razonables de jugador).
 	inline constexpr float WalkSpeed = 600.0f;
 	inline constexpr float SprintSpeed = 900.0f;
 	inline constexpr float JumpStrength = 500.0f;
 
 	constexpr float RAD_TO_DEG = 180.0f / 3.14159265358979323846f;
 
-	// Rota el pawn (y su control) hacia una rotacion concreta. (definida debajo;
-	// LookAt la usa antes de su definicion).
 	static void SetRotation(CustomBot& Bot, const FRotator& Rotation);
 
-	// Limpia la ruta navmesh cacheada del bot (definida abajo; MoveTo la usa
-	// antes de su definicion).
 	static void ClearPath(CustomBot& Bot);
 
-	// Devuelve la direccion normalizada desde From hacia To.
-	// Si From==To devuelve zero. La normalizacion se hace a mano porque FVector
-	// del repo no tiene .Size()/.Normalize() (solo SizeSquared y dot).
 	static FVector DirectionTo(const FVector& From, const FVector& To)
 	{
 		FVector Delta = To - From;
 
-		float LenSq = Delta | Delta; // dot = cuadratico de la longitud
+		float LenSq = Delta | Delta;
 
 		if (LenSq <= 0.0001f)
 			return FVector{};
@@ -53,7 +36,6 @@ namespace CustomBotMovement
 		return Delta * InvLen;
 	}
 
-	// Distancia 2D (horizontal) entre dos puntos.
 	static float HorizontalDistance(const FVector& A, const FVector& B)
 	{
 		float DX = B.X - A.X;
@@ -61,15 +43,12 @@ namespace CustomBotMovement
 		return FMath::Sqrt(DX * DX + DY * DY);
 	}
 
-	// Distancia 3D entre dos puntos.
 	static float Distance(const FVector& A, const FVector& B)
 	{
 		FVector Delta = B - A;
 		return FMath::Sqrt(Delta | Delta);
 	}
 
-	// Construye un FRotator (Yaw/Pitch) que "apunta" en la direccion Dir.
-	// No existe Conv_VectorToRotator en el repo; se compone a mano.
 	static FRotator RotationFromDirection(const FVector& Dir)
 	{
 		FRotator Rot{};
@@ -81,7 +60,6 @@ namespace CustomBotMovement
 		return Rot;
 	}
 
-	// Accede al CharacterMovement del pawn y devuelve puntero a su Velocity.
 	static UObject* GetCharacterMovement(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -91,13 +69,6 @@ namespace CustomBotMovement
 		return Bot.Pawn->Get(CharacterMovementOffset);
 	}
 
-	// Restaura el puntero PlayerState del pawn (lo borra UnPossess). Sin el
-	// puntero, InitializeCharacterParts falla y el sistema nativo de cosmeticos
-	// re-intenta cargar parts cada tick (leak ~100MB/s + UObjects creciendo,
-	// medido 19:12 con bots=5). Se llama SOLO al spawn del bot
-	// (EnableServerSimulation + primer tick de EnsureCMCActive). NO cada 30
-	// ticks: la re-escritura periodica re-triggeraba OnRep_PlayerState ->
-	// InitializeCharacterParts -> mesh reload.
 	static void RestorePawnPlayerState(CustomBot& Bot)
 	{
 		if (!Bot.Pawn || !Bot.PlayerState)
@@ -148,20 +119,6 @@ namespace CustomBotMovement
 		return bBitOK;
 	}
 
-	// Forza el tick del CMC y re-aplica valores que el engine revierte.
-	// Llamar CADA TICK desde TickAll para cada bot activo.
-	// (basado en lo que hace DebugBot en MovingForward que funciona correctamente:
-	//  CLAIM-LIVE + velocidades + MovementMode Walking, reaplicados cada frame)
-	//
-	// OPTIMIZACION: las operaciones "una sola vez" (ProcessEvent de
-	// SetComponentTickEnabled/Activate, CLAIM-LIVE) se ejecutan solo en el
-	// primer tick (bCMCInitialized). Antes se ejecutaban CADA tick x CADA bot
-	// (15 bots x 2 ProcessEvent x 60 tps = 1800 ProcessEvent/s), lo que
-	// re-triggeraba la re-evaluacion nativa de character parts en el pawn
-	// -> FortCustomizationAssetLoader re-cargaba meshes/skins continuamente.
-	// RestorePawnPlayerState se throttlea a cada 30 ticks (~0.5s) por la
-	// misma razon: el write directo al pointer PlayerState puede triggerar
-	// OnRep_PlayerState -> InitializeCharacterParts -> mesh reload.
 	static void EnsureCMCActive(CustomBot& Bot, bool bPerTickWork = true, bool bDoClaim = true)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -173,17 +130,10 @@ namespace CustomBotMovement
 
 		__int64 CMEAddr = __int64(CME);
 
-		// --- Tick 1: inicializacion una sola vez por bot ---
 		if (!Bot.bCMCInitialized)
 		{
-			// Mantener el PlayerState en el pawn una vez (skin necesita el puntero).
 			RestorePawnPlayerState(Bot);
 
-			// CLAIM-LIVE una sola vez: replica ServerAcknowledgePossession.
-			// Aislamiento del leak: bDoClaim=false (modo 6) omite el handshake
-			// (EnableServerSimulation documenta que no es necesario para la
-			// fisica) para ver si el claim es el que activa el tick nativo con
-			// leak de arena (~44MB/s con 5 bots).
 			if (bDoClaim && !Bot.bClaimLiveDone && Bot.Controller)
 			{
 				static auto AckFn = FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession");
@@ -202,7 +152,6 @@ namespace CustomBotMovement
 				LOG_WARN(LogBots, "[CustomBot] CLAIM-LIVE: ServerAcknowledgePossession invoked for bot");
 			}
 
-			// Forzar tick del CMC habilitado + Activate una sola vez.
 			static auto FnSetTick = FindObject<UFunction>(L"/Script/Engine.ActorComponent.SetComponentTickEnabled");
 			static auto FnActivate = FindObject<UFunction>(L"/Script/Engine.ActorComponent.Activate");
 			if (FnSetTick) { struct { char Buf[32]; } P{}; P.Buf[0] = 1; CME->ProcessEvent(FnSetTick, &P); }
@@ -212,38 +161,10 @@ namespace CustomBotMovement
 			LOG_INFO(LogBots, "[CustomBot] CMC initialized (one-time setup done)");
 		}
 
-// --- DESHABILITADO: RestorePawnPlayerState se llama SOLO al spawn ---
-		// El restore periodico cada 30 ticks re-triggeraba OnRep_PlayerState ->
-		// InitializeCharacterParts -> mesh reload continuo.
-		/*
-		{
-			Bot.RestorePSCounter++;
-			if (Bot.RestorePSCounter >= 30)
-			{
-				RestorePawnPlayerState(Bot);
-				Bot.RestorePSCounter = 0;
-			}
-		}
-		*/
 
-		// Aislamiento del leak (modo 5/6): con bPerTickWork=false se hace SOLO
-		// la inicializacion una vez (claim + activar CMC) y no se toca nada mas
-		// por tick. Si el leak (~44MB/s) sigue con los writes por tick ausentes,
-		// el driver es de ESTADO (el pawn live tickea nativo y fuga), no nuestros
-		// writes.
 		if (!bPerTickWork)
 			return;
 
-		// --- Cada tick: re-aplicar valores que el engine revierte ---
-		// LEAK RAIZ (fix): los offsets se cachean en static la primera vez.
-		// Antes se llamaba GetOffset() cada tick x cada bot, y GetOffset ->
-		// GetProperty escaneaba toda la cadena de propiedades llamando
-		// FName::ToString() por cada propiedad. ToString() filtraba un FString
-		// del engine por llamada (ver UnrealNames.cpp) -> ~45MB/s con 5 bots.
-		// Ahora el bloque por tick no escanea nada.
-		// Re-aplicar velocidades que el engine revierte. MaxWalkSpeed se sube a la
-		// velocidad de sprint (900): el CMC usa GetMaxSpeed() como tope al integrar,
-		// y sin esto las peticiones MoveTo sprint (900) quedaban capadas a 600.
 		{
 			static int MaxWalkSpeedOff = CME->GetOffset("MaxWalkSpeed", false);
 			static int MaxWalkSpeedCrouchedOff = CME->GetOffset("MaxWalkSpeedCrouched", false);
@@ -255,11 +176,6 @@ namespace CustomBotMovement
 			if (MaxAccelerationOff != -1) *(float*)(CMEAddr + MaxAccelerationOff) = 2048.0f;
 		}
 
-		// Refuerzo de Walking si el juego relega el pawn no-live a Falling
-		// (misma tecnica que el DebugBot). Se salta mientras el bot es pasajero
-		// del bus (el avion lo monta en Skydive/Falling; no tocar el modo) y
-		// mientras caiga del bus (bInAirPhase): forzar Walking en el aire era lo
-		// que dejaba a los bots CONGELADOS flotando a ~80km sin gravedad.
 		bool bInAircraft = Bot.PlayerState && Bot.PlayerState->IsInAircraft();
 
 		if (!bInAircraft && !Bot.bInAirPhase)
@@ -272,11 +188,6 @@ namespace CustomBotMovement
 				if (GroundOff != -1) *(int*)(CMEAddr + GroundOff) = 1;
 			}
 
-			// GRAVEDAD: el skydive/caida desde el bus deja el GravityZ/GravityScale
-			// del CMC reducido (gravedad de gliding), y como el bot no pasa por el
-			// flujo nativo de aterrizaje de un jugador, nadie lo restaura. Cuando el
-			// bot ya esta en el suelo (no en el aire) se re-aplica la gravedad de
-			// jugador capturada al spawn.
 			if (Bot.GroundGravityZ != 0.0f || Bot.GroundGravityScale != 0.0f)
 			{
 				static int GravZOff = CME->GetOffset("GravityZ", false);
@@ -288,7 +199,6 @@ namespace CustomBotMovement
 			}
 		}
 
-		// Desbloquear gates que Fortnite pone en pawns sin cliente
 		{
 			static int bSimGravityDisabledOff = Bot.Pawn->GetOffset("bSimGravityDisabled", false);
 			static int bDisableMovementOff = Bot.Pawn->GetOffset("bDisableMovementAndTurnInPlace", false);
@@ -298,10 +208,6 @@ namespace CustomBotMovement
 			if (bAllowMovementOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bAllowMovementOff) = 1;
 		}
 
-		// Los pawns simulados en servidor se replican a los clientes segun su
-		// NetUpdateFrequency. Con frecuencia baja el cliente ve a los bots
-		// avanzar a saltos y "resincronizar hacia atras" (~cada 0.1s). Subirla a
-		// ~50Hz hace que el paso se vea fluido (updates pequenos, sin bloqueo).
 		{
 			auto& NetFreq = Bot.Pawn->GetNetUpdateFrequency();
 			if (NetFreq < 50.0f)
@@ -311,11 +217,6 @@ namespace CustomBotMovement
 				MinNetFreq = 50.0f;
 		}
 
-		// Probe de smoothness (diagnostico del "resync atras"): cada 60 ticks
-		// (~2s) con MoveTo activo se loguea el desplazamiento horizontal por
-		// ventana. Si es ~velocidad*2s el servidor genera movimiento continuo y
-		// el tiron es de replicacion/cliente; si es erratico (0, 3000...), el
-		// movimiento del servidor salta y el fallo es de simulacion.
 		if (Bot.bMoveRequestActive)
 		{
 			Bot.ProbeTicks++;
@@ -338,7 +239,6 @@ namespace CustomBotMovement
 		}
 	}
 
-	// Mira hacia el punto objetivo (rota el control del pawn hacia alla).
 	static void LookAt(CustomBot& Bot, const FVector& TargetLocation)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -346,17 +246,12 @@ namespace CustomBotMovement
 
 		FVector Dir = DirectionTo(Bot.Pawn->GetActorLocation(), TargetLocation);
 
-		if (Dir | Dir) // distinto de zero
+		if (Dir | Dir)
 		{
 			SetRotation(Bot, RotationFromDirection(Dir));
 		}
 	}
 
-	// Aplica la visualizacion DIFERIDA de la skin (mesh rebuild + replicacion).
-	// El spawn deja el bot con bSkinPending=true; el tick del servidor lo aplica
-	// con un presupuesto de ~2 skins por TickAll (CustomBotSpawner::PendingSkinBudget)
-	// para no saturar el async loader en rafagas de spawns. Se invoca DENTRO del
-	// SEH de TickCustomBotSafe, asi un fallo de cosmetico no tira el servidor.
 	static void ApplyPendingSkin(CustomBot& Bot)
 	{
 		if (!Bot.bSkinPending || !Bot.Pawn || !Bot.PlayerState)
@@ -381,32 +276,15 @@ namespace CustomBotMovement
 			(int)std::chrono::duration_cast<std::chrono::milliseconds>(T1 - T0).count());
 	}
 
-	// Rota el pawn (y su control) hacia la direccion de movimiento.
-	// Rota la CAMARA nativamente, NUNCA con TeleportTo: TeleportTo marca
-	// bJustTeleported en el CharacterMovement (parte la fisica simulada del frame)
-	// y en el cliente cada replicacion se ve como un snap (saltos/botecitos).
-	// La rotacion nativa es la que leen las weapon abilities (GetBaseAimRotation)
-	// y la que replica el CMC en cada move.
-	// Funciones verificadas en Dump/ObjectsDump.txt:
-	//   /Script/Engine.Controller.SetControlRotation
-	//   /Script/Engine.SceneComponent.K2_SetWorldRotation
 	static void SetRotation(CustomBot& Bot, const FRotator& Rotation)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
 			return;
 
-		// Limitar la mirada vertical a +-45 grados salvo cuando el bot este
-		// disparando con un arma (o agitando el pico): en combate/melee necesita
-		// apuntar al enemigo/estructura aunque este en alto, pero en marcha
-		// normal no quiere mirar al cielo mientras camina.
-		// NOTA: si bFiringWeapon se quedara clavado en true, este bypass dejaria
-		// de aplicar y el bot miraria al cielo al andar; CustomBot::Tick realiza
-		// un auto-reset del flag (kFiringWeaponTimeout) para que nunca pase.
 		FRotator Final = Rotation;
 		if (!Bot.bFiringWeapon)
 			Final.Pitch = FMath::Clamp(Final.Pitch, -20.0f, 20.0f);
 
-		// 1. Camara del controlador (SetControlRotation) -> direccion de disparo.
 		if (Bot.Controller)
 		{
 			static auto SetControlRotationFn = FindObject<UFunction>(L"/Script/Engine.Controller.SetControlRotation");
@@ -425,7 +303,6 @@ namespace CustomBotMovement
 			}
 		}
 
-		// 2. Pawn (RootComponent = capsule) con rotacion nativa no-teleport.
 		static auto RootComponentOffset = Bot.Pawn->GetOffset("RootComponent");
 		auto Root = (UObject*)Bot.Pawn->Get(RootComponentOffset);
 
@@ -444,7 +321,7 @@ namespace CustomBotMovement
 
 			*(FRotator*)(__int64(Params) + NewRotationOffset) = Final;
 			*(bool*)(__int64(Params) + bSweepOffset) = false;
-			*(bool*)(__int64(Params) + bTeleportOffset) = false; // NO teleport: la fisica sigue intacta
+			*(bool*)(__int64(Params) + bTeleportOffset) = false;
 
 			Root->ProcessEvent(K2_SetWorldRotationFn, Params);
 
@@ -452,7 +329,6 @@ namespace CustomBotMovement
 		}
 	}
 
-	// Rota el pawn al yaw dado (mantiene pitch/roll actuales).
 	static void SetYaw(CustomBot& Bot, float YawDegrees)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -463,8 +339,6 @@ namespace CustomBotMovement
 		SetRotation(Bot, Current);
 	}
 
-	// Detiene el movimiento poniendo la velocidad del CharacterMovement a cero
-	// y limpiando la peticion de movimiento activa.
 	static void StopMovement(CustomBot& Bot)
 	{
 		auto CharacterMovement = GetCharacterMovement(Bot);
@@ -478,17 +352,11 @@ namespace CustomBotMovement
 		Bot.bMoveRequestActive = false;
 		Bot.MoveState = CBT::EMovementState::Idle;
 
-		// Sin move activo no puede haber atasco por progreso: se resetea el
-		// detector (CustomBotBreak) para que la proxima peticion vuelva a medir.
 		Bot.StuckWindowTime = -1.0f;
 		Bot.StuckWindowPos = FVector{};
 		Bot.StuckTime = 0.0f;
 	}
 
-	// Aplica la velocidad horizontal hacia Destination una sola vez.
-	// (rota al pawn hacia la direccion de movimiento si bRotateTowardsMove).
-	// REGLA: NUNCA teletransportar bots; el movimiento DEBE salir de la fisica
-	// simulada del pawn (Velocity/Acceleration del CharacterMovement).
 	static void ApplyMoveVelocity(CustomBot& Bot, const FVector& Destination, float Speed, bool bRotateTowardsMove)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -517,25 +385,14 @@ namespace CustomBotMovement
 		static auto AccelerationOffset = CharacterMovement->GetOffset("Acceleration");
 		FVector& CharacterVelocity = CharacterMovement->Get<FVector>(VelocityOffset);
 
-		// Conservamos el componente vertical (gravedad/caida) del pawn.
 		CharacterVelocity.X = NewVelocity.X;
 		CharacterVelocity.Y = NewVelocity.Y;
 
-		// La fisica nativa recalcula Velocity desde Acceleration cada tick
-		// (CalcVelocity). Alimentamos Acceleration en la misma direccion para
-		// que el movimiento se mantenga pese al frenado por friccion.
 		FVector& CharacterAcceleration = CharacterMovement->Get<FVector>(AccelerationOffset);
 		CharacterAcceleration.X = Dir.X * Speed;
 		CharacterAcceleration.Y = Dir.Y * Speed;
 	}
 
-	// Mueve al pawn hacia Destination. bSprint usara velocidad de sprint.
-	// Almacena la peticion de movimiento en el bot: mientras este activa,
-	// UpdateMovement() la re-aplica cada tick (llamado desde TickAll).
-	// Si llegamos a AcceptanceRadius, la peticion marca el estado Arrived.
-	// TODO-PATH: si cambia el destino se invalida la ruta navmesh (la polilinea
-	// cacheada solo vale para el destino para el que se consulto) y se fuerza
-	// una re-consulta (PathQueryTime=-1) al moverte a un punto nuevo.
 	static void MoveTo(CustomBot& Bot, const FVector& Destination, float AcceptanceRadius = 100.0f, bool bSprint = false, bool bRotateTowardsMove = true)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -548,20 +405,10 @@ namespace CustomBotMovement
 			ClearPath(Bot);
 			Bot.PathQueryTime = -1.0f;
 
-			// Al cambiar de destino se resetea el detector de atasco por progreso
-			// (CustomBotBreak): cada destino es una partida nueva.
 			Bot.StuckWindowTime = -1.0f;
 			Bot.StuckWindowPos = FVector{};
 			Bot.StuckTime = 0.0f;
 
-			// CRITICO (storm priority): tambien se cancela la MAQUINA de
-			// desatascado fisico. Si el destino cambia (p.ej. Decide pasa a
-			// Rotating hacia la safe zone) mientras el bot esta atascado en una
-			// pared, el FSM seguia restaurando su UnstickGoal viejo (MoveTo al
-			// destino capturado al arrancar) y piseaba el nuevo destino: el bot
-			// seguia empujando contra el muro en vez de rotar. Ahora cada cambio
-			// de destino aborta la secuencia en curso (si sigue atascado tras
-			// cambiar, el nuevo destino re-dispara el detector limpio).
 			Bot.UnstickStage = 0;
 			Bot.UnstickTime = -1.0f;
 			Bot.BlockedSince = -1.0f;
@@ -576,8 +423,6 @@ namespace CustomBotMovement
 			Bot.UnstickFloorCount = 0;
 			Bot.UnstickTarget = nullptr;
 
-			// Atasco persistente (fallback navmesh 10s): episodio descartado con
-			// el goal viejo; el nuevo destino empieza a medir desde cero.
 			Bot.StuckPersistTime = 0.0f;
 			Bot.StuckPersistGoal = FVector{};
 			Bot.StuckPersistBest = 1e30f;
@@ -593,10 +438,6 @@ namespace CustomBotMovement
 		ApplyMoveVelocity(Bot, Destination, bSprint ? SprintSpeed : WalkSpeed, bRotateTowardsMove);
 	}
 
-	// Limpia la ruta navmesh cacheada del bot (cambio de destino / agotada).
-	// NOTA: NO resetea PathQueryTime; asi la re-consulta respeta el cooldown y
-	// no se pide el navmesh cada frame cuando la polilinea se agota (la recta
-	// final hacia el destino no necesita re-consulta).
 	static void ClearPath(CustomBot& Bot)
 	{
 		Bot.PathWaypoints.clear();
@@ -604,10 +445,6 @@ namespace CustomBotMovement
 		Bot.bPathFollowBlocked = false;
 	}
 
-	// (Re)consulta la ruta hacia FinalDest con throttle (PathQueryCooldown).
-	// Primero navmesh (QueryPath) y si no hay, ruta puerta-a-puerta
-	// (RouteThroughDoors, "loot -> puertas -> ... -> bot"). La polilinea se
-	// guarda en Bot.PathWaypoints para que UpdateMovement la recorra.
 	static void RefreshPath(CustomBot& Bot, const FVector& FinalDest)
 	{
 		float Now = CustomBotPerception::BotTime();
@@ -628,23 +465,10 @@ namespace CustomBotMovement
 			return;
 		}
 
-		// TODO-PATH (ruta puertas): fallback cuando el navmesh no encuentra
-		// camino (interiores de edificios / POIs). Encadena puertas desde el
-		// destino hacia el bot para abrirse camino dentro de una casa.
 		if (CustomBotPathfinding::RouteThroughDoors(Bot, FinalDest, Points))
 			Bot.PathWaypoints = std::move(Points);
 	}
 
-	// Tick de movimiento: consume la peticion activa cada frame del servidor.
-	//   1. si llegamos al radio de aceptacion -> Arrived (y velocidad a cero)
-	//   2. si hay una puerta cerrada delante bloqueando -> abrirla nativamente
-	//   3. si el pathfinding esta ON y hay ruta navmesh -> seguir la polilinea
-	//      (con re-consulta ciclica vía RefreshPath)
-	//   4. si no -> linea recta (fallback): LOS bloqueada marca BlockedPath
-	//      (la velocidad sigue aplicandose; el desatascado lo hace CustomBotBreak)
-	// TODO-PATH: el bloqueo de la LOS y la ruta conviven: aunque sigas un
-	// waypoint, si la LOS esta bloqueada se marca BlockedPath y el
-	// CustomBotBreak (fallback) entra a abrir puertas / romper obstaculos.
 	static void UpdateMovement(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -667,36 +491,20 @@ namespace CustomBotMovement
 			ClearPath(Bot);
 			Bot.MoveState = CBT::EMovementState::Arrived;
 
-			// Llegada = progreso real: el contador de atasco persistente (fallback
-			// navmesh a los 10s) se reinicia para la proxima peticion.
 			Bot.StuckPersistTime = 0.0f;
 			Bot.StuckPersistBest = 1e30f;
 			return;
 		}
 
-		// La LOS se refresca como mucho cada ~0.25s: LineTraceSingle por tick con
-		// varios bots pesa (los barridos de clase ya estan cacheados en
-		// CustomBotPerception). Mientras tanto se usa el ultimo estado.
 		if (Bot.MoveLOSTime < 0.0f || CustomBotPerception::BotTime() - Bot.MoveLOSTime >= 0.25f)
 		{
 			Bot.MoveLOSTime = CustomBotPerception::BotTime();
 			Bot.bMoveLOSBlocked = !CustomBotPerception::HasLineOfSight(Bot, Destination);
 		}
 
-		// TODO-PATH (puertas): si el camino directo esta bloqueado y hay una
-		// puerta cerrada enfrente, abrirla nativamente y seguir avanzando.
 		if (Bot.bMoveLOSBlocked)
 			CustomBotDoors::TryOpenDoorInFront(Bot);
 
-		// TODO-PATH (navmesh): sigue la polilinea de waypoints si existe. La
-		// ruta se consulta (o re-consulta) con throttle en RefreshPath. Con el
-		// checkbox de la UI en off (bCustomBotPathfinding=false) se salta todo
-		// este bloque y se va en linea recta (lo barato para PC malos).
-		//
-		// Pathfinding FALLBACK (bCustomBotPathfindingFallback): igualmente se va
-		// en linea recta, pero si el bot lleva >=10s SIN superar su mejor avance
-		// (StuckPersistTime) se consulta el navmesh como ESCAPE: paredes o
-		// edificios de 2+ pisos que ni rompiendo ni construyendo se superan.
 		const bool bUseNavPath = bCustomBotPathfinding ||
 			(bCustomBotPathfindingFallback && Bot.StuckPersistTime >= CustomBot::PathfindingFallbackStuckTime);
 
@@ -711,12 +519,11 @@ namespace CustomBotMovement
 
 				if (HorizontalDistance(BotLoc, Waypoint) <= CustomBot::PathWaypointAcceptance)
 				{
-					// Waypoint alcanzado: avanzar al siguiente (o acabar).
 					++Bot.PathIndex;
 
 					if (Bot.PathIndex >= (int)Bot.PathWaypoints.size())
 					{
-						ClearPath(Bot); // fuera de la polilinea -> recta final
+						ClearPath(Bot);
 					}
 				}
 
@@ -741,8 +548,6 @@ namespace CustomBotMovement
 		ApplyMoveVelocity(Bot, Destination, Bot.MoveRequest.MoveSpeed, true);
 	}
 
-	// Movimiento por eje tipo input jugador: mover hacia delante/atras.
-	// Value en [-1, 1]; positiva = forward, negativa = backward.
 	static void MoveForward(CustomBot& Bot, float Value)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -777,7 +582,6 @@ namespace CustomBotMovement
 
 		auto CharacterMovement = GetCharacterMovement(Bot);
 
-		// 1) Impulso real via LaunchCharacter (unchanged XY, sobreescribe solo Z).
 		static auto LaunchCharacterFn = FindObject<UFunction>(L"/Script/Engine.Character.LaunchCharacter");
 
 		if (LaunchCharacterFn)
@@ -792,8 +596,6 @@ namespace CustomBotMovement
 			Bot.Pawn->ProcessEvent(LaunchCharacterFn, &Params);
 		}
 
-		// 2) Patada directa a la velocidad del CMC por si el pending launch se
-		// pierde con la simulacion server (nunca rebajar, respeta caidas activas).
 		if (CharacterMovement)
 		{
 			static auto VelocityOffset = CharacterMovement->GetOffset("Velocity", false);
@@ -805,13 +607,11 @@ namespace CustomBotMovement
 			}
 		}
 
-		// 3) Character.Jump nativo: deja el estado/anim de salto para el motor.
 		static auto JumpFn = FindObject<UFunction>(L"/Script/Engine.Character.Jump");
 		if (JumpFn)
 			Bot.Pawn->ProcessEvent(JumpFn);
 	}
 
-	// Lanza el pawn (impulso), util para impulsos puntuales.
 	static void Launch(CustomBot& Bot, const FVector& LaunchVelocity, bool bXYOverride = false, bool bZOverride = false)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)

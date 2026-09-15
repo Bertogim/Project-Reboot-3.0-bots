@@ -554,6 +554,54 @@ namespace CustomBotMovement
 
 		if (!Bot.CosmeticPawn->IsActorBeingDestroyed() && Bot.Pawn && !Bot.Pawn->IsActorBeingDestroyed())
 		{
+			auto* SrcCM = GetCharacterMovement(Bot.Pawn);
+			auto* DstCM = GetCharacterMovement(Bot.CosmeticPawn);
+
+			static int SrcVelOff = SrcCM ? SrcCM->GetOffset("Velocity", false) : -1;
+			static int DstVelOff = DstCM ? DstCM->GetOffset("Velocity", false) : -1;
+			static int SrcAccOff = SrcCM ? SrcCM->GetOffset("Acceleration", false) : -1;
+			static int DstAccOff = DstCM ? DstCM->GetOffset("Acceleration", false) : -1;
+			static int SrcModeOff = SrcCM ? SrcCM->GetOffset("MovementMode", false) : -1;
+			static int DstModeOff = DstCM ? DstCM->GetOffset("MovementMode", false) : -1;
+
+			static auto ClearAccumulatedForcesFn = FindObject<UFunction>(L"/Script/Engine.MovementComponent.ClearAccumulatedForces");
+
+			if (SrcCM && DstCM)
+			{
+				FVector SrcVel{};
+				if (SrcVelOff != -1)
+					SrcVel = SrcCM->Get<FVector>(SrcVelOff);
+
+				FVector SrcAcc{};
+				if (SrcAccOff != -1)
+					SrcAcc = SrcCM->Get<FVector>(SrcAccOff);
+
+				bool bGhostIdle = (SrcVel | SrcVel) < 4.0f && (SrcAcc | SrcAcc) < 4.0f;
+
+				int SrcMode = SrcModeOff != -1 ? SrcCM->Get<int>(SrcModeOff) : -1;
+
+				if (SrcMode != -1 && DstModeOff != -1)
+					DstCM->Get<int>(DstModeOff) = SrcMode;
+
+				if (DstVelOff != -1)
+					DstCM->Get<FVector>(DstVelOff) = SrcVel;
+
+				if (DstAccOff != -1)
+					DstCM->Get<FVector>(DstAccOff) = SrcAcc;
+
+				if (bGhostIdle)
+				{
+					if (DstAccOff != -1)
+						DstCM->Get<FVector>(DstAccOff) = FVector{ 0.0f, 0.0f, 0.0f };
+
+					if (DstVelOff != -1)
+						DstCM->Get<FVector>(DstVelOff) = FVector{ 0.0f, 0.0f, 0.0f };
+
+					if (ClearAccumulatedForcesFn)
+						DstCM->ProcessEvent(ClearAccumulatedForcesFn);
+				}
+			}
+
 			FVector MoveLoc = Bot.Pawn->GetActorLocation();
 			FVector CosLoc = Bot.CosmeticPawn->GetActorLocation();
 
@@ -563,21 +611,8 @@ namespace CustomBotMovement
 			{
 				Bot.CosmeticPawn->TeleportTo(MoveLoc, Bot.Pawn->GetActorRotation());
 
-				if (auto* DstCM = GetCharacterMovement(Bot.CosmeticPawn))
-				{
-					static auto DstVelOff = DstCM->GetOffset("Velocity", false);
-
-					if (DstVelOff != -1)
-					{
-						if (auto* SrcCM = GetCharacterMovement(Bot.Pawn))
-						{
-							static auto SrcVelOff = SrcCM->GetOffset("Velocity", false);
-
-							if (SrcVelOff != -1)
-								DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
-						}
-					}
-				}
+				if (DstCM && SrcVelOff != -1 && DstVelOff != -1 && SrcCM)
+					DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
 			}
 		}
 

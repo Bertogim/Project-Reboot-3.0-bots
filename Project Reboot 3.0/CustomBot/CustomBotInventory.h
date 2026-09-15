@@ -97,6 +97,31 @@ namespace CustomBotInventory
 
 	static constexpr float kEquipVerifyTimeout = 1.5f;
 
+	static bool EquipViaController(CustomBot& Bot, const FGuid& ItemGuid)
+	{
+		if (!Bot.IsReady() || !Bot.Controller || !Bot.Pawn)
+			return false;
+
+		static int ControllerPawnOff = Bot.Controller->GetOffset("Pawn", false);
+		static int PawnControllerOff = Bot.Pawn->GetOffset("Controller", false);
+
+		if (ControllerPawnOff == -1 || PawnControllerOff == -1)
+			return false;
+
+		APawn* SavedControllerPawn = Bot.Controller->Get<APawn*>(ControllerPawnOff);
+		AController* SavedPawnController = Bot.Pawn->Get<AController*>(PawnControllerOff);
+
+		Bot.Controller->Get<APawn*>(ControllerPawnOff) = Bot.Pawn;
+		Bot.Pawn->Get<AController*>(PawnControllerOff) = Bot.Controller;
+
+		Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, ItemGuid);
+
+		Bot.Controller->Get<APawn*>(ControllerPawnOff) = SavedControllerPawn;
+		Bot.Pawn->Get<AController*>(PawnControllerOff) = SavedPawnController;
+
+		return true;
+	}
+
 	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
 	{
 		if (!Item)
@@ -107,13 +132,32 @@ namespace CustomBotInventory
 		if (!Entry)
 			return false;
 
-		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(Entry->GetItemDefinition());
+		auto* ItemDefinition = Entry->GetItemDefinition();
+
+		if (!ItemDefinition)
+			return false;
 
 		auto Verify = [&]() -> bool {
 			auto* W = Bot.IsReady() ? Bot.Pawn->GetCurrentWeapon() : nullptr;
 			auto* D = W ? W->GetWeaponData() : nullptr;
-			return D && Entry->GetItemDefinition() && D == Entry->GetItemDefinition();
+			return D && D == ItemDefinition;
 		};
+
+		if (EquipViaController(Bot, Entry->GetItemGuid()))
+		{
+			if (Verify())
+			{
+				Bot.bPendingEquip = false;
+				return true;
+			}
+
+			Bot.bPendingEquip = true;
+			Bot.PendingEquipGuid = Entry->GetItemGuid();
+			Bot.PendingEquipTime = UGameplayStatics::GetTimeSeconds(GetWorld());
+			return false;
+		}
+
+		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(ItemDefinition);
 
 		if (WeaponDef && Bot.Pawn)
 			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
@@ -162,10 +206,7 @@ namespace CustomBotInventory
 
 		Bot.PendingEquipTime = Now;
 
-		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(Pending->GetItemEntry()->GetItemDefinition());
-
-		if (WeaponDef)
-			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Bot.PendingEquipGuid);
+		EquipViaController(Bot, Bot.PendingEquipGuid);
 
 		if (++Bot.PendingEquipAttempts >= 2)
 		{

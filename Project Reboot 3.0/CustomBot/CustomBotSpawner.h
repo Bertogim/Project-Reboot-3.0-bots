@@ -623,7 +623,6 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 
 			CustomBotMovement::IgnoreEachOther(Bot.Pawn, Bot.CosmeticPawn);
 			CustomBotMovement::SetupCosmeticFollower(Bot);
-			CustomBotMovement::SetupCosmeticSim(Bot);
 			CustomBotMovement::SyncHealth(Bot);
 
 			LOG_INFO(LogBots, "[CustomBot] movement ghost bound: move=0x{:x} cos=0x{:x}",

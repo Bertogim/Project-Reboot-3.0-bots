@@ -261,23 +261,6 @@ namespace CustomBotMovement
 		return bBitOK;
 	}
 
-	static void SetupCosmeticSim(CustomBot& Bot)
-	{
-		if (!Bot.Controller || !Bot.CosmeticPawn)
-			return;
-
-		if (Bot.Controller->GetPawn() == Bot.CosmeticPawn)
-			Bot.Controller->UnPossess();
-
-		if (auto* PS = (UObject*)Bot.Controller->GetPlayerState())
-		{
-			int PSOff = Bot.CosmeticPawn->GetOffset("PlayerState", false);
-
-			if (PSOff != -1 && Bot.CosmeticPawn->Get<UObject*>(PSOff) != PS)
-				Bot.CosmeticPawn->Get<UObject*>(PSOff) = PS;
-		}
-	}
-
 	static void EnsureCMCActive(CustomBot& Bot, bool bPerTickWork = true, bool bDoClaim = true)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -373,6 +356,16 @@ namespace CustomBotMovement
 			auto& MinNetFreq = Bot.Pawn->GetMinNetUpdateFrequency();
 			if (MinNetFreq < 50.0f)
 				MinNetFreq = 50.0f;
+		}
+
+		if (Bot.CosmeticPawn && !Bot.CosmeticPawn->IsActorBeingDestroyed())
+		{
+			auto& CosNetFreq = Bot.CosmeticPawn->GetNetUpdateFrequency();
+			if (CosNetFreq < 50.0f)
+				CosNetFreq = 50.0f;
+			auto& CosMinNetFreq = Bot.CosmeticPawn->GetMinNetUpdateFrequency();
+			if (CosMinNetFreq < 50.0f)
+				CosMinNetFreq = 50.0f;
 		}
 
 		if (Bot.bMoveRequestActive)
@@ -585,6 +578,9 @@ namespace CustomBotMovement
 		if (!Bot.CosmeticPawn)
 			return;
 
+		if (Bot.PlayerState && Bot.PlayerState->IsInAircraft())
+			Bot.PlayerState->SetInAircraft(false);
+
 		if (!Bot.CosmeticPawn->IsActorBeingDestroyed() && Bot.Pawn && !Bot.Pawn->IsActorBeingDestroyed())
 		{
 			SetActorHiddenInGame(Bot.Pawn, true);
@@ -662,6 +658,9 @@ namespace CustomBotMovement
 				if (DstCM && SrcVelOff != -1 && DstVelOff != -1 && SrcCM)
 					DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
 			}
+
+			if (Bot.CosmeticPawn)
+				Bot.CosmeticPawn->ForceNetUpdate();
 		}
 
 		SyncHealth(Bot);

@@ -69,38 +69,146 @@ namespace CustomBotMovement
 		return Bot.Pawn->Get(CharacterMovementOffset);
 	}
 
-	static void RestorePawnPlayerState(CustomBot& Bot)
+	static UObject* GetCharacterMovement(APawn* InPawn)
 	{
-		if (!Bot.Pawn || !Bot.PlayerState)
-			return;
+		if (!InPawn)
+			return nullptr;
 
-		int PSOff = Bot.Pawn->GetOffset("PlayerState", false);
-
-		if (PSOff != -1 && Bot.Pawn->Get<UObject*>(PSOff) != (UObject*)Bot.PlayerState)
-			Bot.Pawn->Get<UObject*>(PSOff) = (UObject*)Bot.PlayerState;
+		static auto CharacterMovementOffset = InPawn->GetOffset("CharacterMovement");
+		return InPawn->Get(CharacterMovementOffset);
 	}
 
-	// Habilita la simulacion CMC en servidor para el bot (research 08).
-	// SetIsBot(false) + UnPossess + bRunPhysicsWithNoController=true.
-	// Sin ClaimLive — el handshake no es necesario para la fisica.
-	// Los bots SIEMPRE se desposeen; el servidor simula el CMC sin controller.
-	static bool EnableServerSimulation(CustomBot& Bot)
+	static void SetActorHiddenInGame(UObject* Actor, bool bHidden)
 	{
-		if (!Bot.PlayerState || !Bot.Controller || !Bot.Pawn)
+		if (!Actor)
+			return;
+
+		static auto Fn = FindObject<UFunction>(L"/Script/Engine.Actor.SetActorHiddenInGame");
+
+		if (!Fn)
+			return;
+
+		static auto Off = FindOffsetStruct("/Script/Engine.Actor.SetActorHiddenInGame", "bNewHidden", false);
+
+		if (Off == -1)
+			return;
+
+		auto Params = Alloc(Fn->GetPropertiesSize());
+
+		*(bool*)(__int64(Params) + Off) = bHidden;
+
+		Actor->ProcessEvent(Fn, Params);
+
+		VirtualFree(Params, 0, MEM_RELEASE);
+	}
+
+	static void IgnoreEachOther(AActor* A, AActor* B)
+	{
+		static auto Fn = FindObject<UFunction>(L"/Script/Engine.Actor.SetIgnoreActorWhenMoving");
+
+		if (!Fn || !A || !B)
+			return;
+
+		static auto ActorOff = FindOffsetStruct("/Script/Engine.Actor.SetIgnoreActorWhenMoving", "Actor", false);
+		static auto bShouldIgnoreOff = FindOffsetStruct("/Script/Engine.Actor.SetIgnoreActorWhenMoving", "bShouldIgnore", false);
+
+		if (ActorOff == -1 || bShouldIgnoreOff == -1)
+			return;
+
+		{
+			auto Params = Alloc(Fn->GetPropertiesSize());
+			*(AActor**)(__int64(Params) + ActorOff) = B;
+			*(bool*)(__int64(Params) + bShouldIgnoreOff) = true;
+			A->ProcessEvent(Fn, Params);
+			VirtualFree(Params, 0, MEM_RELEASE);
+		}
+
+		{
+			auto Params = Alloc(Fn->GetPropertiesSize());
+			*(AActor**)(__int64(Params) + ActorOff) = A;
+			*(bool*)(__int64(Params) + bShouldIgnoreOff) = true;
+			B->ProcessEvent(Fn, Params);
+			VirtualFree(Params, 0, MEM_RELEASE);
+		}
+	}
+
+	static void AddMovementInput(APawn* InPawn, const FVector& Dir)
+	{
+		if (!InPawn)
+			return;
+
+		static auto AddMovementInputFn = FindObject<UFunction>(L"/Script/Engine.Character.AddMovementInput");
+
+		if (AddMovementInputFn)
+		{
+			static auto WorldDirectionOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "WorldDirection");
+			static auto ScaleValueOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "ScaleValue");
+			static auto bForceOffset = FindOffsetStruct("/Script/Engine.Character.AddMovementInput", "bForce");
+
+			if (WorldDirectionOffset != -1 && ScaleValueOffset != -1 && bForceOffset != -1)
+			{
+				auto Params = Alloc(AddMovementInputFn->GetPropertiesSize());
+
+				*(FVector*)(__int64(Params) + WorldDirectionOffset) = Dir;
+				*(float*)(__int64(Params) + ScaleValueOffset) = 1.0f;
+				*(uint8_t*)(__int64(Params) + bForceOffset) = 1;
+
+				InPawn->ProcessEvent(AddMovementInputFn, Params);
+
+				VirtualFree(Params, 0, MEM_RELEASE);
+				return;
+			}
+		}
+
+		if (auto* CM = GetCharacterMovement(InPawn))
+		{
+			static auto AddInputVectorFn = FindObject<UFunction>(L"/Script/Engine.MovementComponent.AddInputVector");
+
+			if (AddInputVectorFn)
+			{
+				static auto WorldVectorOffset = FindOffsetStruct("/Script/Engine.MovementComponent.AddInputVector", "WorldVector");
+				static auto bForceOffset = FindOffsetStruct("/Script/Engine.MovementComponent.AddInputVector", "bForce");
+
+				if (WorldVectorOffset != -1 && bForceOffset != -1)
+				{
+					auto Params = Alloc(AddInputVectorFn->GetPropertiesSize());
+
+					*(FVector*)(__int64(Params) + WorldVectorOffset) = Dir;
+					*(uint8_t*)(__int64(Params) + bForceOffset) = 1;
+
+					CM->ProcessEvent(AddInputVectorFn, Params);
+
+					VirtualFree(Params, 0, MEM_RELEASE);
+				}
+			}
+		}
+	}
+
+	static void MirrorCosmeticInput(CustomBot& Bot, const FVector& Dir)
+	{
+		if (Bot.CosmeticPawn && (Dir | Dir))
+			AddMovementInput(Bot.CosmeticPawn, Dir);
+	}
+
+	static bool SetupGhostSim(AFortPlayerControllerAthena* Ctrl, AFortPlayerPawnAthena* Pawn)
+	{
+		if (!Ctrl || !Pawn)
 			return false;
 
-		Bot.PlayerState->SetIsBot(false);
+		if (Ctrl->GetPawn() == Pawn)
+			Ctrl->UnPossess();
 
-		if (Bot.Controller->GetPawn() == Bot.Pawn)
-			Bot.Controller->UnPossess();
+		if (auto* PS = (UObject*)Ctrl->GetPlayerState())
+		{
+			int PSOff = Pawn->GetOffset("PlayerState", false);
 
-		// UnPossess() limpia Pawn->PlayerState (ACharacter::UnPossessed -> null).
-		// Se restaura el puntero para que el sistema de cosmeticos/tick del pawn
-		// lo vea (sin el, el mesh re-intenta cargar parts cada tick).
-		RestorePawnPlayerState(Bot);
+			if (PSOff != -1 && Pawn->Get<UObject*>(PSOff) != PS)
+				Pawn->Get<UObject*>(PSOff) = PS;
+		}
 
 		bool bBitOK = false;
-		if (auto* CMR = GetCharacterMovement(Bot))
+
+		if (auto* CMR = GetCharacterMovement(Pawn))
 		{
 			auto* Prop = CMR->GetProperty("bRunPhysicsWithNoController");
 			int Off = CMR->GetOffset("bRunPhysicsWithNoController", false);
@@ -110,9 +218,6 @@ namespace CustomBotMovement
 				bBitOK = true;
 			}
 		}
-
-		LOG_WARN(LogBots, "[CustomBot] RUNPHYS-FIX: IsBot=false, UnPossess, bRunPhysicsWithNoController={}",
-			bBitOK);
 
 		return bBitOK;
 	}
@@ -130,21 +235,20 @@ namespace CustomBotMovement
 
 		if (!Bot.bCMCInitialized)
 		{
-			RestorePawnPlayerState(Bot);
-
 			if (bDoClaim && !Bot.bClaimLiveDone && Bot.Controller)
 			{
 				static auto AckFn = FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession");
 				if (AckFn)
 				{
 					struct { APawn* NewPawn; } Params{};
-					Params.NewPawn = Bot.Pawn;
+					Params.NewPawn = Bot.CosmeticPawn ? Bot.CosmeticPawn : Bot.Pawn;
 					Bot.Controller->ProcessEvent(AckFn, &Params);
 				}
 
 				auto AckOff = Bot.Controller->GetOffset("AcknowledgedPawn", false);
-				if (AckOff != -1 && Bot.Controller->Get<APawn*>(AckOff) != Bot.Pawn)
-					Bot.Controller->Get<APawn*>(AckOff) = Bot.Pawn;
+				auto* DesiredAckPawn = Bot.CosmeticPawn ? Bot.CosmeticPawn : Bot.Pawn;
+				if (AckOff != -1 && Bot.Controller->Get<APawn*>(AckOff) != DesiredAckPawn)
+					Bot.Controller->Get<APawn*>(AckOff) = DesiredAckPawn;
 
 				Bot.bClaimLiveDone = true;
 				LOG_WARN(LogBots, "[CustomBot] CLAIM-LIVE: ServerAcknowledgePossession invoked for bot");
@@ -269,6 +373,9 @@ namespace CustomBotMovement
 		Bot.PlayerState->ForceNetUpdate();
 		Bot.Pawn->ForceNetUpdate();
 
+		if (Bot.CosmeticPawn)
+			Bot.CosmeticPawn->ForceNetUpdate();
+
 		auto T1 = std::chrono::steady_clock::now();
 		LOG_INFO(LogBots, "[CustomBot] deferred skin applied in {}ms",
 			(int)std::chrono::duration_cast<std::chrono::milliseconds>(T1 - T0).count());
@@ -377,6 +484,8 @@ namespace CustomBotMovement
 		if (bRotateTowardsMove)
 			LookAt(Bot, Destination);
 
+		MirrorCosmeticInput(Bot, Dir);
+
 		FVector NewVelocity{ Dir.X * Speed, Dir.Y * Speed, 0.0f };
 
 		static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
@@ -389,6 +498,90 @@ namespace CustomBotMovement
 		FVector& CharacterAcceleration = CharacterMovement->Get<FVector>(AccelerationOffset);
 		CharacterAcceleration.X = Dir.X * Speed;
 		CharacterAcceleration.Y = Dir.Y * Speed;
+	}
+
+	static void SyncHealth(CustomBot& Bot)
+	{
+		if (!Bot.Pawn || !Bot.CosmeticPawn)
+			return;
+
+		float MoveH = Bot.Pawn->GetHealth();
+		float MoveS = Bot.Pawn->GetShield();
+		float CosH = Bot.CosmeticPawn->GetHealth();
+		float CosS = Bot.CosmeticPawn->GetShield();
+
+		bool bMoveHChanged = Bot.SyncPrevMoveHealth >= 0.0f && FMath::Abs(MoveH - Bot.SyncPrevMoveHealth) > 0.01f;
+		bool bMoveSChanged = Bot.SyncPrevMoveShield >= 0.0f && FMath::Abs(MoveS - Bot.SyncPrevMoveShield) > 0.05f;
+		bool bCosHChanged = Bot.SyncPrevCosHealth >= 0.0f && FMath::Abs(CosH - Bot.SyncPrevCosHealth) > 0.01f;
+		bool bCosSChanged = Bot.SyncPrevCosShield >= 0.0f && FMath::Abs(CosS - Bot.SyncPrevCosShield) > 0.05f;
+
+		bool bMoveChanged = bMoveHChanged || bMoveSChanged;
+		bool bCosChanged = bCosHChanged || bCosSChanged;
+
+		if (bMoveChanged || bCosChanged)
+		{
+			if (bMoveChanged && !bCosChanged)
+			{
+				Bot.CosmeticPawn->SetHealth(MoveH);
+				Bot.CosmeticPawn->SetShield(MoveS);
+			}
+			else if (bCosChanged && !bMoveChanged)
+			{
+				Bot.Pawn->SetHealth(CosH);
+				Bot.Pawn->SetShield(CosS);
+			}
+			else
+			{
+				float H = FMath::Min(MoveH, CosH);
+				float S = FMath::Min(MoveS, CosS);
+				Bot.Pawn->SetHealth(H);
+				Bot.Pawn->SetShield(S);
+				Bot.CosmeticPawn->SetHealth(H);
+				Bot.CosmeticPawn->SetShield(S);
+			}
+		}
+
+		Bot.SyncPrevMoveHealth = Bot.Pawn->GetHealth();
+		Bot.SyncPrevMoveShield = Bot.Pawn->GetShield();
+		Bot.SyncPrevCosHealth = Bot.CosmeticPawn->GetHealth();
+		Bot.SyncPrevCosShield = Bot.CosmeticPawn->GetShield();
+	}
+
+	static void SyncCosmetic(CustomBot& Bot)
+	{
+		if (!Bot.CosmeticPawn)
+			return;
+
+		if (!Bot.CosmeticPawn->IsActorBeingDestroyed() && Bot.Pawn && !Bot.Pawn->IsActorBeingDestroyed())
+		{
+			FVector MoveLoc = Bot.Pawn->GetActorLocation();
+			FVector CosLoc = Bot.CosmeticPawn->GetActorLocation();
+
+			FVector Delta = MoveLoc - CosLoc;
+
+			if ((Delta | Delta) > 1.0f)
+			{
+				Bot.CosmeticPawn->TeleportTo(MoveLoc, Bot.Pawn->GetActorRotation());
+
+				if (auto* DstCM = GetCharacterMovement(Bot.CosmeticPawn))
+				{
+					static auto DstVelOff = DstCM->GetOffset("Velocity", false);
+
+					if (DstVelOff != -1)
+					{
+						if (auto* SrcCM = GetCharacterMovement(Bot.Pawn))
+						{
+							static auto SrcVelOff = SrcCM->GetOffset("Velocity", false);
+
+							if (SrcVelOff != -1)
+								DstCM->Get<FVector>(DstVelOff) = SrcCM->Get<FVector>(SrcVelOff);
+						}
+					}
+				}
+			}
+		}
+
+		SyncHealth(Bot);
 	}
 
 	static void MoveTo(CustomBot& Bot, const FVector& Destination, float AcceptanceRadius = 100.0f, bool bSprint = false, bool bRotateTowardsMove = true)
@@ -608,6 +801,9 @@ namespace CustomBotMovement
 		static auto JumpFn = FindObject<UFunction>(L"/Script/Engine.Character.Jump");
 		if (JumpFn)
 			Bot.Pawn->ProcessEvent(JumpFn);
+
+		if (Bot.CosmeticPawn && JumpFn)
+			Bot.CosmeticPawn->ProcessEvent(JumpFn);
 	}
 
 	static void Launch(CustomBot& Bot, const FVector& LaunchVelocity, bool bXYOverride = false, bool bZOverride = false)

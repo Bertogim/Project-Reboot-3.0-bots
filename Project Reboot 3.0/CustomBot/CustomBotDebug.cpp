@@ -1607,6 +1607,8 @@ static void BotTickCallbackImpl(void* data)
 
 			CustomBotBreak::TickUnstuck(*Bot);
 
+			CustomBotMovement::SyncCosmetic(*Bot);
+
 			if (Bot->bSkinPending && CustomBotSpawner::PendingSkinBudget > 0)
 			{
 				--CustomBotSpawner::PendingSkinBudget;

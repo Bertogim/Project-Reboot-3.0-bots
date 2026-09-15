@@ -386,6 +386,73 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 
 	inline const char* gSpawnStage = "none";
 
+	static AFortPlayerPawnAthena* SpawnMovementGhost(CustomBot& Bot, const FTransform& SpawnTransform, AFortPlayerControllerAthena*& OutCtrl, AFortPlayerStateAthena*& OutPS)
+	{
+		LOG_INFO(LogBots, "[CustomBot] Spawning movement ghost...");
+		gSpawnStage = "ghost-controller";
+
+		AFortPlayerControllerAthena* Ctrl = GetWorld()->SpawnActor<AFortPlayerControllerAthena>(ControllerClass);
+
+		if (!Ctrl)
+		{
+			LOG_ERROR(LogBots, "[CustomBot] Failed to spawn ghost controller!");
+			return nullptr;
+		}
+
+		auto PS = Cast<AFortPlayerStateAthena>(Ctrl->GetPlayerState());
+
+		if (!PS)
+		{
+			LOG_ERROR(LogBots, "[CustomBot] Failed to get ghost playerstate!");
+			Ctrl->K2_DestroyActor();
+			return nullptr;
+		}
+
+		gSpawnStage = "ghost-pawn";
+
+		AFortPlayerPawnAthena* Pawn = GetWorld()->SpawnActor<AFortPlayerPawnAthena>(
+			PawnClass,
+			SpawnTransform,
+			CreateSpawnParameters(ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn));
+
+		if (!Pawn)
+		{
+			LOG_ERROR(LogBots, "[CustomBot] Failed to spawn ghost pawn!");
+			Ctrl->K2_DestroyActor();
+			return nullptr;
+		}
+
+		gSpawnStage = "ghost-link";
+
+		PS->SetIsBot(true);
+
+		Ctrl->Possess(Pawn);
+
+		Pawn->SetHealth(100.0f);
+		Pawn->SetMaxHealth(100.0f);
+		Pawn->SetShield(0.0f);
+		Pawn->SetMaxShield(100.0f);
+
+		if (Bot.PlayerState)
+		{
+			PS->GetTeamIndex() = Bot.PlayerState->GetTeamIndex();
+
+			static auto SquadIdOffset = PS->GetOffset("SquadId", false);
+
+			if (SquadIdOffset != -1)
+				PS->GetSquadId() = Bot.PlayerState->GetSquadId();
+		}
+
+		if (!CustomBotMovement::SetupGhostSim(Ctrl, Pawn))
+			LOG_WARN(LogBots, "[CustomBot] ghost CMC noController bit not applied");
+
+		CustomBotMovement::SetActorHiddenInGame(Pawn, true);
+
+		OutCtrl = Ctrl;
+		OutPS = PS;
+		return Pawn;
+	}
+
 	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator = nullptr);
 
 	static CustomBot* SpawnCustomBotInner(const FTransform& SpawnTransform, AActor* InSpawnLocator, CustomBot& OutBot)
@@ -478,6 +545,9 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 			return nullptr;
 		}
 
+		Bot.CosmeticPawn = Bot.Pawn;
+		LOG_INFO(LogBots, "[CustomBot] CosmeticPawn set (possessed, skin, weapons)");
+
 		Bot.PlayerState->SetIsBot(true);
 		LOG_INFO(LogBots, "[CustomBot] SetIsBot=true");
 
@@ -533,25 +603,46 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 		++GameState->GetPlayersLeft();
 		GameState->OnRep_PlayersLeft();
 
-		// FIX RUNPHYS: SetIsBot(false) + UnPossess + bRunPhysicsWithNoController.
-		// Los bots SIEMPRE se desposeen; el servidor simula el CMC sin controller.
-		gSpawnStage = "sim";
-		CustomBotMovement::EnableServerSimulation(Bot);
-		LOG_INFO(LogBots, "[CustomBot] enableServerSimulation done");
+		Bot.PlayerState->SetIsBot(false);
+		gSpawnStage = "ghost";
+		{
+			AFortPlayerControllerAthena* MoveCtrl = nullptr;
+			AFortPlayerStateAthena* MovePS = nullptr;
+			AFortPlayerPawnAthena* MovePawn = SpawnMovementGhost(Bot, SpawnTransform, MoveCtrl, MovePS);
+
+			if (!MovePawn)
+			{
+				LOG_ERROR(LogBots, "[CustomBot] movement ghost failed; aborting bot");
+				Bot.Destroy();
+				return nullptr;
+			}
+
+			Bot.Pawn = MovePawn;
+			Bot.MoveController = MoveCtrl;
+			Bot.MovePlayerState = MovePS;
+
+			CustomBotMovement::IgnoreEachOther(Bot.Pawn, Bot.CosmeticPawn);
+			CustomBotMovement::SyncHealth(Bot);
+
+			LOG_INFO(LogBots, "[CustomBot] movement ghost bound: move=0x{:x} cos=0x{:x}",
+				__int64(Bot.Pawn), __int64(Bot.CosmeticPawn));
+		}
 
 		Bot.bSkinPending = true;
 		LOG_INFO(LogBots, "[CustomBot] skin pending (deferred to tick)");
 
-		if (!Bot.Pawn || Bot.Pawn->IsActorBeingDestroyed())
+		if (!Bot.Pawn || Bot.Pawn->IsActorBeingDestroyed()
+			|| !Bot.CosmeticPawn || Bot.CosmeticPawn->IsActorBeingDestroyed()
+			|| !Bot.MoveController || Bot.MoveController->IsActorBeingDestroyed())
 		{
-			LOG_ERROR(LogBots, "[CustomBot] Pawn became invalid after initialization, aborting bot");
+			LOG_ERROR(LogBots, "[CustomBot] Pawn(s) became invalid after initialization, aborting bot");
 			Bot.Destroy();
 			return nullptr;
 		}
 
 		FVector BotPos = Bot.Pawn->GetActorLocation();
-		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE pos=({:.0f},{:.0f},{:.0f}) ===",
-			BotPos.X, BotPos.Y, BotPos.Z);
+		LOG_INFO(LogBots, "[CustomBot] === SpawnCustomBot DONE movePos=({:.0f},{:.0f},{:.0f}) cosPawn=0x{:x} ===",
+			BotPos.X, BotPos.Y, BotPos.Z, __int64(Bot.CosmeticPawn));
 		gSpawnStage = "done";
 
 		AllCustomBots.emplace_back(std::move(Bot));

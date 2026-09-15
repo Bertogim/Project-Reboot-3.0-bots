@@ -11,12 +11,19 @@
 
 namespace CustomBotInventory
 {
+	static AFortPlayerPawnAthena* GetWeaponPawn(CustomBot& Bot)
+	{
+		return Bot.CosmeticPawn ? Bot.CosmeticPawn : (Bot.Pawn ? Bot.Pawn : nullptr);
+	}
+
 	static AFortWeapon* GetCurrentWeapon(CustomBot& Bot)
 	{
-		if (!Bot.IsReady() || !Bot.Pawn)
+		auto* Pawn = GetWeaponPawn(Bot);
+
+		if (!Pawn)
 			return nullptr;
 
-		return Bot.Pawn->GetCurrentWeapon();
+		return Pawn->GetCurrentWeapon();
 	}
 
 	static int GetItemCount(CustomBot& Bot, UFortItemDefinition* ItemDefinition)
@@ -99,25 +106,27 @@ namespace CustomBotInventory
 
 	static bool EquipViaController(CustomBot& Bot, const FGuid& ItemGuid)
 	{
-		if (!Bot.IsReady() || !Bot.Controller || !Bot.Pawn)
+		auto* Target = Bot.CosmeticPawn ? Bot.CosmeticPawn : Bot.Pawn;
+
+		if (!Bot.IsReady() || !Bot.Controller || !Target)
 			return false;
 
 		static int ControllerPawnOff = Bot.Controller->GetOffset("Pawn", false);
-		static int PawnControllerOff = Bot.Pawn->GetOffset("Controller", false);
+		static int PawnControllerOff = Target->GetOffset("Controller", false);
 
 		if (ControllerPawnOff == -1 || PawnControllerOff == -1)
 			return false;
 
 		APawn* SavedControllerPawn = Bot.Controller->Get<APawn*>(ControllerPawnOff);
-		AController* SavedPawnController = Bot.Pawn->Get<AController*>(PawnControllerOff);
+		AController* SavedPawnController = Target->Get<AController*>(PawnControllerOff);
 
-		Bot.Controller->Get<APawn*>(ControllerPawnOff) = Bot.Pawn;
-		Bot.Pawn->Get<AController*>(PawnControllerOff) = Bot.Controller;
+		Bot.Controller->Get<APawn*>(ControllerPawnOff) = Target;
+		Target->Get<AController*>(PawnControllerOff) = Bot.Controller;
 
 		Bot.Controller->ServerExecuteInventoryItemHook(Bot.Controller, ItemGuid);
 
 		Bot.Controller->Get<APawn*>(ControllerPawnOff) = SavedControllerPawn;
-		Bot.Pawn->Get<AController*>(PawnControllerOff) = SavedPawnController;
+		Target->Get<AController*>(PawnControllerOff) = SavedPawnController;
 
 		return true;
 	}
@@ -138,7 +147,7 @@ namespace CustomBotInventory
 			return false;
 
 		auto Verify = [&]() -> bool {
-			auto* W = Bot.IsReady() ? Bot.Pawn->GetCurrentWeapon() : nullptr;
+			auto* W = GetCurrentWeapon(Bot);
 			auto* D = W ? W->GetWeaponData() : nullptr;
 			return D && D == ItemDefinition;
 		};
@@ -159,8 +168,10 @@ namespace CustomBotInventory
 
 		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(ItemDefinition);
 
-		if (WeaponDef && Bot.Pawn)
-			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
+		auto* WeaponTarget = GetWeaponPawn(Bot);
+
+		if (WeaponDef && WeaponTarget)
+			WeaponTarget->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
 
 		if (Verify())
 		{
@@ -179,7 +190,7 @@ namespace CustomBotInventory
 		if (!Bot.bPendingEquip)
 			return;
 
-		if (!Bot.IsReady() || !Bot.Pawn || !Bot.WorldInventory)
+		if (!Bot.IsReady() || !GetWeaponPawn(Bot) || !Bot.WorldInventory)
 			return;
 
 		UFortItem* Pending = Bot.WorldInventory->FindItemInstance(Bot.PendingEquipGuid);
@@ -190,7 +201,7 @@ namespace CustomBotInventory
 			return;
 		}
 
-		auto* Current = Bot.Pawn->GetCurrentWeapon();
+		auto* Current = GetCurrentWeapon(Bot);
 		auto* CurrentDef = Current ? Current->GetWeaponData() : nullptr;
 
 		if (CurrentDef == Pending->GetItemEntry()->GetItemDefinition())

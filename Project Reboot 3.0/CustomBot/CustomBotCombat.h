@@ -17,10 +17,10 @@ namespace CustomBotCombat
 
 	static bool IsPickaxeEquipped(CustomBot& Bot)
 	{
-		if (!Bot.IsReady() || !Bot.Pawn)
+		if (!Bot.IsReady() || !CustomBotInventory::GetWeaponPawn(Bot))
 			return false;
 
-		auto* Weapon = Bot.Pawn->GetCurrentWeapon();
+		auto* Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
 
 		if (!Weapon)
 			return false;

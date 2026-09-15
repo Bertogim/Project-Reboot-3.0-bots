@@ -24,6 +24,15 @@ public:
 	AFortPlayerStateAthena* PlayerState = nullptr;
 	AFortInventory* WorldInventory = nullptr;
 
+	AFortPlayerControllerAthena* MoveController = nullptr;
+	AFortPlayerStateAthena* MovePlayerState = nullptr;
+	AFortPlayerPawnAthena* CosmeticPawn = nullptr;
+
+	float SyncPrevMoveHealth = -1.0f;
+	float SyncPrevMoveShield = -1.0f;
+	float SyncPrevCosHealth = -1.0f;
+	float SyncPrevCosShield = -1.0f;
+
 	bool bInitialized = false;
 
 	bool bDeathHandled = false;
@@ -210,13 +219,20 @@ public:
 	{
 		if (Pawn)
 			Pawn->K2_DestroyActor();
+		if (CosmeticPawn)
+			CosmeticPawn->K2_DestroyActor();
 		if (Controller)
 			Controller->K2_DestroyActor();
+		if (MoveController)
+			MoveController->K2_DestroyActor();
 
 		Controller = nullptr;
 		Pawn = nullptr;
 		PlayerState = nullptr;
 		WorldInventory = nullptr;
+		MoveController = nullptr;
+		MovePlayerState = nullptr;
+		CosmeticPawn = nullptr;
 		bInitialized = false;
 
 		if (AI)

@@ -36,6 +36,7 @@ namespace CustomBotAIMidgame
 		Ctx.ScanTimer -= Elapsed;
 		Ctx.ReactTimer -= Elapsed;
 		Ctx.ActionTimer -= Elapsed;
+		Ctx.EquipRetryTimer -= Elapsed;
 	}
 
 	static bool NeedsHealing(CustomBot& Bot)
@@ -178,6 +179,8 @@ namespace CustomBotAIMidgame
 		if (!Bot.IsReady() || !Bot.WorldInventory)
 			return false;
 
+		static auto FortWeaponMeleeItemDefinitionClass = FindObject<UClass>(L"/Script/FortniteGame.FortWeaponMeleeItemDefinition");
+
 		UFortItem* Best = nullptr;
 		int BestScore = 0;
 		auto& ItemInstances = Bot.WorldInventory->GetItemList().GetItemInstances();
@@ -189,11 +192,16 @@ namespace CustomBotAIMidgame
 				continue;
 
 			auto Entry = Item->GetItemEntry();
-			if (!Entry || !Entry->GetItemDefinition())
+			auto ItemDef = Entry ? Entry->GetItemDefinition() : nullptr;
+
+			if (!ItemDef)
 				continue;
 
-			if (CustomBotPerception::ClassifyItemDefinition(Entry->GetItemDefinition())
+			if (CustomBotPerception::ClassifyItemDefinition(ItemDef)
 				!= CustomBotPerception::EItemType::Weapon)
+				continue;
+
+			if (FortWeaponMeleeItemDefinitionClass && ItemDef->IsA(FortWeaponMeleeItemDefinitionClass))
 				continue;
 
 			int S = ItemLootScore(Entry);
@@ -649,7 +657,11 @@ namespace CustomBotAIMidgame
 
 		if (!bHasWeapon)
 		{
-			EquipBestWeapon(Bot);
+			if (Ctx.EquipRetryTimer <= 0.0f)
+			{
+				EquipBestWeapon(Bot);
+				Ctx.EquipRetryTimer = 1.0f;
+			}
 			bHasWeapon = CustomBotCombat::IsWeaponEquipped(Bot) && !CustomBotCombat::IsPickaxeEquipped(Bot);
 		}
 

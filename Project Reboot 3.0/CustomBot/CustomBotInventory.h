@@ -97,6 +97,13 @@ namespace CustomBotInventory
 
 	static constexpr float kEquipVerifyTimeout = 1.5f;
 
+	inline bool gEquipDiagLogs = true;
+
+	inline std::string GuidStr(const FGuid& G)
+	{
+		return std::format("({:#x},{:#x},{:#x},{:#x})", G.A, G.B, G.C, G.D);
+	}
+
 	static bool EquipViaController(CustomBot& Bot, const FGuid& ItemGuid)
 	{
 		if (!Bot.IsReady() || !Bot.Controller || !Bot.Pawn)
@@ -107,6 +114,10 @@ namespace CustomBotInventory
 
 		if (ControllerPawnOff == -1 || PawnControllerOff == -1)
 			return false;
+
+		if (gEquipDiagLogs)
+			LOG_INFO(LogBots, "[equip-diag] EquipViaController guid={} pawn=0x{:x} ctrl=0x{:x}",
+				GuidStr(ItemGuid), __int64(Bot.Pawn), __int64(Bot.Controller));
 
 		APawn* SavedControllerPawn = Bot.Controller->Get<APawn*>(ControllerPawnOff);
 		AController* SavedPawnController = Bot.Pawn->Get<AController*>(PawnControllerOff);
@@ -119,10 +130,14 @@ namespace CustomBotInventory
 		Bot.Controller->Get<APawn*>(ControllerPawnOff) = SavedControllerPawn;
 		Bot.Pawn->Get<AController*>(PawnControllerOff) = SavedPawnController;
 
+		if (gEquipDiagLogs)
+			LOG_INFO(LogBots, "[equip-diag] EquipViaController done, currentWeapon=0x{:x}",
+				__int64(Bot.Pawn->GetCurrentWeapon()));
+
 		return true;
 	}
 
-	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
+	static bool TryEquipOnce(CustomBot& Bot, UFortItem* Item)
 	{
 		if (!Item)
 			return false;
@@ -140,33 +155,68 @@ namespace CustomBotInventory
 		auto Verify = [&]() -> bool {
 			auto* W = Bot.IsReady() ? Bot.Pawn->GetCurrentWeapon() : nullptr;
 			auto* D = W ? W->GetWeaponData() : nullptr;
-			return D && D == ItemDefinition;
+
+			bool bOk = D && D == ItemDefinition;
+
+			if (gEquipDiagLogs)
+				LOG_INFO(LogBots, "[equip-diag] Verify wanted={} current={} weapon=0x{:x} -> {}",
+					ItemDefinition->GetPathName().c_str(),
+					D ? D->GetPathName().c_str() : "NONE",
+					__int64(W), bOk);
+
+			return bOk;
 		};
 
-		if (EquipViaController(Bot, Entry->GetItemGuid()))
-		{
-			if (Verify())
-			{
-				Bot.bPendingEquip = false;
-				return true;
-			}
-
-			Bot.bPendingEquip = true;
-			Bot.PendingEquipGuid = Entry->GetItemGuid();
-			Bot.PendingEquipTime = UGameplayStatics::GetTimeSeconds(GetWorld());
-			return false;
-		}
-
+		const FGuid Guid = Entry->GetItemGuid();
 		auto* WeaponDef = Cast<UFortWeaponItemDefinition>(ItemDefinition);
 
 		if (WeaponDef && Bot.Pawn)
-			Bot.Pawn->EquipWeaponDefinition(WeaponDef, Entry->GetItemGuid());
+		{
+			if (gEquipDiagLogs)
+				LOG_INFO(LogBots, "[equip-diag] direct EquipWeaponDefinition def={} guid={}",
+					WeaponDef->GetPathName().c_str(), GuidStr(Guid));
 
-		if (Verify())
+			auto* EquippedWeapon = Bot.Pawn->EquipWeaponDefinition(WeaponDef, Guid);
+
+			if (gEquipDiagLogs)
+				LOG_INFO(LogBots, "[equip-diag] direct equip returned weapon=0x{:x} ({}) currentWeapon=0x{:x}",
+					__int64(EquippedWeapon),
+					EquippedWeapon ? EquippedWeapon->GetPathName().c_str() : "NULL",
+					__int64(Bot.IsReady() ? Bot.Pawn->GetCurrentWeapon() : nullptr));
+
+			if (Verify())
+				return true;
+		}
+
+		if (EquipViaController(Bot, Guid))
+		{
+			if (Verify())
+				return true;
+		}
+		else if (gEquipDiagLogs)
+		{
+			LOG_WARN(LogBots, "[equip-diag] EquipViaController unavailable (ready={} ctrl=0x{:x} pawn=0x{:x})",
+				Bot.IsReady(), __int64(Bot.Controller), __int64(Bot.Pawn));
+		}
+
+		return false;
+	}
+
+	static bool EquipItem(CustomBot& Bot, UFortItem* Item)
+	{
+		if (!Item)
+			return false;
+
+		if (TryEquipOnce(Bot, Item))
 		{
 			Bot.bPendingEquip = false;
 			return true;
 		}
+
+		auto* Entry = Item->GetItemEntry();
+
+		if (!Entry)
+			return false;
 
 		Bot.bPendingEquip = true;
 		Bot.PendingEquipGuid = Entry->GetItemGuid();
@@ -206,12 +256,31 @@ namespace CustomBotInventory
 
 		Bot.PendingEquipTime = Now;
 
-		EquipViaController(Bot, Bot.PendingEquipGuid);
+		if (gEquipDiagLogs)
+			LOG_INFO(LogBots, "[equip-diag] retry attempt {} guid={} wanted={}",
+				Bot.PendingEquipAttempts + 1, GuidStr(Bot.PendingEquipGuid),
+				Pending->GetItemEntry()->GetItemDefinition()->GetPathName().c_str());
+
+		if (TryEquipOnce(Bot, Pending))
+		{
+			Bot.bPendingEquip = false;
+			Bot.PendingEquipAttempts = 0;
+			return;
+		}
 
 		if (++Bot.PendingEquipAttempts >= 2)
 		{
-			LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED: wanted={}",
-				Pending->GetItemEntry()->GetItemDefinition()->GetPathName().c_str());
+			if (gEquipDiagLogs)
+			{
+				LOG_WARN(LogBots, "[equip-diag] EquipItem FAILED after {} retries: wanted={}",
+					Bot.PendingEquipAttempts,
+					Pending->GetItemEntry()->GetItemDefinition()->GetPathName().c_str());
+			}
+			else
+			{
+				LOG_WARN(LogBots, "[CustomBot] EquipItem FAILED: wanted={}",
+					Pending->GetItemEntry()->GetItemDefinition()->GetPathName().c_str());
+			}
 			Bot.bPendingEquip = false;
 			Bot.PendingEquipAttempts = 0;
 		}

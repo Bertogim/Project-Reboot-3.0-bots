@@ -9,6 +9,8 @@
 #include <memcury.h>
 #include "GameplayStatics.h"
 #include "gui.h"
+#include "CustomBot/CustomBotSpawner.h"
+#include "CustomBot/CustomBotInventory.h"
 
 void AFortPickup::TossPickup(FVector FinalLocation, AFortPawn* ItemOwner, int OverrideMaxStackCount, bool bToss, uint8 InPickupSourceTypeFlags, uint8 InPickupSpawnSource)
 {
@@ -315,8 +317,32 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 
 	auto PlayerController = Cast<AFortPlayerController>(Pawn->GetController());
 
+	bool bIsBotPawn = false;
+
+	if (!PlayerController)
+	{
+		for (const auto& B : CustomBotSpawner::AllCustomBots)
+		{
+			if (B.Pawn == Pawn)
+			{
+				PlayerController = B.Controller;
+				bIsBotPawn = true;
+				break;
+			}
+		}
+	}
+
 	if (!PlayerController)
 		return CompletePickupAnimationOriginal(Pickup);
+
+	if (CustomBotInventory::gEquipDiagLogs && bIsBotPawn)
+	{
+		auto Entry = Pickup->GetPrimaryPickupItemEntry();
+		auto Def = Entry ? Entry->GetItemDefinition() : nullptr;
+		LOG_INFO(LogBots, "[equip-diag] pickup-complete: pawn=0x{:x} cnt={} def={}",
+			__int64(Pawn), Entry ? Entry->GetCount() : -1,
+			Def ? Def->GetPathName().c_str() : "NULL");
+	}
 
 	auto WorldInventory = PlayerController->GetWorldInventory();
 

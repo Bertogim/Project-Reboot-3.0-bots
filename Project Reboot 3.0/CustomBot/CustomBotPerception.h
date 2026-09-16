@@ -317,7 +317,15 @@ namespace CustomBotPerception
 
 	static AFortPickup* UsablePickup(AFortPickup* Pickup)
 	{
-		return (Pickup && !Pickup->IsActorBeingDestroyed()) ? Pickup : nullptr;
+		if (!Pickup || Pickup->IsActorBeingDestroyed())
+			return nullptr;
+
+		static auto bPickedUpOffset = Pickup->GetOffset("bPickedUp", false);
+
+		if (bPickedUpOffset != -1 && Pickup->Get<bool>(bPickedUpOffset))
+			return nullptr;
+
+		return Pickup;
 	}
 
 	static void RefreshLootCache(CustomBot& Bot, float Radius)

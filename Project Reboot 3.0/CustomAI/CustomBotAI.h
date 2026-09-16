@@ -119,6 +119,7 @@ struct BotAIContext
 	float ScanTimer = 0.0f;
 	float ReactTimer = 0.0f;
 	float ActionTimer = 0.0f;
+	float EquipRetryTimer = 0.0f;
 
 	float LastDamageTime = -999.0f;
 	float CheckedHealth = -1.0f;

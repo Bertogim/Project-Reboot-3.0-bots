@@ -24,6 +24,7 @@
 #include "gui.h"
 #include "FortAthenaMutator_InventoryOverride.h"
 #include "FortAthenaMutator_TDM.h"
+#include "CustomBot/CustomBotSpawner.h"
 
 void AFortPlayerController::ClientReportDamagedResourceBuilding(ABuildingSMActor* BuildingSMActor, EFortResourceType PotentialResourceType, int PotentialResourceCount, bool bDestroyed, bool bJustHitWeakspot)
 {
@@ -306,20 +307,56 @@ void AFortPlayerController::ServerExecuteInventoryItemHook(AFortPlayerController
 	auto WorldInventory = PlayerController->GetWorldInventory();
 
 	if (!WorldInventory)
+	{
+		if (CustomBotInventory::gEquipDiagLogs)
+			LOG_WARN(LogBots, "[equip-diag] hook: WorldInventory null guid={}",
+				CustomBotInventory::GuidStr(ItemGuid));
 		return;
+	}
 
 	auto ItemInstance = WorldInventory->FindItemInstance(ItemGuid);
 	auto Pawn = Cast<AFortPlayerPawn>(PlayerController->GetPawn());
 
+	bool bIsBotPawn = false;
+	if (Pawn)
+	{
+		for (const auto& B : CustomBotSpawner::AllCustomBots)
+		{
+			if (B.Pawn == Pawn)
+			{
+				bIsBotPawn = true;
+				break;
+			}
+		}
+	}
+
+	if (CustomBotInventory::gEquipDiagLogs && bIsBotPawn)
+	{
+		LOG_INFO(LogBots, "[equip-diag] hook: guid={} controller=0x{:x} pawn=0x{:x} WorldInventory=0x{:x}",
+			CustomBotInventory::GuidStr(ItemGuid), __int64(PlayerController), __int64(Pawn), __int64(WorldInventory));
+		LOG_INFO(LogBots, "[equip-diag] hook: ItemInstance={} botPawn={}",
+			ItemInstance ? "FOUND" : "NULL", bIsBotPawn);
+	}
+
 	if (!ItemInstance || !Pawn)
+	{
+		if (CustomBotInventory::gEquipDiagLogs && bIsBotPawn)
+			LOG_WARN(LogBots, "[equip-diag] hook: abort (ItemInstance={} Pawn={})",
+				ItemInstance ? "ok" : "null", Pawn ? "ok" : "null");
 		return;
+	}
 
 	FGuid OldGuid = Pawn->GetCurrentWeapon() ? Pawn->GetCurrentWeapon()->GetItemEntryGuid() : FGuid(-1, -1, -1, -1);
 	UFortItem* OldInstance = OldGuid == FGuid(-1, -1, -1, -1) ? nullptr : WorldInventory->FindItemInstance(OldGuid);
 	auto ItemDefinition = ItemInstance->GetItemEntry()->GetItemDefinition();
 
 	if (!ItemDefinition)
+	{
+		if (CustomBotInventory::gEquipDiagLogs && bIsBotPawn)
+			LOG_WARN(LogBots, "[equip-diag] hook: ItemDefinition null guid={}",
+				CustomBotInventory::GuidStr(ItemGuid));
 		return;
+	}
 
 	// LOG_INFO(LogDev, "Equipping ItemDefinition: {}", ItemDefinition->GetFullName());
 
@@ -370,6 +407,10 @@ void AFortPlayerController::ServerExecuteInventoryItemHook(AFortPlayerController
 
 	if (auto Weapon = Pawn->EquipWeaponDefinition((UFortWeaponItemDefinition*)ItemDefinition, ItemInstance->GetItemEntry()->GetItemGuid()))
 	{
+		if (CustomBotInventory::gEquipDiagLogs && bIsBotPawn)
+			LOG_INFO(LogBots, "[equip-diag] hook: EquipWeaponDefinition returned weapon=0x{:x} {}",
+				__int64(Weapon), Weapon->GetFullName().c_str());
+
 		if (Engine_Version < 420)
 		{
 			static auto FortWeap_BuildingToolClass = FindObject<UClass>(L"/Script/FortniteGame.FortWeap_BuildingTool");
@@ -416,6 +457,11 @@ void AFortPlayerController::ServerExecuteInventoryItemHook(AFortPlayerController
 
 			BuildingTool->ProcessEvent(OnRep_DefaultMetadataFn, &OldMetadata);
 		}
+	}
+	else if (CustomBotInventory::gEquipDiagLogs && bIsBotPawn)
+	{
+		LOG_WARN(LogBots, "[equip-diag] hook: EquipWeaponDefinition returned NULL for {}",
+			ItemDefinition->GetFullName().c_str());
 	}
 }
 

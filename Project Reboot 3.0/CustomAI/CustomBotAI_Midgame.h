@@ -961,6 +961,14 @@ namespace CustomBotAIMidgame
 		if (bWarmup)
 			RefillLobbyHP(Bot);
 
+		if (Bot.bLootJustLanded)
+		{
+			// El item acaba de aterrizar en el inventario (pickup async).
+			// Aprovechar para equipar el mejor arma disponible ahora.
+			Bot.bLootJustLanded = false;
+			EquipBestWeapon(Bot);
+		}
+
 		if (Ctx.DecisionTimer <= 0.0f || Ctx.State == EBotState::Dead)
 		{
 			Decide(Bot, Ctx);

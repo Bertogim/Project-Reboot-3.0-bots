@@ -82,7 +82,7 @@ wait_vm_idle() {
 }
 
 # --- 1. paquete local ---------------------------------------------------------
-T="$(mktemp -d /tmp/opencode/reboot-build.XXXXXX)"
+T="$(mktemp -d /tmp/reboot-build.XXXXXX)"
 trap 'rm -rf "$T"' EXIT
 
 say "empaquetando codigo (proyecto + vendor)..."

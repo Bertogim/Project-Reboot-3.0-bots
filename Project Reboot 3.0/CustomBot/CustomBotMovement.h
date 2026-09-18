@@ -179,11 +179,18 @@ namespace CustomBotMovement
 		if (!bInAircraft && !Bot.bInAirPhase)
 		{
 			static int ModeOff = CME->GetOffset("MovementMode", false);
-			if (ModeOff != -1 && *(int*)(CMEAddr + ModeOff) != 1)
+			if (ModeOff != -1)
 			{
-				*(int*)(CMEAddr + ModeOff) = 1;
-				static int GroundOff = CME->GetOffset("GroundMovementMode", false);
-				if (GroundOff != -1) *(int*)(CMEAddr + GroundOff) = 1;
+				uint8_t CurMode = CME->Get<uint8_t>(ModeOff);
+				// No forzar Walking si ya esta Walking (1) o si esta en el aire
+				// (3 Falling, p. ej. tras un salto): sobrescribirlo cada tick
+				// cancelaba la parabola del salto justo al empezar.
+				if (CurMode != 1 && CurMode != 3)
+				{
+					CME->Get<uint8_t>(ModeOff) = 1;
+					static int GroundOff = CME->GetOffset("GroundMovementMode", false);
+					if (GroundOff != -1) CME->Get<uint8_t>(GroundOff) = 1;
+				}
 			}
 
 			if (Bot.GroundGravityZ != 0.0f || Bot.GroundGravityScale != 0.0f)
@@ -467,6 +474,9 @@ namespace CustomBotMovement
 			Bot.PathWaypoints = std::move(Points);
 	}
 
+	static void UpdateHop(CustomBot& Bot);
+	static void Jump(CustomBot& Bot);
+
 	static void UpdateMovement(CustomBot& Bot)
 	{
 		if (!Bot.IsReady() || !Bot.Pawn)
@@ -534,6 +544,8 @@ namespace CustomBotMovement
 						: CBT::EMovementState::Moving;
 
 					ApplyMoveVelocity(Bot, Target, Bot.MoveRequest.MoveSpeed, true);
+
+					UpdateHop(Bot);
 					return;
 				}
 			}
@@ -544,6 +556,50 @@ namespace CustomBotMovement
 			: CBT::EMovementState::Moving;
 
 		ApplyMoveVelocity(Bot, Destination, Bot.MoveRequest.MoveSpeed, true);
+
+		UpdateHop(Bot);
+	}
+
+	// Salto visible periodico mientras el bot se mueve (recupera el hop del
+	// viejo bots.h cada ~3-6s). Solo salta si esta en el suelo (walking), fuera
+	// de la fase de paracaidas/avion y sin estar disparando.
+	static void UpdateHop(CustomBot& Bot)
+	{
+		if (!Bot.IsReady() || !Bot.Pawn || Bot.bInAirPhase)
+			return;
+
+		if (Bot.bFiringWeapon)
+			return;
+
+		if (Bot.MoveState != CBT::EMovementState::Moving)
+			return;
+
+		if (Bot.UnstickStage != 0)
+			return;
+
+		if (Bot.PlayerState->IsInAircraft())
+			return;
+
+		auto CharacterMovement = GetCharacterMovement(Bot);
+
+		if (!CharacterMovement)
+			return;
+
+		static int ModeOff = CharacterMovement->GetOffset("MovementMode", false);
+		if (ModeOff == -1 || CharacterMovement->Get<uint8_t>(ModeOff) != 1)
+			return;
+
+		float Now = CustomBotPerception::BotTime();
+
+		if (Bot.NextHopTime < 0.0f)
+			Bot.NextHopTime = Now + 1.0f + (float)(std::rand() % 3000) / 1000.0f;
+
+		if (Now < Bot.NextHopTime)
+			return;
+
+		Bot.NextHopTime = Now + 3.0f + (float)(std::rand() % 3000) / 1000.0f;
+
+		Jump(Bot);
 	}
 
 	static void MoveForward(CustomBot& Bot, float Value)

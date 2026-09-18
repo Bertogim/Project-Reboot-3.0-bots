@@ -318,13 +318,15 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 	auto PlayerController = Cast<AFortPlayerController>(Pawn->GetController());
 
 	bool bIsBotPawn = false;
+	CustomBot* BotOwner = nullptr;
 
 	if (!PlayerController)
 	{
-		for (const auto& B : CustomBotSpawner::AllCustomBots)
+		for (auto& B : CustomBotSpawner::AllCustomBots)
 		{
 			if (B.Pawn == Pawn)
 			{
+				BotOwner = &B;
 				PlayerController = B.Controller;
 				bIsBotPawn = true;
 				break;
@@ -557,6 +559,9 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 	{
 		PlayerController->ClientEquipItem(NewSwappedItem, true);
 	}
+
+	if (BotOwner)
+		BotOwner->bLootJustLanded = true;
 
 	return CompletePickupAnimationOriginal(Pickup);
 }

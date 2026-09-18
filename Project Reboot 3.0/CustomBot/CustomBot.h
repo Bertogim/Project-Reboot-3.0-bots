@@ -28,6 +28,8 @@ public:
 
 	bool bDeathHandled = false;
 
+	bool bLootJustLanded = false;
+
 	CBT::FMoveRequest MoveRequest;
 	CBT::EMovementState MoveState = CBT::EMovementState::Idle;
 	bool bMoveRequestActive = false;
@@ -45,6 +47,8 @@ public:
 	unsigned RestorePSCounter = 0;
 
 	bool bInAirPhase = false;
+
+	float NextHopTime = -1.0f;
 
 	float GroundGravityZ = 0.0f;
 	float GroundGravityScale = 0.0f;

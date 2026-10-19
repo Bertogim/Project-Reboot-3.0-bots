@@ -1,5 +1,7 @@
 #pragma once
 
+#include "globals.h"
+
 #include "FortAthenaMutator.h"
 
 class AFortAthenaMutator_Bots : public AFortAthenaMutator // AFortAthenaMutator_SpawningPolicyEQS
@@ -7,6 +9,9 @@ class AFortAthenaMutator_Bots : public AFortAthenaMutator // AFortAthenaMutator_
 public:
 	class AFortPlayerPawnAthena* SpawnBot(UClass* BotPawnClass, AActor* InSpawnLocator, const FVector& InSpawnLocation, const FRotator& InSpawnRotation, bool bSnapToGround)
 	{
+		if (!Globals::bBotsEnabled)
+			return nullptr;
+
 		static auto SpawnBotFn = FindObject<UFunction>(L"/Script/FortniteGame.FortAthenaMutator_Bots.SpawnBot");
 
 		struct

@@ -8,6 +8,8 @@
 
 namespace Globals
 {
+	// Interruptor maestro: bots desactivados, codigo conservado.
+	inline constexpr bool bBotsEnabled = false;
 	extern inline bool bCreative = false;
 	extern inline bool bGoingToPlayEvent = false;
 	extern inline bool bEnableAGIDs = true;
@@ -35,8 +37,27 @@ extern inline int NumToSubtractFromSquadId = 0; // I think 2?
 // --- Host / Matchmaker state -------------------------------------------------
 extern inline bool bPregameLocked = true;          // pregame waits for Matchmaker StartMatch (or local Force Start)
 extern inline bool bStartPregame = false;          // set by StartMatch / Force Start: starts the 10s pregame countdown
-extern inline int busCountdownSeconds = 300;       // bus warmup countdown; whittled to 90s once the first player joins
-extern inline int lastPlayerCountForBus = 0;       // 0 = no real player joined yet; 1 = first player seen (90s armed)
+extern inline int busCountdownSeconds = 0;         // 0 = waiting without an automatic countdown
+extern inline int lastPlayerCountForBus = 0;       // 1 = population-based countdown armed
+// El tick del servidor consume las solicitudes de la interfaz.
+extern inline std::atomic<int> HostCountdownDurationSeconds{300};
+extern inline std::atomic<int> HostCountdownRemainingSeconds{300};
+extern inline std::atomic<bool> HostCountdownPaused{false};
+extern inline std::atomic<int> HostCountdownResetRequest{-1};
+extern inline std::atomic<int> HostCountdownPauseRequest{0}; // 1=pausar, 2=reanudar
+
+extern inline int InitialPopulationSafeZonePhase = 0;
+extern inline bool bPopulationSafeZonePending = false;
+
+static inline int GetPopulationSafeZonePhase(int Players)
+{
+	// Total de participantes: humanos + bots.
+	if (Players <= 0) return 0;
+	if (Players <= 10) return 2;
+	if (Players <= 20) return 2;
+	if (Players < 50) return 1;
+	return 0;
+}
 extern inline bool bHostConnected = false;         // true once the backend accepted /lawin/hosts/register
 extern inline std::string hostState = "idle";      // idle -> starting -> inGame
 extern inline std::unordered_map<std::string, int> HostTeamAssignments = {}; // accountId -> teamIndex (from StartMatch)

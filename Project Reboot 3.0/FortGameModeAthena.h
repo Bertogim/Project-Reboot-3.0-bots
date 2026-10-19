@@ -279,6 +279,8 @@ public:
 	void SkipAircraft();
 	void PauseSafeZone(bool bPaused = true);
 	void StartAircraftPhase();
+	static inline void (*PopulationStartAircraftOriginal)(AFortGameModeAthena*, bool) = nullptr;
+	static void StartAircraftPhaseHook(AFortGameModeAthena* GameMode, bool bDoNotSpawnAircraft);
 
 	static void OverrideBattleBus(AFortGameStateAthena* GameState, UObject* OverrideBattleBusSkin);
 	static void OverrideSupplyDrop(AFortGameStateAthena* GameState, UClass* OverrideSupplyDropBusClass);
@@ -295,16 +297,15 @@ public:
 extern inline bool bVictoryRoyaleLogged = false;
 extern inline bool bVictoryRoyaleHadTeams = false;
 
-// Variable buena NUESTRA para el launcher: counts the alive teams from our own
-// AlivePlayers list (real players + custom bots) grouped by team index. Cuando
-// queda exactamente 1 equipo vivo y la partida ya empezo, emite:
-//   [VictoryRoyale] 1
-// que es lo unico que el launcher debe leer para saber que ya se hizo el
-// victory royal (reemplaza la heuristica "TeamsLeft: 1" del engine, que no
-// cuenta los equipos sinteticos de los bots custom).
+// Senal al launcher solo con victoria confirmada por el motor:
+// hubo rivales, queda exactamente un equipo, fase EndGame y puesto 1.
+// Un jugador solo, cero equipos o un contador TeamsLeft no bastan.
 static inline void CheckVictoryRoyale()
 {
-	auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
+	auto World = GetWorld();
+	if (!World)
+		return;
+	auto GameMode = Cast<AFortGameModeAthena>(World->GetGameMode());
 	if (!GameMode)
 		return;
 
@@ -317,10 +318,15 @@ static inline void CheckVictoryRoyale()
 	if (GameState->GetGamePhase() <= EAthenaGamePhase::Warmup)
 	{
 		bVictoryRoyaleHadTeams = false;
+		bVictoryRoyaleLogged = false;
 		return;
 	}
 
+	if (bVictoryRoyaleLogged)
+		return;
+
 	std::set<uint8> AliveTeams;
+	bool bHasConfirmedWinner = false;
 
 	auto& Alive = GameMode->GetAlivePlayers();
 
@@ -334,7 +340,12 @@ static inline void CheckVictoryRoyale()
 		auto PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState());
 
 		if (PlayerState)
+		{
 			AliveTeams.insert(PlayerState->GetTeamIndex());
+			// Solo puesto 1 explicito; 0/no asignado no es victoria.
+			if (PlayerState->GetPlace() == 1)
+				bHasConfirmedWinner = true;
+		}
 	}
 
 	// Todavia hay 2+ equipos en partida: se asegura de que alguna vez hubo
@@ -342,11 +353,14 @@ static inline void CheckVictoryRoyale()
 	if (AliveTeams.size() >= 2)
 	{
 		bVictoryRoyaleHadTeams = true;
-		bVictoryRoyaleLogged = false;
 		return;
 	}
 
-	if (bVictoryRoyaleHadTeams && AliveTeams.size() <= 1 && !bVictoryRoyaleLogged)
+	// No basta con quedar solo: el motor debe haber terminado la partida
+	// y asignado puesto 1 a un integrante del unico equipo superviviente.
+	if (bVictoryRoyaleHadTeams && AliveTeams.size() == 1 &&
+		GameState->GetGamePhase() == EAthenaGamePhase::EndGame &&
+		bHasConfirmedWinner && !bVictoryRoyaleLogged)
 	{
 		bVictoryRoyaleLogged = true;
 		LOG_INFO(LogDev, "[VictoryRoyale] 1");

@@ -982,8 +982,13 @@ static inline uint64 FindSetZoneToIndex() // actually StartNewSafeZonePhase
 		return Memcury::Scanner::FindPattern("48 89 5C 24 ? 48 89 74 24 ? 57 48 83 EC 70 48 8B B9 ? ? ? ? 33 DB 0F 29 74 24 ? 48 8B F1 48 85 FF 74 2C E8").Get(); // 1.11
 	if (Engine_Version == 420)
 		return Memcury::Scanner::FindPattern("E8 ? ? ? ? EB 31 80 B9 ? ? ? ? ?").RelativeOffset(1).Get(); // 3.5
-	if (Fortnite_Version >= 7 && Fortnite_Version <= 8) // intentional, 8.00 has the same pattern.
-		return Memcury::Scanner::FindPattern("E9 ? ? ? ? 48 8B C1 40 38 B9").RelativeOffset(1).Get(); // 7.40
+	if (Fortnite_Version >= 7 && Fortnite_Version <= 8)
+	{
+		auto Pattern = Memcury::Scanner::FindPattern("E9 ? ? ? ? 48 8B C1 40 38 B9");
+		if (Pattern.Get())
+			return Pattern.RelativeOffset(1).Get();
+		LOG_WARN(LogDev, "[population-zone] SetZoneToIndex pattern missing; trying existing string-reference fallback.");
+	}
 	if (Engine_Version == 423)
 		return Memcury::Scanner::FindPattern("E8 ? ? ? ? EB 42 80 BA").RelativeOffset(1).Get(); // doesnt work
 

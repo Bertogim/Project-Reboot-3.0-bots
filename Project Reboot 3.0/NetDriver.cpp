@@ -1,3 +1,4 @@
+#include "globals.h"
 #include "NetDriver.h"
 
 #include "reboot.h"
@@ -74,9 +75,23 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 		Bots::Tick();
 	} */
 
+	// Mantener el contador activo cuando ReadyToStartMatch deja de ejecutarse.
+	if (Globals::bStartedListening)
+	{
+		auto World = GetWorld();
+		if (World && World->GetNetDriver() == NetDriver)
+		{
+			auto GameMode = Cast<AFortGameModeAthena>(World->GetGameMode());
+			TickPopulationBusCountdown(GameMode);
+			// Observar rivales y confirmar victoria aunque llegue tras la eliminacion.
+			CheckVictoryRoyale();
+		}
+	}
+
 	// Sistema "Season 3" (independiente del antiguo): tickea los custom bots
 	// (movimiento persistente de MoveTo, y en Parte 2 las decisiones de IA).
-	CustomBotSpawner::TickAll();
+	if (Globals::bBotsEnabled)
+		CustomBotSpawner::TickAll();
 
 	// A/B del leak: la replicación MANUAL (ademas del original) era la config
 	// verificado-funcional para que los clientes terminen de cargar. En este

@@ -208,9 +208,25 @@ namespace CustomBotMovement
 			static int bSimGravityDisabledOff = Bot.Pawn->GetOffset("bSimGravityDisabled", false);
 			static int bDisableMovementOff = Bot.Pawn->GetOffset("bDisableMovementAndTurnInPlace", false);
 			static int bAllowMovementOff = Bot.Pawn->GetOffset("bAllowMovement", false);
-			if (bSimGravityDisabledOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bSimGravityDisabledOff) = 0;
-			if (bDisableMovementOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bDisableMovementOff) = 0;
-			if (bAllowMovementOff != -1) *(uint8_t*)(__int64(Bot.Pawn) + bAllowMovementOff) = 1;
+			static auto SimGravityProp = Bot.Pawn->GetProperty("bSimGravityDisabled", false);
+			static auto DisableMovementProp = Bot.Pawn->GetProperty("bDisableMovementAndTurnInPlace", false);
+			static auto AllowMovementProp = Bot.Pawn->GetProperty("bAllowMovement", false);
+			if (SimGravityProp && bSimGravityDisabledOff != -1)
+				Bot.Pawn->SetBitfieldValue(bSimGravityDisabledOff, GetFieldMask(SimGravityProp), false);
+			if (DisableMovementProp && bDisableMovementOff != -1)
+				Bot.Pawn->SetBitfieldValue(bDisableMovementOff, GetFieldMask(DisableMovementProp), false);
+			if (AllowMovementProp && bAllowMovementOff != -1)
+				Bot.Pawn->SetBitfieldValue(bAllowMovementOff, GetFieldMask(AllowMovementProp), true);
+
+			static bool bLoggedMasks = false;
+			if (!bLoggedMasks)
+			{
+				bLoggedMasks = true;
+				LOG_INFO(LogBots, "[bot-action-diag] pawn flags: gravity off={} mask={} disable off={} mask={} allow off={} mask={}",
+					bSimGravityDisabledOff, SimGravityProp ? (int)GetFieldMask(SimGravityProp) : -1,
+					bDisableMovementOff, DisableMovementProp ? (int)GetFieldMask(DisableMovementProp) : -1,
+					bAllowMovementOff, AllowMovementProp ? (int)GetFieldMask(AllowMovementProp) : -1);
+			}
 		}
 
 		{
@@ -233,7 +249,7 @@ namespace CustomBotMovement
 			{
 				float ProbeDist = HorizontalDistance(Bot.ProbePrevLoc, Bot.Pawn->GetActorLocation());
 				int ModeOff = CME->GetOffset("MovementMode", false);
-				int Mode = ModeOff != -1 ? *(int*)(CMEAddr + ModeOff) : -1;
+				int Mode = ModeOff != -1 ? (int)CME->Get<uint8_t>(ModeOff) : -1;
 				static auto VelOff = CME->GetOffset("Velocity", false);
 				float VZ = VelOff != -1 ? CME->Get<FVector>(VelOff).Z : 0.0f;
 				LOG_INFO(LogBots, "[CustomBot] [mprobe] moved {:.0f}u / 60 ticks (mode={}, vz={:.1f})",
@@ -351,7 +367,9 @@ namespace CustomBotMovement
 		if (CharacterMovement)
 		{
 			static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
-			CharacterMovement->Get<FVector>(VelocityOffset) = FVector{};
+			FVector& Velocity = CharacterMovement->Get<FVector>(VelocityOffset);
+			Velocity.X = 0.0f;
+			Velocity.Y = 0.0f;
 		}
 
 		Bot.bMoveRequestActive = false;
@@ -493,7 +511,9 @@ namespace CustomBotMovement
 			if (auto CharacterMovement = GetCharacterMovement(Bot))
 			{
 				static auto VelocityOffset = CharacterMovement->GetOffset("Velocity");
-				CharacterMovement->Get<FVector>(VelocityOffset) = FVector{};
+				FVector& Velocity = CharacterMovement->Get<FVector>(VelocityOffset);
+				Velocity.X = 0.0f;
+				Velocity.Y = 0.0f;
 			}
 
 			ClearPath(Bot);
@@ -565,6 +585,20 @@ namespace CustomBotMovement
 	// de la fase de paracaidas/avion y sin estar disparando.
 	static void UpdateHop(CustomBot& Bot)
 	{
+		static float NextDiagnosticTime = -1.0f;
+		float DiagnosticNow = CustomBotPerception::BotTime();
+		if (Bot.IsReady() && DiagnosticNow >= NextDiagnosticTime)
+		{
+			NextDiagnosticTime = DiagnosticNow + 10.0f;
+			auto* CM = GetCharacterMovement(Bot);
+			int ModeOffset = CM ? CM->GetOffset("MovementMode", false) : -1;
+			LOG_INFO(LogBots, "[bot-action-diag] hop pawn=0x{:x} air={} firing={} moveState={} unstick={} aircraft={} mode={} now={:.2f} next={:.2f}",
+				__int64(Bot.Pawn), Bot.bInAirPhase, Bot.bFiringWeapon,
+				(int)Bot.MoveState, Bot.UnstickStage, Bot.PlayerState->IsInAircraft(),
+				CM && ModeOffset != -1 ? (int)CM->Get<uint8_t>(ModeOffset) : -1,
+				DiagnosticNow, Bot.NextHopTime);
+		}
+
 		if (!Bot.IsReady() || !Bot.Pawn || Bot.bInAirPhase)
 			return;
 
@@ -638,6 +672,19 @@ namespace CustomBotMovement
 
 		static auto LaunchCharacterFn = FindObject<UFunction>(L"/Script/Engine.Character.LaunchCharacter");
 
+		static unsigned JumpDiagnosticCount = 0;
+		bool bLogJump = JumpDiagnosticCount++ < 20;
+		if (bLogJump)
+		{
+			int ModeOffset = CharacterMovement ? CharacterMovement->GetOffset("MovementMode", false) : -1;
+			int VelocityOffset = CharacterMovement ? CharacterMovement->GetOffset("Velocity", false) : -1;
+			LOG_INFO(LogBots, "[bot-action-diag] jump BEFORE pawn=0x{:x} launchFn={} mode={} z={:.1f} vz={:.1f}",
+				__int64(Bot.Pawn), LaunchCharacterFn != nullptr,
+				CharacterMovement && ModeOffset != -1 ? (int)CharacterMovement->Get<uint8_t>(ModeOffset) : -1,
+				Bot.Pawn->GetActorLocation().Z,
+				CharacterMovement && VelocityOffset != -1 ? CharacterMovement->Get<FVector>(VelocityOffset).Z : 0.0f);
+		}
+
 		if (LaunchCharacterFn)
 		{
 			struct
@@ -664,6 +711,16 @@ namespace CustomBotMovement
 		static auto JumpFn = FindObject<UFunction>(L"/Script/Engine.Character.Jump");
 		if (JumpFn)
 			Bot.Pawn->ProcessEvent(JumpFn);
+
+		if (bLogJump && CharacterMovement)
+		{
+			int PendingOffset = CharacterMovement->GetOffset("PendingLaunchVelocity", false);
+			int VelocityOffset = CharacterMovement->GetOffset("Velocity", false);
+			LOG_INFO(LogBots, "[bot-action-diag] jump AFTER pawn=0x{:x} jumpFn={} pendingOff={} pendingZ={:.1f} vz={:.1f}",
+				__int64(Bot.Pawn), JumpFn != nullptr, PendingOffset,
+				PendingOffset != -1 ? CharacterMovement->Get<FVector>(PendingOffset).Z : 0.0f,
+				VelocityOffset != -1 ? CharacterMovement->Get<FVector>(VelocityOffset).Z : 0.0f);
+		}
 	}
 
 	static void Launch(CustomBot& Bot, const FVector& LaunchVelocity, bool bXYOverride = false, bool bZOverride = false)

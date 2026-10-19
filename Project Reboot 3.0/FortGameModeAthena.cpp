@@ -181,24 +181,41 @@ void AFortGameModeAthena::HandleSpawnRateForActorClass(UClass* ActorClass, float
 
 void AFortGameModeAthena::StartAircraftPhase()
 {
-	if (hostState != "inGame")
+	// La direccion nativa queda interceptada tambien para los inicios del motor.
+	if (Addresses::StartAircraftPhase && Fortnite_Version < 24)
 	{
-		hostState = "inGame";
-		bStartedBus = true;
-		LOG_INFO(LogMatchmaker, "[HostClient] Bus/Aircraft started, hostState = inGame (joinable=false).");
-	}
-
-	if (Addresses::StartAircraftPhase 
-		&& Fortnite_Version < 24 // ig they load or sometrhing gg
-		) 
-	{
-		static void (*StartAircraftPhaseOriginal)(AFortGameModeAthena*, bool bDoNotSpawnAircraft) = decltype(StartAircraftPhaseOriginal)(Addresses::StartAircraftPhase);
-		StartAircraftPhaseOriginal(this, false); // love the double negative Fortnite
+		auto NativeStart = reinterpret_cast<void(*)(AFortGameModeAthena*, bool)>(Addresses::StartAircraftPhase);
+		NativeStart(this, false);
 	}
 	else
 	{
 		UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"startaircraft", nullptr);
 	}
+}
+
+void AFortGameModeAthena::StartAircraftPhaseHook(AFortGameModeAthena* GameMode, bool bDoNotSpawnAircraft)
+{
+	if (!GameMode || !PopulationStartAircraftOriginal)
+		return;
+
+	auto GameState = GameMode->GetGameStateAthena();
+	AmountOfPlayersWhenBusStart = GameState ? GameState->GetPlayersLeft() : 0;
+	InitialPopulationSafeZonePhase = !Globals::bCreative && !Globals::bGoingToPlayEvent
+		? GetPopulationSafeZonePhase(AmountOfPlayersWhenBusStart) : 0;
+	bPopulationSafeZonePending = InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load();
+	const bool bPopulationStart = bPopulationSafeZonePending;
+
+	bStartedBus = true;
+	busCountdownSeconds = 0;
+	hostState = "inGame";
+	LOG_INFO(LogMatchmaker, "[population-zone] Native aircraft start: participants={}, target phase={}, pending={}, no aircraft={}.",
+		AmountOfPlayersWhenBusStart, InitialPopulationSafeZonePhase,
+		bPopulationSafeZonePending, bDoNotSpawnAircraft);
+
+	PopulationStartAircraftOriginal(GameMode, bDoNotSpawnAircraft);
+
+	if (bPopulationStart && !bDoNotSpawnAircraft)
+		LateGameThread(reinterpret_cast<LPVOID>(1));
 }
 
 void AFortGameModeAthena::OverrideBattleBus(AFortGameStateAthena* GameState, UObject* OverrideBattleBusSkin)
@@ -303,10 +320,39 @@ void AFortGameModeAthena::OnAircraftEnteredDropZoneHook(AFortGameModeAthena* Gam
 
 	OnAircraftEnteredDropZoneOriginal(GameModeAthena, Aircraft);
 
-	if (Globals::bLateGame.load())
+	if (Globals::bLateGame.load() || InitialPopulationSafeZonePhase > 0)
 	{
 		auto GameState = Cast<AFortGameStateAthena>(GameModeAthena->GetGameState());
+		if (!GameState)
+			return;
+
 		GameState->SkipAircraft();
+
+		// El motor puede fijar la espera inicial durante SkipAircraft.
+		// Adelantarla despues de esa llamada, solo para arranques por poblacion.
+		const bool PreserveNativeWait = AmountOfPlayersWhenBusStart >= 11
+			&& AmountOfPlayersWhenBusStart <= 20;
+		if (PreserveNativeWait && InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load())
+		{
+			LOG_INFO(LogZone, "[population-zone] Native initial storm delay preserved: participants={}, target phase={}.",
+				AmountOfPlayersWhenBusStart, InitialPopulationSafeZonePhase);
+		}
+		if (InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load() && !PreserveNativeWait)
+		{
+			const auto StartTimeOffset = GameState->GetOffset("SafeZonesStartTime", false);
+			if (StartTimeOffset != -1)
+			{
+				const float Now = GameState->GetServerWorldTimeSeconds();
+				GameState->Get<float>(StartTimeOffset) = Now - 1.f;
+				GameState->ForceNetUpdate();
+				LOG_INFO(LogZone, "[population-zone] Initial storm delay removed: target phase={}, world time={}.",
+					InitialPopulationSafeZonePhase, Now);
+			}
+			else
+			{
+				LOG_WARN(LogZone, "[population-zone] SafeZonesStartTime unavailable; initial delay unchanged.");
+			}
+		}
 	}
 }
 
@@ -794,13 +840,10 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		float Duration = bShouldSkipAircraft ? 0 : 100000;
 		float EarlyDuration = Duration;
 
-		if (!Globals::bAutoRestart)
-		{
-			busCountdownSeconds = 300;
-			lastPlayerCountForBus = 0;
-			Duration = busCountdownSeconds;
-			EarlyDuration = Duration;
-		}
+		busCountdownSeconds = 0;
+		lastPlayerCountForBus = 0;
+		InitialPopulationSafeZonePhase = 0;
+		bPopulationSafeZonePending = false;
 
 		float TimeSeconds = GameState->GetServerWorldTimeSeconds(); // UGameplayStatics::GetTimeSeconds(GetWorld());
 
@@ -972,7 +1015,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 		AllRebootVans.FreeEngine();
 
-		if (AmountOfBotsToSpawn != 0)
+		if (Globals::bBotsEnabled && AmountOfBotsToSpawn != 0)
 		{
 			Bots::SpawnBotsAtPlayerStarts(AmountOfBotsToSpawn);
 		}
@@ -1062,51 +1105,12 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		Globals::bStartedListening = true;
 	}
 
-	bool Ret = false;
-
-	if (Engine_Version >= 424) // returning true is stripped on c2+
-	{
-		if (!Globals::bAutoRestart)
-		{
-			static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
-
-			if (GameState->GetServerWorldTimeSeconds() >= GameState->Get<float>(WarmupCountdownEndTimeOffset))
-				Ret = true;
-		}
-		else
-		{
-			static auto WarmupRequiredPlayerCountOffset = GameMode->GetOffset("WarmupRequiredPlayerCount");
-
-			if (GameState->GetPlayersLeft() >= GameMode->Get<int>(WarmupRequiredPlayerCountOffset))
-			{
-				// if (MapInfo)
-				{
-					// static auto FlightInfosOffset = MapInfo->GetOffset("FlightInfos");
-
-					// if (MapInfo->Get<TArray<__int64>>(FlightInfosOffset).ArrayNum > 0)
-					{
-						// LOG_INFO(LogDev, "ReadyToStartMatch Return Address: 0x{:x}", __int64(_ReturnAddress()) - __int64(GetModuleHandleW(0)));
-						Ret = true;
-					}
-				}
-			}
-		}
-	}
-
-	if (!Ret)
-		Ret = Athena_ReadyToStartMatchOriginal(GameMode);
+	// Permitir que el motor inicie el warmup y cree los pawns sin esperar al bus.
+	TickPopulationBusCountdown(GameMode);
+	bool Ret = Athena_ReadyToStartMatchOriginal(GameMode);
 
 	if (Ret)
-	{
-		if (!Globals::bAutoRestart && !bStartedBus)
-		{
-			StartBus(0);
-
-			LOG_INFO(LogMatchmaker, "[HostClient] Bus started, hostState = inGame.");
-		}
-
-		LOG_INFO(LogDev, "Athena_ReadyToStartMatchOriginal RET!"); // if u dont see this, not good
-	}
+		LOG_INFO(LogDev, "Athena_ReadyToStartMatchOriginal RET!");
 
 	return Ret;
 }
@@ -1354,51 +1358,8 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 	static auto CurrentPlaylistDataOffset = GameState->GetOffset("CurrentPlaylistData", false);
 	auto CurrentPlaylist = CurrentPlaylistDataOffset == -1 && Fortnite_Version < 6 ? nullptr : GameState->GetCurrentPlaylist();
 
-	// Matchmaker host flow: as soon as the first real (non-bot) player joins,
-	// arm a fixed 1:30 bus countdown that is not shortened by more players.
-	if (!Globals::bAutoRestart && Globals::bInitializedPlaylist && !bStartedBus && lastPlayerCountForBus == 0)
-	{
-		auto NewPlayerState = ((APlayerController*)NewPlayerActor)->GetPlayerState();
-
-		if (NewPlayerState && !NewPlayerState->IsBot())
-		{
-			lastPlayerCountForBus = 1;
-			busCountdownSeconds = 90;
-			SetWarmupCountdown(GameMode, GameState, 90.f);
-
-			LOG_INFO(LogMatchmaker, "[HostClient] First player joined, starting 1:30 bus countdown.");
-		}
-	}
-
+	// Automatic countdown is managed by readiness ticks, including bot population.
 	LOG_INFO(LogPlayer, "HandleStartingNewPlayer!");
-
-	if (Globals::bAutoRestart)
-	{
-		static int LastNum123 = 15;
-
-		if (GetWorld()->GetNetDriver()->GetClientConnections().Num() >= NumRequiredPlayersToStart && LastNum123 != Globals::AmountOfListens)
-		{
-			LastNum123 = Globals::AmountOfListens;
-
-			float Duration = AutoBusStartSeconds;
-			float EarlyDuration = Duration;
-
-			float TimeSeconds = UGameplayStatics::GetTimeSeconds(GetWorld());
-
-			static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
-			static auto WarmupCountdownStartTimeOffset = GameState->GetOffset("WarmupCountdownStartTime");
-			static auto WarmupCountdownDurationOffset = GameMode->GetOffset("WarmupCountdownDuration");
-			static auto WarmupEarlyCountdownDurationOffset = GameMode->GetOffset("WarmupEarlyCountdownDuration");
-
-			GameState->Get<float>(WarmupCountdownEndTimeOffset) = TimeSeconds + Duration;
-			GameMode->Get<float>(WarmupCountdownDurationOffset) = Duration;
-
-			GameState->Get<float>(WarmupCountdownStartTimeOffset) = TimeSeconds;
-			GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = EarlyDuration;
-
-			LOG_INFO(LogDev, "Auto starting bus in {}.", AutoBusStartSeconds);
-		}
-	}
 
 	static auto XPComponentOffset = NewPlayerActor->GetOffset("XPComponent", false);
 

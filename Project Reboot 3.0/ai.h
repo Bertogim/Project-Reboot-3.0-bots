@@ -1,5 +1,7 @@
 #pragma once
 
+#include "globals.h"
+
 #include "reboot.h"
 #include "Actor.h"
 #include "SoftObjectPath.h"
@@ -108,6 +110,9 @@ static bool SetNavigationSystem(AAthenaNavSystemConfigOverride* NavSystemOverrid
 
 static inline AFortAthenaMutator_Bots* SpawnBotMutator() //sets up all the classes for phoebe
 {
+	if (!Globals::bBotsEnabled)
+		return nullptr;
+
    auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
    auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 
@@ -140,6 +145,9 @@ static inline AFortAthenaMutator_Bots* SpawnBotMutator() //sets up all the class
 
 static void SetupServerBotManager()
 {
+	if (!Globals::bBotsEnabled)
+		return;
+
     auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
     auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 

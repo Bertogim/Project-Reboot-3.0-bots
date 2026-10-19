@@ -82,9 +82,10 @@ namespace CustomBotCombat
 
 	static bool FireWeapon(CustomBot& Bot)
 	{
-		Bot.bFiringWeapon = true;
+		bool bActivated = ActivatePrimaryAbility(Bot);
+		Bot.bFiringWeapon = bActivated;
 		Bot.bFiringWeaponTime = UGameplayStatics::GetTimeSeconds(GetWorld());
-		return ActivatePrimaryAbility(Bot);
+		return bActivated;
 	}
 
 	static bool ActivatePrimaryAbility(CustomBot& Bot)
@@ -110,11 +111,53 @@ namespace CustomBotCombat
 		auto& Spec = Items.At(0, FGameplayAbilitySpec::GetStructSize());
 		FGameplayAbilitySpecHandle Handle = Spec.GetHandle();
 
-		PadHex18 PredictionKey{};
-		UObject* OutInstancedAbility = nullptr;
+		static unsigned DiagnosticCount = 0;
+		bool bLog = DiagnosticCount++ < 12;
+		if (bLog)
+		{
+			auto* Weapon = CustomBotInventory::GetCurrentWeapon(Bot);
+			LOG_INFO(LogBots, "[bot-action-diag] fire pawn=0x{:x} weapon={} pendingEquip={} specs={}",
+				__int64(Bot.Pawn), Weapon ? Weapon->GetPathName().c_str() : "NONE",
+				Bot.bPendingEquip, Items.Num());
+			for (int i = 0; i < Items.Num() && i < 64; ++i)
+			{
+				auto& Candidate = Items.At(i, FGameplayAbilitySpec::GetStructSize());
+				auto* Ability = Candidate.GetAbility();
+				LOG_INFO(LogBots, "[bot-action-diag] spec index={} handle={} ability={}",
+					i, Candidate.GetHandle().Handle,
+					Ability ? Ability->GetPathName().c_str() : "NONE");
+			}
+		}
 
-		return UAbilitySystemComponent::InternalTryActivateAbilityOriginal2(
-			ASC, Handle, PredictionKey, &OutInstancedAbility, nullptr, nullptr);
+		if (!Spec.GetAbility())
+			return false;
+
+		static auto PredictionStruct = FindObject<UStruct>(L"/Script/GameplayAbilities.PredictionKey");
+		if (!PredictionStruct)
+			return false;
+
+		int PredictionSize = PredictionStruct->GetPropertiesSize();
+		UObject* OutInstancedAbility = nullptr;
+		bool bActivated = false;
+
+		if (PredictionSize == 0x10 && UAbilitySystemComponent::InternalTryActivateAbilityOriginal)
+		{
+			PadHex10 PredictionKey{};
+			bActivated = UAbilitySystemComponent::InternalTryActivateAbilityOriginal(
+				ASC, Handle, PredictionKey, &OutInstancedAbility, nullptr, nullptr);
+		}
+		else if (PredictionSize == 0x18 && UAbilitySystemComponent::InternalTryActivateAbilityOriginal2)
+		{
+			PadHex18 PredictionKey{};
+			bActivated = UAbilitySystemComponent::InternalTryActivateAbilityOriginal2(
+				ASC, Handle, PredictionKey, &OutInstancedAbility, nullptr, nullptr);
+		}
+
+		if (bLog)
+			LOG_INFO(LogBots, "[bot-action-diag] activation index=0 ability={} predictionSize={} result={}",
+				Spec.GetAbility()->GetPathName().c_str(), PredictionSize, bActivated);
+
+		return bActivated;
 	}
 
 	static void StopFiring(CustomBot& Bot)
@@ -127,7 +170,8 @@ namespace CustomBotCombat
 			return;
 
 		static auto ServerReleaseWeaponAbilityFn = FindObject<UFunction>(L"/Script/FortniteGame.FortWeapon.ServerReleaseWeaponAbility");
-		Weapon->ProcessEvent(ServerReleaseWeaponAbilityFn);
+		if (ServerReleaseWeaponAbilityFn)
+			Weapon->ProcessEvent(ServerReleaseWeaponAbilityFn);
 	}
 
 	static void AimAt(CustomBot& Bot, const FVector& TargetLocation)

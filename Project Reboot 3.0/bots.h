@@ -1,5 +1,7 @@
 #pragma once
 
+#include "globals.h"
+
 #include "FortGameModeAthena.h"
 #include "OnlineReplStructs.h"
 #include "FortAthenaAIBotController.h"
@@ -54,6 +56,9 @@ public:
 
 	static void InitializeBotClasses()
 	{
+		if (!Globals::bBotsEnabled)
+			return;
+
 		static auto BlueprintGeneratedClassClass = FindObject<UClass>(L"/Script/Engine.BlueprintGeneratedClass");
 
 		if (!ShouldUseAIBotController())
@@ -341,6 +346,9 @@ namespace Bots
 {
 	static AController* SpawnBot(FTransform SpawnTransform, AActor* InSpawnLocator)
 	{
+		if (!Globals::bBotsEnabled)
+			return nullptr;
+
 		auto playerBot = PlayerBot();
 		playerBot.Initialize(SpawnTransform, InSpawnLocator);
 		AllPlayerBotsToTick.push_back(playerBot);
@@ -388,6 +396,9 @@ namespace Bots
 
 	static void Tick()
 	{
+		if (!Globals::bBotsEnabled)
+			return;
+
 		if (AllPlayerBotsToTick.size() == 0)
 			return;
 

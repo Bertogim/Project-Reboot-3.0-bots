@@ -92,7 +92,7 @@ extern inline int SecondsUntilTravel = 3;
 extern inline bool bSwitchedInitialLevel = false;
 extern inline bool bIsInAutoRestart = false;
 extern inline float AutoBusStartSeconds = 60;
-extern inline int NumRequiredPlayersToStart = 2;
+extern inline int NumRequiredPlayersToStart = 76;
 extern inline bool bDebugPrintLooting = false;
 extern inline bool bDebugPrintFloorLoot = false;
 extern inline bool bDebugPrintSwapping = false;
@@ -143,26 +143,93 @@ static inline void SetWarmupCountdown(AFortGameModeAthena* GameMode, AFortGameSt
 	GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = Seconds;
 }
 
-static inline void StartBus(int Seconds)
+inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 {
-	auto GameMode = (AFortGameModeAthena*)GetWorld()->GetGameMode();
-
-	if (!GameMode)
+	if (!GameMode || !Globals::bStartedListening ||
+		Globals::bCreative || Globals::bGoingToPlayEvent)
 		return;
 
 	auto GameState = GameMode->GetGameStateAthena();
+	if (!GameState || GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
+		return;
 
+	static int CountdownRestart = -1;
+	static float Remaining = 300.f;
+	static float LastTime = 0.f;
+	const float Now = GameState->GetServerWorldTimeSeconds();
+
+	if (CountdownRestart != AmountOfRestarts)
+	{
+		CountdownRestart = AmountOfRestarts;
+		Remaining = (float)HostCountdownDurationSeconds.load();
+		LastTime = Now;
+		HostCountdownPaused.store(false);
+		HostCountdownPauseRequest.store(0);
+		LOG_INFO(LogMatchmaker, "[host-countdown] Automatic countdown started: {} seconds.", (int)Remaining);
+	}
+
+	const float Delta = Now >= LastTime ? Now - LastTime : 0.f;
+	LastTime = Now;
+	if (!HostCountdownPaused.load())
+		Remaining = Remaining > Delta ? Remaining - Delta : 0.f;
+
+	const int ResetSeconds = HostCountdownResetRequest.exchange(-1);
+	if (ResetSeconds >= 0)
+	{
+		Remaining = (float)ResetSeconds;
+		LOG_INFO(LogMatchmaker, "[host-countdown] Remaining time reset to {} seconds.", ResetSeconds);
+	}
+
+	const int PauseRequest = HostCountdownPauseRequest.exchange(0);
+	if (PauseRequest != 0)
+	{
+		HostCountdownPaused.store(PauseRequest == 1);
+		LOG_INFO(LogMatchmaker, "[host-countdown] Paused={}, remaining={} seconds.",
+			HostCountdownPaused.load(), (int)Remaining);
+	}
+
+	const int DisplaySeconds = (int)Remaining + (Remaining > (float)(int)Remaining ? 1 : 0);
+	HostCountdownRemainingSeconds.store(DisplaySeconds);
+	busCountdownSeconds = DisplaySeconds;
+
+	// No usar el plazo nativo como contador: podria despegar durante una pausa.
+	// La entrada al warmup y la creacion de pawns siguen siendo nativas.
+	SetWarmupCountdown(GameMode, GameState, 100000.f);
+
+	if (!HostCountdownPaused.load() && Remaining <= 0.f &&
+		GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
+	{
+		LOG_INFO(LogMatchmaker, "[host-countdown] Countdown finished; starting aircraft.");
+		GameMode->StartAircraftPhase();
+	}
+}
+
+static inline void StartBus(int Seconds)
+{
+	auto World = GetWorld();
+	if (!World)
+		return;
+	auto GameMode = Cast<AFortGameModeAthena>(World->GetGameMode());
+	if (!GameMode)
+		return;
+	auto GameState = GameMode->GetGameStateAthena();
 	if (!GameState)
 		return;
 
+	if (!Globals::bCreative && !Globals::bGoingToPlayEvent)
+	{
+		HostCountdownResetRequest.store(Seconds > 0 ? Seconds : 0);
+		HostCountdownPauseRequest.store(2);
+		LOG_INFO(LogMatchmaker, "[host-countdown] Manual countdown requested: {} seconds.", Seconds);
+		return;
+	}
+
+	// Mantener el comportamiento anterior de Creativo y eventos.
 	bStartedBus = true;
 	hostState = "inGame";
 	AmountOfPlayersWhenBusStart = GameState->GetPlayersLeft();
-
-	if (Seconds > 0)
-		SetWarmupCountdown(GameMode, GameState, (float)Seconds);
-
-	LOG_INFO(LogMatchmaker, "[HostClient] Bus starting ({}s countdown), {} players.", Seconds, AmountOfPlayersWhenBusStart);
+	busCountdownSeconds = Seconds;
+	SetWarmupCountdown(GameMode, GameState, (float)Seconds);
 }
 
 static inline bool HasAnyCalendarModification()
@@ -200,8 +267,14 @@ static inline void Restart() // todo move?
 	bPregameLocked = true;
 	hostState = "idle";
 	HostTeamAssignments.clear();
-	busCountdownSeconds = 300;
+	HostCountdownResetRequest.store(-1);
+	HostCountdownPauseRequest.store(0);
+	HostCountdownPaused.store(false);
+	HostCountdownRemainingSeconds.store(HostCountdownDurationSeconds.load());
+	busCountdownSeconds = 0;
 	lastPlayerCountForBus = 0;
+	InitialPopulationSafeZonePhase = 0;
+	bPopulationSafeZonePending = false;
 	bVictoryRoyaleLogged = false;
 	bVictoryRoyaleHadTeams = false;
 	AmountOfRestarts++;
@@ -615,8 +688,10 @@ static inline void PlayerTabs()
 	}
 }
 
-static inline DWORD WINAPI LateGameThread(LPVOID)
+static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 {
+	// Population starts reuse only the aircraft placement, not the lategame loadout.
+	const bool bPopulationStart = Parameter != nullptr;
 	float MaxTickRate = 30;
 
 	auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
@@ -654,27 +729,57 @@ static inline DWORD WINAPI LateGameThread(LPVOID)
 		return Aircrafts;
 	};
 
-	GameMode->StartAircraftPhase();
+	if (!bPopulationStart)
+		GameMode->StartAircraftPhase();
 
+	int AircraftWaitTicks = 0;
 	while (GetAircrafts().size() <= 0)
 	{
+		if (bPopulationStart)
+		{
+			LOG_WARN(LogLateGame, "Native start produced no aircraft; keeping normal route.");
+			return 0;
+		}
+		if (++AircraftWaitTicks > 900)
+		{
+			LOG_WARN(LogLateGame, "Aircraft placement timed out.");
+			return 0;
+		}
 		Sleep(1000 / MaxTickRate);
 	}
 
-	static auto SafeZoneLocationsOffset = GameMode->GetOffset("SafeZoneLocations");
+	static auto SafeZoneLocationsOffset = GameMode->GetOffset("SafeZoneLocations", false);
+	if (SafeZoneLocationsOffset == -1)
+	{
+		LOG_WARN(LogLateGame, "SafeZoneLocations unavailable; keeping normal aircraft route.");
+		return 0;
+	}
 	const TArray<FVector>& SafeZoneLocations = GameMode->Get<TArray<FVector>>(SafeZoneLocationsOffset);
+	const int ZoneIndex = bPopulationStart ? InitialPopulationSafeZonePhase : 3;
 
-	if (SafeZoneLocations.Num() < 4)
+	if (ZoneIndex < 0 || ZoneIndex >= SafeZoneLocations.Num())
 	{
 		LOG_WARN(LogLateGame, "Unable to find SafeZoneLocation! Disabling lategame..");
-		SetIsLategame(false);
+		if (!bPopulationStart)
+			SetIsLategame(false);
 		return 0;
 	}
 
-	const FVector ZoneCenterLocation = SafeZoneLocations.at(3);
+	const FVector ZoneCenterLocation = SafeZoneLocations.at(ZoneIndex);
 
 	FVector LocationToStartAircraft = ZoneCenterLocation;
-	LocationToStartAircraft.Z += 10000;
+	float AircraftHeightAboveZone = 10000.f;
+	if (bPopulationStart)
+	{
+		const int Participants = AmountOfPlayersWhenBusStart;
+		if (Participants > 0 && Participants <= 10)
+			AircraftHeightAboveZone = 20000.f;
+		else if (Participants <= 20 && Participants > 10)
+			AircraftHeightAboveZone = 25000.f;
+		else if (Participants > 20 && Participants < 50)
+			AircraftHeightAboveZone = 30000.f;
+	}
+	LocationToStartAircraft.Z += AircraftHeightAboveZone;
 
 	auto Aircrafts = GetAircrafts();
 
@@ -706,6 +811,15 @@ static inline DWORD WINAPI LateGameThread(LPVOID)
 			FlightInfo->GetFlightStartLocation() = LocationToStartAircraft;
 			FlightInfo->GetTimeTillDropStart() = DropStartTime;
 		}
+	}
+
+	if (bPopulationStart)
+	{
+		LOG_INFO(LogLateGame, "Population bus positioned over safe zone phase {}.", ZoneIndex);
+		LOG_INFO(LogLateGame, "[population-bus] Participants={}, phase={}, height above zone={}, final Z={}.",
+			AmountOfPlayersWhenBusStart, ZoneIndex,
+			AircraftHeightAboveZone, LocationToStartAircraft.Z);
+		return 0;
 	}
 
 	while (GameState->GetGamePhase() != EAthenaGamePhase::Aircraft)
@@ -950,6 +1064,54 @@ static inline void MainUI()
 			ImGui::Text(std::format("State: {}", hostState).c_str());
 			ImGui::Text(std::format("Playlist: {}", PlaylistName).c_str());
 			ImGui::Text(std::format("Bus countdown: {}s", busCountdownSeconds).c_str());
+
+			// Seguir el tiempo real salvo mientras el usuario edita el slider.
+			static int CountdownSliderSeconds = 300;
+			static bool CountdownSliderWasActive = false;
+			static bool CountdownSliderEdited = false;
+			if (!CountdownSliderWasActive)
+			{
+				const int PendingSeconds = HostCountdownResetRequest.load();
+				CountdownSliderSeconds = PendingSeconds >= 0
+					? PendingSeconds : HostCountdownRemainingSeconds.load();
+			}
+
+			const bool CountdownSliderChanged = ImGui::SliderInt(
+				"Segundos para iniciar la partida", &CountdownSliderSeconds, 0, 900);
+			const bool CountdownSliderActive = ImGui::IsItemActive();
+			if (CountdownSliderChanged)
+				CountdownSliderEdited = true;
+
+			// Enviar una sola solicitud al terminar el arrastre o la edicion.
+			if (!CountdownSliderActive && CountdownSliderEdited)
+			{
+				HostCountdownResetRequest.store(CountdownSliderSeconds);
+				CountdownSliderEdited = false;
+			}
+			CountdownSliderWasActive = CountdownSliderActive;
+
+			auto CountdownWorld = GetWorld();
+			auto CountdownMode = CountdownWorld
+				? Cast<AFortGameModeAthena>(CountdownWorld->GetGameMode()) : nullptr;
+			auto CountdownState = CountdownMode ? CountdownMode->GetGameStateAthena() : nullptr;
+			const bool CountdownAvailable = CountdownState && Globals::bStartedListening &&
+				!Globals::bCreative && !Globals::bGoingToPlayEvent &&
+				CountdownState->GetGamePhase() <= EAthenaGamePhase::Warmup;
+			if (CountdownAvailable)
+			{
+				const bool Paused = HostCountdownPaused.load();
+				if (ImGui::Button(Paused ? "Reanudar contador" : "Pausar contador"))
+					HostCountdownPauseRequest.store(Paused ? 2 : 1);
+				ImGui::SameLine();
+				if (ImGui::Button("Reiniciar contador"))
+					HostCountdownResetRequest.store(HostCountdownDurationSeconds.load());
+				ImGui::TextUnformatted(Paused ? "Contador pausado" : "Contador en marcha");
+			}
+			else
+			{
+				ImGui::TextUnformatted("Contador disponible antes del bus, en Battle Royale.");
+			}
+
 			ImGui::Text(std::format("Pregame locked: {} (bStartPregame: {})", bPregameLocked, bStartPregame).c_str());
 			ImGui::Text(std::format("Pre-assigned teams: {}", HostTeamAssignments.size()).c_str());
 
@@ -1387,6 +1549,10 @@ static inline void MainUI()
 				}
 			}
 		}
+		else if (Tab == BOTS_TAB && !Globals::bBotsEnabled)
+		{
+			ImGui::Text("Bots disabled in this build.");
+		}
 		else if (Tab == BOTS_TAB)
 		{
 			ImGui::Text("Custom Bot Manager");
@@ -1600,7 +1766,8 @@ static inline void MainUI()
 
 			ImGui::Checkbox("Handle Death", &bHandleDeath);
 			ImGui::Checkbox("Fill Vending Machines", &Globals::bFillVendingMachines);
-			ImGui::Checkbox("Enable Bot Tick", &bEnableBotTick);
+			if (Globals::bBotsEnabled)
+				ImGui::Checkbox("Enable Bot Tick", &bEnableBotTick);
 			ImGui::Checkbox("Enable Rebooting", &bEnableRebooting);
 			ImGui::Checkbox("Enable Combine Pickup", &bEnableCombinePickup);
 			ImGui::Checkbox("Exclude unhandled", &bExcludeUnhandled);
@@ -1789,6 +1956,11 @@ static inline void MainUI()
 
 static inline void PregameUI()
 {
+	// No consultar playlists cacheadas mientras el motor cambia de mapa.
+	// La carga/GC puede invalidar los UObject usados por esta pantalla.
+	if (bStartPregame || bSwitchedInitialLevel)
+		return;
+
 	StaticUI();
 
 	ImGui::Separator();

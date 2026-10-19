@@ -24,6 +24,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # --- config (plantilla o real, entorno por encima) ----------------------------
+# Preserve explicit environment overrides when loading the configuration.
+declare -A VM_ENV_OVERRIDES=()
+for key in VM_NAME VM_USER VM_PASS VM_BUILD_DIR VM_SRC_DIR VM_OUT_DIR VM_MAX_WAIT; do
+    if [[ -v "$key" ]]; then VM_ENV_OVERRIDES["$key"]="${!key}"; fi
+done
 CFG=""
 if [ -f "$SCRIPT_DIR/vm-config.env" ]; then CFG="$SCRIPT_DIR/vm-config.env"; fi
 if [ -f "$SCRIPT_DIR/vm-config.env.example" ]; then CFG="${CFG:-$SCRIPT_DIR/vm-config.env.example}"; fi
@@ -31,6 +36,11 @@ if [ -n "$CFG" ]; then
     # shellcheck disable=SC1090
     set -a; source "$CFG"; set +a
 fi
+
+for key in "${!VM_ENV_OVERRIDES[@]}"; do
+    printf -v "$key" '%s' "${VM_ENV_OVERRIDES[$key]}"
+    export "$key"
+done
 
 VM_NAME="${VM_NAME:-Windows lite}"
 VM_USER="${VM_USER:-admin}"
@@ -59,18 +69,48 @@ case "${1:-}" in
     --help|-h) usage ;;
 esac
 
-for c in VBoxManage tar gzip sed grep; do command -v "$c" >/dev/null || { echo "Falta: $c" >&2; exit 1; }; done
+for c in VBoxManage tar gzip sed grep python3; do command -v "$c" >/dev/null || { echo "Falta: $c" >&2; exit 1; }; done
 
 # --- helpers -----------------------------------------------------------------
 say() { printf '[build-vm-internal] %s\n' "$*" >&2; }
 die() { say "ERROR: $*" >&2; exit 1; }
 [ -n "$VM_PASS" ] || die "VM_PASS vacio; revisa vm-config.env"
 
-guest_ps() {   # guest_ps <poder-shell-command>
+guest_ps() {
+    # Some Guest Additions versions cannot return stdout/stderr.
+    # Retrieve PowerShell output through a guest file instead.
+    local local_output remote_output encoded rc
+    local_output="$(mktemp)"
+    remote_output="C:/Windows/Temp/reboot-ps-$(basename "$local_output").txt"
+    encoded="$(python3 - "$1" "$remote_output" <<'PYCODE'
+import base64
+import sys
+command, output = sys.argv[1:]
+script = "& {\n" + command + "\n} *> '" + output.replace("'", "''") + "'"
+print(base64.b64encode(script.encode("utf-16le")).decode("ascii"))
+PYCODE
+)"
+    rc=0
     VBoxManage guestcontrol "$VM_NAME" run \
-        --exe "$PS_EXE" \
-        --username "$VM_USER" --password "$VM_PASS" \
-        -- -NoProfile -Command "$1"
+        --exe "$PS_EXE" --username "$VM_USER" --password "$VM_PASS" \
+        --timeout 120000 \
+        -- "$PS_EXE" -NoProfile -EncodedCommand "$encoded" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        VBoxManage guestcontrol "$VM_NAME" copyfrom \
+            --username "$VM_USER" --password "$VM_PASS" \
+            "$remote_output" "$local_output" >/dev/null 2>&1 || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+        python3 - "$local_output" <<'PYCODE'
+from pathlib import Path
+import sys
+raw = Path(sys.argv[1]).read_bytes()
+encoding = "utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+sys.stdout.write(raw.decode(encoding, errors="replace"))
+PYCODE
+    fi
+    rm -f "$local_output"
+    return "$rc"
 }
 
 vm_ok() {

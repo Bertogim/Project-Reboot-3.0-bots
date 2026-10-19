@@ -1,3 +1,4 @@
+#include "globals.h"
 #include "FortServerBotManagerAthena.h"
 #include "bots.h"
 #include "ai.h"
@@ -6,6 +7,9 @@
 AFortPlayerPawnAthena* UFortServerBotManagerAthena::SpawnBotHook(UFortServerBotManagerAthena* BotManager, FVector& InSpawnLocation, FRotator& InSpawnRotation,
 	UFortAthenaAIBotCustomizationData* InBotData, FFortAthenaAIBotRunTimeCustomizationData& InRuntimeBotData)
 {
+	if (!Globals::bBotsEnabled)
+		return nullptr;
+
 	LOG_INFO(LogBots, "SpawnBotHook!");
 
 	if (__int64(_ReturnAddress()) == SpawnBotRet()) {

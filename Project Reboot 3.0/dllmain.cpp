@@ -1793,7 +1793,26 @@ DWORD WINAPI Main(LPVOID)
     Hooking::MinHook::Hook(Memcury::Scanner(ServerRemoveInventoryItemFunctionCallBeginFunctionAddr).GetAs<PVOID>(), UFortInventoryInterface::RemoveInventoryItemHook);
    
     // if (Fortnite_Version >= 13)
-    Hooking::MinHook::Hook((PVOID)Addresses::SetZoneToIndex, (PVOID)SetZoneToIndexHook, (PVOID*)&SetZoneToIndexOriginal);
+    // Interceptar tambien el despegue automatico del motor.
+    if (Addresses::StartAircraftPhase && Fortnite_Version < 24)
+    {
+        Hooking::MinHook::Hook((PVOID)Addresses::StartAircraftPhase,
+            (PVOID)AFortGameModeAthena::StartAircraftPhaseHook,
+            (PVOID*)&AFortGameModeAthena::PopulationStartAircraftOriginal);
+    }
+    else
+    {
+        LOG_WARN(LogHook, "[population-zone] Native aircraft hook unavailable for this build.");
+    }
+
+    if (Addresses::SetZoneToIndex)
+    {
+        Hooking::MinHook::Hook((PVOID)Addresses::SetZoneToIndex, (PVOID)SetZoneToIndexHook, (PVOID*)&SetZoneToIndexOriginal);
+    }
+    else
+    {
+        LOG_WARN(LogHook, "[population-zone] SetZoneToIndex unresolved; zone hook not installed.");
+    }
     Hooking::MinHook::Hook((PVOID)Addresses::EnterAircraft, (PVOID)AFortPlayerControllerAthena::EnterAircraftHook, (PVOID*)&AFortPlayerControllerAthena::EnterAircraftOriginal);
 
     AddVehicleHook();

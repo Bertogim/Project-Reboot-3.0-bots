@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../globals.h"
+
 
 #include <atomic>
 
@@ -163,12 +165,18 @@ namespace CustomBotManager
 
 	static void QueueSpawnBots(int Count)
 	{
+		if (!Globals::bBotsEnabled)
+			return;
+
 		PendingSpawnCount += Count;
 		LOG_INFO(LogBots, "[BotManager] Queued {} bot spawn(s) (pending={})", Count, (int)PendingSpawnCount);
 	}
 
 	static void QueueFillTo100()
 	{
+		if (!Globals::bBotsEnabled)
+			return;
+
 		bPendingFillTo100 = true;
 		LOG_INFO(LogBots, "[BotManager] Queued FillTo100");
 	}
@@ -308,6 +316,9 @@ namespace CustomBotManager
 
 	static CustomBot* SpawnBotAt(const FVector& Location, const FRotator& Rotation)
 	{
+		if (!Globals::bBotsEnabled)
+			return nullptr;
+
 		CustomBot* Bot = nullptr;
 
 		FTransform SpawnTransform{};
@@ -358,6 +369,9 @@ namespace CustomBotManager
 
 	static int SpawnBots(int Count)
 	{
+		if (!Globals::bBotsEnabled)
+			return 0;
+
 		int Spawned = 0;
 
 		for (int i = 0; i < Count; ++i)
@@ -409,6 +423,9 @@ namespace CustomBotManager
 
 	static int FillTo100()
 	{
+		if (!Globals::bBotsEnabled)
+			return 0;
+
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 
 		if (!GameState)
@@ -429,6 +446,9 @@ namespace CustomBotManager
 
 	static void ProcessPendingOps()
 	{
+		if (!Globals::bBotsEnabled)
+			return;
+
 		if (bPendingRemoveAll.exchange(false))
 		{
 			RemoveAllBots();

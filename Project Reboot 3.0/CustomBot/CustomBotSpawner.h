@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../globals.h"
+
 #include "CustomBot.h"
 
 #include "CustomBotMovement.h"
@@ -169,6 +171,9 @@ namespace CustomBotSpawner
 
 	static void TickAll()
 	{
+		if (!Globals::bBotsEnabled)
+			return;
+
 		static unsigned TickAllCounter = 0;
 		unsigned tc = ++TickAllCounter;
 
@@ -601,6 +606,9 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 
 	static CustomBot* SpawnCustomBot(const FTransform& SpawnTransform, AActor* InSpawnLocator)
 	{
+		if (!Globals::bBotsEnabled)
+			return nullptr;
+
 		SpawnCtx Ctx;
 		Ctx.Transform = SpawnTransform;
 		Ctx.Locator = InSpawnLocator;

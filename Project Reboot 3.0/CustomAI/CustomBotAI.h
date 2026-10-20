@@ -302,7 +302,7 @@ namespace CustomBotAI
 		{
 			CustomBotAIMidgame::ResetToMatchHP(Bot);
 
-			Ctx.State = CustomBotAI::IsInAircraftPhase() ? EBotState::InBus : EBotState::Looting;
+			Ctx.State = EBotState::InBus; // TickBus resuelve tambien una expulsion entre ticks.
 			Ctx.bHasLandingPoint = false;
 			Ctx.InBusSince = -1.0f;
 			Bot.bInAirPhase = false;

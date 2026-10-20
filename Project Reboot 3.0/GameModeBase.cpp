@@ -105,6 +105,10 @@ bool AGameModeBase::PlayerCanRestartHook(UObject* Context, FFrame& Stack, bool* 
 
 APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AController* NewPlayer, AActor* StartSpot)
 {
+    if (!GameMode || !NewPlayer || !StartSpot ||
+        GameMode->IsActorBeingDestroyed() || NewPlayer->IsActorBeingDestroyed() ||
+        StartSpot->IsActorBeingDestroyed())
+        return nullptr;
 	LOG_INFO(LogDev, "SpawnDefaultPawnForHook!");
 
 	auto NewPlayerAsAthena = Cast<AFortPlayerControllerAthena>(NewPlayer);
@@ -119,6 +123,11 @@ APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AControll
 
 	static auto PawnClass = FindObject<UClass>(L"/Game/Athena/PlayerPawn_Athena.PlayerPawn_Athena_C");
 	static auto DefaultPawnClassOffset = GameMode->GetOffset("DefaultPawnClass");
+    if (!PawnClass || DefaultPawnClassOffset < 0)
+    {
+        LOG_WARN(LogDev, "[spawn-guard] Pawn class or DefaultPawnClass field unavailable.");
+        return nullptr;
+    }
 	GameMode->Get<UClass*>(DefaultPawnClassOffset) = PawnClass;
 
 #if 1
@@ -131,6 +140,13 @@ APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AControll
 
 	LOG_INFO(LogDev, "Calling SpawnDefaultPawnAtTransformFn!");
 
+    if (!SpawnDefaultPawnAtTransformFn ||
+        SpawnDefaultPawnAtTransformFn->GetPropertiesSize() !=
+            sizeof(AGameModeBase_SpawnDefaultPawnAtTransform_Params))
+    {
+        LOG_WARN(LogDev, "[spawn-guard] Spawn API unavailable or parameter layout mismatch.");
+        return nullptr;
+    }
 	GameMode->ProcessEvent(SpawnDefaultPawnAtTransformFn, &AGameModeBase_SpawnDefaultPawnAtTransform_Params);
 
 	LOG_INFO(LogDev, "Finished SpawnDefaultPawnAtTransformFn!");
@@ -168,7 +184,7 @@ APawn* AGameModeBase::SpawnDefaultPawnForHook(AGameModeBase* GameMode, AControll
 	{
 		auto WorldInventory = NewPlayerAsAthena->GetWorldInventory();
 
-		if (WorldInventory->IsValidLowLevel())
+        if (WorldInventory && WorldInventory->IsValidLowLevel())
 		{
 			if (!WorldInventory->GetPickaxeInstance())
 			{

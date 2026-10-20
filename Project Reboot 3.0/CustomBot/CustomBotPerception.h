@@ -23,6 +23,12 @@ namespace CustomBotPerception
 	static const std::string& CachedPathForDef(UFortItemDefinition* Def)
 	{
 		static std::unordered_map<UFortItemDefinition*, std::string> Cache;
+        static int PathCacheRestart = -1;
+        if (PathCacheRestart != AmountOfRestarts)
+        {
+            Cache.clear();
+            PathCacheRestart = AmountOfRestarts;
+        }
 		static const std::string Empty;
 
 		if (!Def)
@@ -123,13 +129,23 @@ namespace CustomBotPerception
 			return Empty;
 
 		auto& Buckets = SharedBuckets();
+        // Each translation unit owns its static cache. Invalidate lazily by
+        // restart generation before accessing any actors from the old world.
+        static int CacheRestart = -1;
+        if (CacheRestart != AmountOfRestarts)
+        {
+            for (auto& Bucket : Buckets)
+                if (Bucket.Actors.Data) Bucket.Actors.FreeEngine();
+            Buckets.clear();
+            CacheRestart = AmountOfRestarts;
+        }
 		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
 
 		for (auto& Bucket : Buckets)
 		{
 			if (Bucket.Cls == Cls)
 			{
-				if (Bucket.Time < 0.0f || Now - Bucket.Time >= SharedCooldown)
+				if (Bucket.Time < 0.0f || Now < Bucket.Time || Now - Bucket.Time >= SharedCooldown)
 				{
 					if (Bucket.Actors.Num() > 0)
 						Bucket.Actors.FreeEngine();
@@ -164,10 +180,17 @@ namespace CustomBotPerception
 	{
 		static std::vector<CachedChest> Chests;
 		static float LastBuild = -1.0f;
+        static int ChestRestart = -1;
+        if (ChestRestart != AmountOfRestarts)
+        {
+            Chests.clear();
+            LastBuild = -1.0f;
+            ChestRestart = AmountOfRestarts;
+        }
 
 		float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
 
-		if (LastBuild < 0.0f || Now - LastBuild >= SharedCooldown)
+		if (LastBuild < 0.0f || Now < LastBuild || Now - LastBuild >= SharedCooldown)
 		{
 			LastBuild = Now;
 			Chests.clear();

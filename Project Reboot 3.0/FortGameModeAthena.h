@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 
 #include "FortGameModePvPBase.h"
 #include "FortGameStateAthena.h"
@@ -237,6 +238,8 @@ class UFortSupplyDropInfo : public UObject // UDataAsset
 public:
 };
 
+void ApplyHostTeamAssignments(class AFortGameModeAthena* GameMode);
+
 class AFortGameModeAthena : public AFortGameModePvPBase
 {
 public:
@@ -296,73 +299,84 @@ public:
 // Estado compartido (una sola instancia entre todas las TUs, C++17 inline).
 extern inline bool bVictoryRoyaleLogged = false;
 extern inline bool bVictoryRoyaleHadTeams = false;
+inline bool bVictoryRestartPending = false;
+inline std::chrono::steady_clock::time_point VictoryRestartDeadline{};
 
-// Senal al launcher solo con victoria confirmada por el motor:
+// Reinicio interno solo con victoria confirmada por el motor:
 // hubo rivales, queda exactamente un equipo, fase EndGame y puesto 1.
 // Un jugador solo, cero equipos o un contador TeamsLeft no bastan.
 static inline void CheckVictoryRoyale()
 {
-	auto World = GetWorld();
-	if (!World)
-		return;
-	auto GameMode = Cast<AFortGameModeAthena>(World->GetGameMode());
-	if (!GameMode)
-		return;
+    auto World = GetWorld();
+    auto Mode = World ? Cast<AFortGameModeAthena>(World->GetGameMode()) : nullptr;
+    auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+    if (!State) return;
 
-	auto GameState = GameMode->GetGameStateAthena();
-	if (!GameState)
-		return;
+    // MatchState is the engine's match lifecycle. GamePhase may remain at
+    // SafeZones after the engine has already entered WaitingPostMatch.
+    static const int MatchStateOffset = Mode->GetOffset("MatchState", false);
+    const std::string MatchState = MatchStateOffset >= 0
+        ? Mode->Get<FName>(MatchStateOffset).ToString() : "";
+    const bool PostMatch = MatchState == "WaitingPostMatch";
+    const bool Ended = PostMatch || State->GetGamePhase() == EAthenaGamePhase::EndGame;
 
-	// Mientras sigue el warmup no hay victoria; ademas resetea el estado
-	// "hubo mas de un equipo" para que cada partida nueva empiece limpio.
-	if (GameState->GetGamePhase() <= EAthenaGamePhase::Warmup)
-	{
-		bVictoryRoyaleHadTeams = false;
-		bVictoryRoyaleLogged = false;
-		return;
-	}
+    // Once armed, retain the original deadline until Restart resets it.
+    if (bVictoryRoyaleLogged || bVictoryRestartPending) return;
 
-	if (bVictoryRoyaleLogged)
-		return;
+    if (!Ended && State->GetGamePhase() <= EAthenaGamePhase::Warmup)
+    {
+        bVictoryRoyaleHadTeams = false;
+        return;
+    }
 
-	std::set<uint8> AliveTeams;
-	bool bHasConfirmedWinner = false;
+    static const int WinningTeamOffset = State->GetOffset("WinningTeam", false);
+    const int WinningTeam = WinningTeamOffset >= 0
+        ? State->Get<int>(WinningTeamOffset) : -1;
+    bool ConfirmedWinner = WinningTeam >= 3 && WinningTeam <= 102;
 
-	auto& Alive = GameMode->GetAlivePlayers();
+    // GetAlivePlayers can omit the host or be emptied during post-match.
+    // Read placement from the registered PlayerStates instead.
+    static const int PlayerArrayOffset = State->GetOffset("PlayerArray", false);
+    int FirstPlaces = 0;
+    if (PlayerArrayOffset >= 0)
+    {
+        auto& Players = State->Get<TArray<APlayerState*>>(PlayerArrayOffset);
+        if (Players.Data && Players.Num() > 0 && Players.Num() <= 1024)
+        {
+            for (int i = 0; i < Players.Num(); ++i)
+            {
+                auto PS = Cast<AFortPlayerStateAthena>(Players.at(i));
+                if (!PS) continue;
+                const int PlaceOffset = PS->GetOffset("Place", false);
+                if (PlaceOffset >= 0 && PS->Get<int>(PlaceOffset) == 1)
+                    ++FirstPlaces;
+            }
+        }
+    }
+    ConfirmedWinner = ConfirmedWinner || FirstPlaces > 0;
 
-	for (int i = 0; i < Alive.Num(); ++i)
-	{
-		auto Controller = Alive.At(i);
+    // Neither TeamsLeft==1 nor placement alone can trigger a restart:
+    // require an ended match AND an explicit engine winner.
+    if (!Ended) return;
 
-		if (!Controller)
-			continue;
+    static int DiagnosticRestart = -1;
+    static auto LastDiagnostic = std::chrono::steady_clock::time_point{};
+    const auto Now = std::chrono::steady_clock::now();
+    if (DiagnosticRestart != AmountOfRestarts ||
+        Now - LastDiagnostic >= std::chrono::seconds(5))
+    {
+        DiagnosticRestart = AmountOfRestarts;
+        LastDiagnostic = Now;
+        LOG_INFO(LogDev,
+            "[victory-debug] matchState={} phase={} winningTeam={} firstPlaces={} confirmed={}",
+            MatchState, (int)State->GetGamePhase(), WinningTeam, FirstPlaces, ConfirmedWinner);
+    }
 
-		auto PlayerState = Cast<AFortPlayerStateAthena>(Controller->GetPlayerState());
+    if (!ConfirmedWinner) return;
 
-		if (PlayerState)
-		{
-			AliveTeams.insert(PlayerState->GetTeamIndex());
-			// Solo puesto 1 explicito; 0/no asignado no es victoria.
-			if (PlayerState->GetPlace() == 1)
-				bHasConfirmedWinner = true;
-		}
-	}
-
-	// Todavia hay 2+ equipos en partida: se asegura de que alguna vez hubo
-	// varios equipos (evita victoria falsa si el host juega solo sin bots).
-	if (AliveTeams.size() >= 2)
-	{
-		bVictoryRoyaleHadTeams = true;
-		return;
-	}
-
-	// No basta con quedar solo: el motor debe haber terminado la partida
-	// y asignado puesto 1 a un integrante del unico equipo superviviente.
-	if (bVictoryRoyaleHadTeams && AliveTeams.size() == 1 &&
-		GameState->GetGamePhase() == EAthenaGamePhase::EndGame &&
-		bHasConfirmedWinner && !bVictoryRoyaleLogged)
-	{
-		bVictoryRoyaleLogged = true;
-		LOG_INFO(LogDev, "[VictoryRoyale] 1");
-	}
+    bVictoryRoyaleLogged = true;
+    VictoryRestartDeadline = Now + std::chrono::seconds(7);
+    bVictoryRestartPending = true;
+    LOG_INFO(LogDev,
+        "[internal-restart] Victory confirmed; Restart scheduled in 7 seconds.");
 }

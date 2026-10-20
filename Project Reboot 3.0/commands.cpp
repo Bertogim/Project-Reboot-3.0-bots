@@ -64,11 +64,11 @@ void ServerCheatHook(AFortPlayerControllerAthena* PlayerController, FString Msg)
 				{
 					ReceivingController = CurrentPlayerController;
 					ReceivingPlayerState = CurrentPlayerState;
-					PlayerName.Free();
+					// Borrowed PlayerState string: never free its engine-owned buffer.
 					break;
 				}
 
-				PlayerName.Free();
+				// Borrowed PlayerState string: never free its engine-owned buffer.
 			}
 		}
 		else

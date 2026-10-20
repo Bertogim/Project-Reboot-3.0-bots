@@ -6,6 +6,7 @@
 extern inline void (*SetZoneToIndexOriginal)(AFortGameModeAthena* GameModeAthena, int OverridePhaseMaybeIDFK) = nullptr;
 
 void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMaybeIDFK);
+void TickHostZoneMode(AFortGameModeAthena* Mode);
 
 static inline void ProcessEventHook(UObject* Object, UFunction* Function, void* Parameters)
 {
@@ -162,3 +163,4 @@ static inline void ProcessEventHook(UObject* Object, UFunction* Function, void* 
 
 	return Object->ProcessEvent(Function, Parameters);
 }
+void TickHostRumbleGoal(AFortGameModeAthena* Mode);

@@ -3,12 +3,13 @@
 #include <atomic>
 #include <string>
 #include <unordered_map>
+#include <mutex>
 
 #include "inc.h"
 
 namespace Globals
 {
-	// Interruptor maestro: bots desactivados, codigo conservado.
+	// Interruptor maestro: bots custom habilitados.
 	inline constexpr bool bBotsEnabled = false;
 	extern inline bool bCreative = false;
 	extern inline bool bGoingToPlayEvent = false;
@@ -49,17 +50,27 @@ extern inline std::atomic<int> HostCountdownPauseRequest{0}; // 1=pausar, 2=rean
 extern inline int InitialPopulationSafeZonePhase = 0;
 extern inline bool bPopulationSafeZonePending = false;
 
+// -1 = automatic population; other values select an existing population band.
+inline std::atomic<int> HostZoneModeParticipants{-1};
+inline std::atomic<int> HostZoneModeRequest{-2}; // -2 = no request
+inline std::atomic<bool> HostCleanRestartRequest{false};
+static inline int GetZoneModeParticipants(int ActualPlayers)
+{
+    const int Override = HostZoneModeParticipants.load();
+    return Override >= 0 ? Override : ActualPlayers;
+}
+
 static inline int GetPopulationSafeZonePhase(int Players)
 {
-	// Total de participantes: humanos + bots.
+	// Humanos + bots al arrancar el bus.
 	if (Players <= 0) return 0;
-	if (Players <= 10) return 2;
-	if (Players <= 20) return 2;
-	if (Players < 50) return 1;
-	return 0;
+	return Players <= 4 ? 2 : 1;
 }
 extern inline bool bHostConnected = false;         // true once the backend accepted /lawin/hosts/register
 extern inline std::string hostState = "idle";      // idle -> starting -> inGame
+inline std::mutex HostTeamAssignmentsMutex{};
+extern inline std::atomic<bool> HostTeamsDirty{false};
+extern inline std::atomic<int> HostListeningPort{0};
 extern inline std::unordered_map<std::string, int> HostTeamAssignments = {}; // accountId -> teamIndex (from StartMatch)
 extern inline unsigned long long gManualSraCalls = 0;   // diagnostico: veces que el hook replica manualmente
 extern inline bool bManualReplication = true;            // ON: el hook replica por tick + original; OFF: solo el original (A/B del leak)
@@ -84,3 +95,20 @@ extern inline std::string PlaylistName =
 // "/Game/Athena/Playlists/Ashton/Playlist_Ashton_Sm.Playlist_Ashton_Sm";
 // "/Game/Athena/Playlists/BattleLab/Playlist_BattleLab.Playlist_BattleLab";
 // "/MoleGame/Playlists/Playlist_MoleGame.Playlist_MoleGame"; // very experimental dont use
+
+// Server-side Team Rumble goal; zero preserves the mode's native behavior.
+inline std::atomic<int> HostRumbleKillGoal{0};
+inline std::atomic<int> HostRumbleLeadingKills{0};
+inline std::atomic<bool> HostLategameBusRequest{false};
+static inline bool IsHostTeamRumblePlaylist(const std::string& Name)
+{
+    return Name.find("Playlist_Respawn_24") != std::string::npos;
+}
+
+inline bool HostLiveLategameBoarding = false; // Game-thread only.
+
+// Only controllers successfully recovered by the current live bus request.
+// Accessed exclusively on the game thread.
+inline std::vector<void*> HostLiveLategameRecovered;
+
+inline std::atomic<bool> HostFillAndBalanceTeams{true};

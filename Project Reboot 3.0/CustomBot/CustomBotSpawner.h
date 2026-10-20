@@ -372,6 +372,12 @@ double AvgMs = (double)PerfAccumUs / 1000.0 / (double)PerfFrames;
 	static bool InitializeClasses()
 	{
 		static bool bInitialized = false;
+        static int ClassesRestart = -1;
+        if (ClassesRestart != AmountOfRestarts)
+        {
+            bInitialized = false;
+            ClassesRestart = AmountOfRestarts;
+        }
 
 		if (!bInitialized)
 		{

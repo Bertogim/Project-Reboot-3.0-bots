@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 
 // TODO: Update ImGUI
 
@@ -54,6 +55,7 @@
 #include "KismetRenderingLibrary.h"
 #include "CustomBot/CustomBotDebug.h"
 #include "CustomAI/CustomBotManager.h"
+#include "AircraftRecovery.h"
 
 #define GAME_TAB 1
 #define PLAYERS_TAB 2
@@ -88,7 +90,7 @@ extern inline bool bHandleDeath = true;
 extern inline bool bUseCustomMap = false;
 extern inline std::string CustomMapName = "";
 extern inline int AmountToSubtractIndex = 1;
-extern inline int SecondsUntilTravel = 3;
+extern inline std::atomic<int> SecondsUntilTravel{3};
 extern inline bool bSwitchedInitialLevel = false;
 extern inline bool bIsInAutoRestart = false;
 extern inline float AutoBusStartSeconds = 60;
@@ -143,6 +145,10 @@ static inline void SetWarmupCountdown(AFortGameModeAthena* GameMode, AFortGameSt
 	GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = Seconds;
 }
 
+static inline DWORD WINAPI LateGameThread(LPVOID Parameter);
+extern inline std::atomic<bool> LateGameBusRequested{false};
+extern inline std::atomic<bool> LateGameWorkerRunning{false};
+
 inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 {
 	if (!GameMode || !Globals::bStartedListening ||
@@ -156,17 +162,51 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 	static int CountdownRestart = -1;
 	static float Remaining = 300.f;
 	static float LastTime = 0.f;
+	static bool NativeFinalCountdownArmed = false;
 	const float Now = GameState->GetServerWorldTimeSeconds();
-
 	if (CountdownRestart != AmountOfRestarts)
 	{
 		CountdownRestart = AmountOfRestarts;
+		NativeFinalCountdownArmed = false;
 		Remaining = (float)HostCountdownDurationSeconds.load();
 		LastTime = Now;
 		HostCountdownPaused.store(false);
 		HostCountdownPauseRequest.store(0);
 		LOG_INFO(LogMatchmaker, "[host-countdown] Automatic countdown started: {} seconds.", (int)Remaining);
 	}
+
+    if (HostLategameBusRequest.exchange(false))
+    {
+        if (!LateGameWorkerRunning.load())
+        {
+            SetIsLategame(true);
+            LateGameBusRequested.store(true);
+            LOG_INFO(LogLateGame, "[lategame-bus] Host requested bus and spectator recovery.");
+        }
+    }
+
+	if (LateGameBusRequested.exchange(false) && Globals::bLateGame.load())
+	{
+		Remaining = 0.f;
+		HostCountdownPaused.store(false);
+	}
+	if (Globals::bLateGame.load() && Remaining <= 0.f
+		&& GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
+	{
+		if (!LateGameWorkerRunning.exchange(true))
+		{
+			auto Thread = CreateThread(nullptr, 0, LateGameThread, nullptr, 0, nullptr);
+			if (Thread)
+				CloseHandle(Thread);
+			else
+			{
+				LateGameWorkerRunning.store(false);
+				LOG_WARN(LogLateGame, "[lategame-bus] Unable to create worker; request can be retried.");
+			}
+		}
+		return;
+	}
+
 
 	const float Delta = Now >= LastTime ? Now - LastTime : 0.f;
 	LastTime = Now;
@@ -190,17 +230,43 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 
 	const int DisplaySeconds = (int)Remaining + (Remaining > (float)(int)Remaining ? 1 : 0);
 	HostCountdownRemainingSeconds.store(DisplaySeconds);
+	ApplyHostTeamAssignments(GameMode);
 	busCountdownSeconds = DisplaySeconds;
 
-	// No usar el plazo nativo como contador: podria despegar durante una pausa.
-	// La entrada al warmup y la creacion de pawns siguen siendo nativas.
-	SetWarmupCountdown(GameMode, GameState, 100000.f);
+    // Publish a stable native deadline only during the final ten seconds.
+    // Reset/pause/resume invalidates it before another server tick can use it.
+    const bool CountdownEdited = ResetSeconds >= 0 || PauseRequest != 0;
+    if (CountdownEdited)
+        NativeFinalCountdownArmed = false;
+    const bool NativeFinalCountdown = !Globals::bLateGame.load() &&
+        !HostCountdownPaused.load() && Remaining > 0.f && Remaining <= 10.f;
+    if (NativeFinalCountdown)
+    {
+        if (!NativeFinalCountdownArmed)
+        {
+            SetWarmupCountdown(GameMode, GameState, Remaining);
+            GameState->ForceNetUpdate();
+            NativeFinalCountdownArmed = true;
+            LOG_INFO(LogMatchmaker,
+                "[host-countdown] Native final countdown armed: {} seconds.", Remaining);
+        }
+    }
+    else if (Remaining > 0.f || HostCountdownPaused.load())
+    {
+        SetWarmupCountdown(GameMode, GameState, 100000.f);
+        if (NativeFinalCountdownArmed || CountdownEdited)
+            GameState->ForceNetUpdate();
+        NativeFinalCountdownArmed = false;
+    }
 
 	if (!HostCountdownPaused.load() && Remaining <= 0.f &&
 		GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
 	{
 		LOG_INFO(LogMatchmaker, "[host-countdown] Countdown finished; starting aircraft.");
-		GameMode->StartAircraftPhase();
+		if (Globals::bLateGame.load())
+			LateGameBusRequested.store(true);
+		else
+			GameMode->StartAircraftPhase();
 	}
 }
 
@@ -237,8 +303,32 @@ static inline bool HasAnyCalendarModification()
 	return Calendar::HasSnowModification() || Calendar::HasNYE() || Fortnite_Version == 8.40 || std::floor(Fortnite_Version) == 13;
 }
 
-static inline void Restart() // todo move?
+// UI requests are consumed at the end of the server tick.
+static inline void Restart()
 {
+    HostCleanRestartRequest.store(true);
+}
+
+static inline void RestartNow()
+{
+    // Do not travel while the aircraft worker still holds old-world pointers.
+    if (LateGameWorkerRunning.load())
+    {
+        bVictoryRestartPending = true;
+        VictoryRestartDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        LOG_WARN(LogDev, "[internal-restart] Waiting for aircraft worker before map travel.");
+        return;
+    }
+    CustomBotManager::PendingSpawnCount.store(0);
+    CustomBotManager::bPendingFillTo100.store(false);
+    CustomBotManager::bPendingRemoveAll.store(false);
+    CustomBotManager::bPendingTeleportToBot.store(false);
+    CustomBotManager::bPendingBringRandomBot.store(false);
+    CustomBotManager::bAutoSpawnInProgress = false;
+    LateGameBusRequested.store(false);
+	// Limpiar referencias a actores del mapa anterior antes del viaje.
+	bVictoryRestartPending = false;
+	CustomBotManager::RemoveAllBots();
 	InitBotNames();
 
 	FString LevelA = Engine_Version < 424
@@ -266,7 +356,11 @@ static inline void Restart() // todo move?
 	bStartPregame = false;
 	bPregameLocked = true;
 	hostState = "idle";
-	HostTeamAssignments.clear();
+    {
+        std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+        HostTeamAssignments.clear();
+    }
+    HostTeamsDirty.store(false);
 	HostCountdownResetRequest.store(-1);
 	HostCountdownPauseRequest.store(0);
 	HostCountdownPaused.store(false);
@@ -275,8 +369,12 @@ static inline void Restart() // todo move?
 	lastPlayerCountForBus = 0;
 	InitialPopulationSafeZonePhase = 0;
 	bPopulationSafeZonePending = false;
+	AmountOfPlayersWhenBusStart = 0;
+	HostListeningPort.store(0);
+	VictoryRestartDeadline = {};
 	bVictoryRoyaleLogged = false;
 	bVictoryRoyaleHadTeams = false;
+	bVictoryRestartPending = false;
 	AmountOfRestarts++;
 
 	LOG_INFO(LogDev, "Switching!");
@@ -301,6 +399,80 @@ static inline void Restart() // todo move?
 	*/
 
 	// UGameplayStatics::OpenLevel(GetWorld(), UKismetStringLibrary::Conv_StringToName(LevelA), true, FString());
+}
+
+// Se llama al final del tick: no volver a usar el NetDriver tras Restart().
+static inline void TickVictoryInternalRestart()
+{
+    static bool Draining = false;
+    static int DrainGeneration = -1;
+    static auto DrainDeadline = std::chrono::steady_clock::time_point{};
+    if (DrainGeneration != AmountOfRestarts)
+    {
+        DrainGeneration = AmountOfRestarts;
+        Draining = false;
+    }
+
+    const auto Now = std::chrono::steady_clock::now();
+    const bool Manual = HostCleanRestartRequest.exchange(false);
+    const bool VictoryDue = bVictoryRestartPending && Now >= VictoryRestartDeadline;
+    if (!Draining && !Manual && !VictoryDue) return;
+
+    auto World = GetWorld();
+    auto Mode = World ? Cast<AFortGameModeAthena>(World->GetGameMode()) : nullptr;
+    auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+    if (!State)
+    {
+        if (Manual) HostCleanRestartRequest.store(true);
+        return;
+    }
+
+    if (!Draining)
+    {
+        if (!Manual && State->GetGamePhase() <= EAthenaGamePhase::Warmup)
+        {
+            bVictoryRestartPending = false;
+            return;
+        }
+        bVictoryRestartPending = false;
+        auto Fn = FindObject<UFunction>("/Script/Engine.PlayerController.ClientReturnToMainMenu");
+        const bool Compatible = Fn && Fn->GetPropertiesSize() == sizeof(FString);
+        int Sent = 0;
+        auto Driver = World->GetNetDriver();
+        if (Compatible && Driver)
+        {
+            // Snapshot controller pointers before RPC dispatch.
+            std::vector<UObject*> Controllers;
+            auto& Connections = Driver->GetClientConnections();
+            if (Connections.Num() >= 0 && Connections.Num() <= 1024 &&
+                (Connections.Num() == 0 || Connections.Data))
+            {
+                for (int i = 0; i < Connections.Num(); ++i)
+                {
+                    auto Connection = Connections.at(i);
+                    auto Controller = Connection ? Connection->GetPlayerController() : nullptr;
+                    if (Controller) Controllers.push_back(Controller);
+                }
+            }
+            for (auto Controller : Controllers)
+            {
+                FString Reason(L"El servidor se reinicia. Vuelve a buscar partida.");
+                Controller->ProcessEvent(Fn, &Reason);
+                ++Sent;
+            }
+        }
+        if (!Compatible)
+            LOG_WARN(LogDev, "[clean-restart] Return RPC missing or incompatible; no unsafe call made.");
+        Draining = true;
+        DrainDeadline = Now + std::chrono::seconds(2);
+        LOG_INFO(LogDev, "[clean-restart] Return-to-menu requested for {} clients; allowing 2 seconds before travel.", Sent);
+        return;
+    }
+
+    if (Now < DrainDeadline || LateGameWorkerRunning.load()) return;
+    Draining = false;
+    LOG_INFO(LogDev, "[clean-restart] Delivery grace elapsed; executing internal map restart.");
+    RestartNow();
 }
 
 static inline std::string wstring_to_utf8(const std::wstring& str)
@@ -688,10 +860,137 @@ static inline void PlayerTabs()
 	}
 }
 
+// Se ejecuta desde StartAircraftPhaseHook, en el hilo del servidor,
+// antes de que el inicio nativo seleccione los pasajeros.
+inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
+{
+	auto World = GetWorld();
+	auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+	auto Driver = World ? World->GetNetDriver() : nullptr;
+	if (!State || !Driver || !Globals::bLateGame.load()
+		|| (State->GetGamePhase() > EAthenaGamePhase::Warmup && !HostLiveLategameBoarding))
+		return;
+
+	auto& Connections = Driver->GetClientConnections();
+	for (int i = 0; i < Connections.Num(); ++i)
+	{
+		auto Connection = Connections.at(i);
+		auto PC = Connection
+			? Cast<AFortPlayerControllerAthena>(Connection->GetPlayerController()) : nullptr;
+		auto PS = PC ? PC->GetPlayerStateAthena() : nullptr;
+		if (!PS || PC->IsActorBeingDestroyed() || PS->IsActorBeingDestroyed())
+			continue;
+
+		auto& Alive = Mode->GetAlivePlayers();
+		bool Registered = false;
+		for (int j = 0; j < Alive.Num(); ++j)
+			if (Alive.At(j) == PC)
+				Registered = true;
+
+		auto ReadFlag = [](UObject* Object, const char* Name) -> bool
+		{
+			const auto Offset = Object->GetOffset(Name, false);
+			auto Property = Offset != -1 ? Object->GetProperty(Name, false) : nullptr;
+			return Property && Object->ReadBitfieldValue(Offset, GetFieldMask(Property));
+		};
+		const bool Spectator = ReadFlag(PS, "bIsSpectator")
+			|| ReadFlag(PS, "bOnlySpectator");
+		auto Pawn = PC->GetMyFortPawn();
+		const bool HealthyPawn = Pawn && !Pawn->IsActorBeingDestroyed()
+			&& Pawn->GetHealth() > 0.f;
+		// A healthy, non-spectating player must remain untouched even if
+        // the native alive roster is temporarily incomplete.
+        if (HealthyPawn && !Spectator)
+            continue;
+
+		// No inventar contadores/equipos: usar el registro nativo.
+		if (!Registered && !Addresses::AddToAlivePlayers)
+		{
+			LOG_WARN(LogLateGame, "[lategame-spectator] Cannot register player {}; native address unavailable.",
+				PS->GetPlayerID());
+			continue;
+		}
+		if (!PC->GetWorldInventory())
+		{
+			LOG_WARN(LogLateGame, "[lategame-spectator] Player {} inventory not ready; preserved as spectator.",
+				PS->GetPlayerID());
+			continue;
+		}
+
+		if (!HealthyPawn)
+		{
+			auto Start = Mode->K2_FindPlayerStart(PC, FString());
+			if (!Start)
+			{
+				LOG_WARN(LogLateGame, "[lategame-spectator] No valid player start for {}; spectator unchanged.",
+					PS->GetPlayerID());
+				continue;
+			}
+			auto NewPawn = Mode->SpawnDefaultPawnForHook(Mode, PC, Start);
+			if (!NewPawn)
+			{
+				LOG_WARN(LogLateGame, "[lategame-spectator] Spawn failed for {}; spectator unchanged.",
+					PS->GetPlayerID());
+				continue;
+			}
+			PC->Possess(NewPawn);
+			Pawn = PC->GetMyFortPawn();
+			if (!Pawn || Pawn != NewPawn)
+			{
+				LOG_WARN(LogLateGame, "[lategame-spectator] Possession failed for {}.", PS->GetPlayerID());
+				continue;
+			}
+			Pawn->SetMaxHealth(100.f);
+			Pawn->SetHealth(100.f);
+			Pawn->SetShield(100.f);
+		}
+
+		auto WriteFlag = [](UObject* Object, const char* Name, bool Value)
+		{
+			const auto Offset = Object->GetOffset(Name, false);
+			auto Property = Offset != -1 ? Object->GetProperty(Name, false) : nullptr;
+			if (Property)
+				Object->SetBitfieldValue(Offset, GetFieldMask(Property), Value);
+		};
+		WriteFlag(PS, "bIsSpectator", false);
+		WriteFlag(PS, "bOnlySpectator", false);
+		WriteFlag(PC, "bMarkedAlive", true);
+		PS->GetPlace() = 0;
+		PC->SetPlayerIsWaiting(false);
+		PC->GetStateName() = UKismetStringLibrary::Conv_StringToName(L"Playing");
+		auto ClientGotoState = PC->FindFunction("ClientGotoState");
+		if (ClientGotoState && ClientGotoState->GetPropertiesSize() == sizeof(FName))
+		{
+			FName Playing = PC->GetStateName();
+			PC->ProcessEvent(ClientGotoState, &Playing);
+		}
+		PC->ClientClearDeathNotification();
+		if (!Registered)
+		{
+			auto AddAlive = reinterpret_cast<void(*)(AFortGameModeAthena*, AFortPlayerControllerAthena*)>(
+				Addresses::AddToAlivePlayers);
+			AddAlive(Mode, PC);
+		}
+        if (HostLiveLategameBoarding)
+            HostLiveLategameRecovered.push_back(static_cast<void*>(PC));
+		PC->ForceNetUpdate();
+		PS->ForceNetUpdate();
+		Pawn->ForceNetUpdate();
+		LOG_INFO(LogLateGame, "[lategame-spectator] Player {} restored before native bus boarding.",
+			PS->GetPlayerID());
+	}
+}
+
 static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 {
 	// Population starts reuse only the aircraft placement, not the lategame loadout.
-	const bool bPopulationStart = Parameter != nullptr;
+	const bool bPopulationStart = Parameter == reinterpret_cast<LPVOID>(1);
+	const bool bAlreadyStarted = Parameter == reinterpret_cast<LPVOID>(2);
+	struct FWorkerReset
+	{
+		bool Active;
+		~FWorkerReset() { if (Active) LateGameWorkerRunning.store(false); }
+	} WorkerReset{ !bPopulationStart };
 	float MaxTickRate = 30;
 
 	auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
@@ -729,7 +1028,7 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 		return Aircrafts;
 	};
 
-	if (!bPopulationStart)
+	if (!bPopulationStart && !bAlreadyStarted)
 		GameMode->StartAircraftPhase();
 
 	int AircraftWaitTicks = 0;
@@ -766,12 +1065,19 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 	}
 
 	const FVector ZoneCenterLocation = SafeZoneLocations.at(ZoneIndex);
+	if (!std::isfinite(ZoneCenterLocation.X) || !std::isfinite(ZoneCenterLocation.Y)
+		|| !std::isfinite(ZoneCenterLocation.Z)
+		|| (ZoneCenterLocation.X == 0 && ZoneCenterLocation.Y == 0 && ZoneCenterLocation.Z == 0))
+	{
+		LOG_WARN(LogLateGame, "[population-bus] Invalid zone center; preserving native aircraft route.");
+		return 0;
+	}
 
 	FVector LocationToStartAircraft = ZoneCenterLocation;
 	float AircraftHeightAboveZone = 10000.f;
 	if (bPopulationStart)
 	{
-		const int Participants = AmountOfPlayersWhenBusStart;
+		const int Participants = GetZoneModeParticipants(AmountOfPlayersWhenBusStart);
 		if (Participants > 0 && Participants <= 10)
 			AircraftHeightAboveZone = 20000.f;
 		else if (Participants <= 20 && Participants > 10)
@@ -780,6 +1086,8 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 			AircraftHeightAboveZone = 30000.f;
 	}
 	LocationToStartAircraft.Z += AircraftHeightAboveZone;
+	if (bPopulationStart && LocationToStartAircraft.Z < AircraftHeightAboveZone)
+		LocationToStartAircraft.Z = AircraftHeightAboveZone;
 
 	auto Aircrafts = GetAircrafts();
 
@@ -789,7 +1097,13 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 	for (int i = 0; i < Aircrafts.size(); ++i)
 	{
 		auto CurrentAircraft = Aircrafts.at(i);
-		CurrentAircraft->TeleportTo(LocationToStartAircraft, FRotator());
+		if (!CurrentAircraft)
+			continue;
+		if (!CurrentAircraft->TeleportTo(LocationToStartAircraft, FRotator()))
+		{
+			LOG_WARN(LogLateGame, "[population-bus] Aircraft teleport failed; preserving native flight data.");
+			continue;
+		}
 
 		static auto FlightInfoOffset = CurrentAircraft->GetOffset("FlightInfo", false);
 
@@ -811,6 +1125,8 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 			FlightInfo->GetFlightStartLocation() = LocationToStartAircraft;
 			FlightInfo->GetTimeTillDropStart() = DropStartTime;
 		}
+		CurrentAircraft->ForceNetUpdate();
+		AircraftRecovery::RememberBus(CurrentAircraft->GetActorLocation());
 	}
 
 	if (bPopulationStart)
@@ -822,8 +1138,20 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 		return 0;
 	}
 
-	while (GameState->GetGamePhase() != EAthenaGamePhase::Aircraft)
+    if (bAlreadyStarted)
+    {
+        LOG_INFO(LogLateGame, "[lategame-bus] Recovery bus positioned without automatic loot or storm reset.");
+        return 0;
+    }
+
+	int PhaseWaitTicks = 0;
+	while (GameState->GetGamePhase() < EAthenaGamePhase::Aircraft)
 	{
+		if (++PhaseWaitTicks > 900)
+		{
+			LOG_WARN(LogLateGame, "[lategame-bus] Timed out waiting for aircraft phase.");
+			return 0;
+		}
 		Sleep(1000 / MaxTickRate);
 	}
 
@@ -856,61 +1184,165 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 		Sleep(1000 / MaxTickRate);
 	}
 
-	static auto World_NetDriverOffset = GetWorld()->GetOffset("NetDriver");
-	auto WorldNetDriver = GetWorld()->Get<UNetDriver*>(World_NetDriverOffset);
-	auto& ClientConnections = WorldNetDriver->GetClientConnections();
-
-	for (int z = 0; z < ClientConnections.Num(); z++)
-	{
-		auto ClientConnection = ClientConnections.at(z);
-		auto FortPC = Cast<AFortPlayerController>(ClientConnection->GetPlayerController());
-
-		if (!FortPC)
-			continue;
-
-		auto WorldInventory = FortPC->GetWorldInventory();
-
-		if (!WorldInventory)
-			continue;
-
-		static auto WoodItemData = FindObject<UFortItemDefinition>(L"/Game/Items/ResourcePickups/WoodItemData.WoodItemData");
-		static auto StoneItemData = FindObject<UFortItemDefinition>(L"/Game/Items/ResourcePickups/StoneItemData.StoneItemData");
-		static auto MetalItemData = FindObject<UFortItemDefinition>(L"/Game/Items/ResourcePickups/MetalItemData.MetalItemData");
-
-		static auto Rifle = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Assault_AutoHigh_Athena_SR_Ore_T03.WID_Assault_AutoHigh_Athena_SR_Ore_T03");
-		static auto Shotgun = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Shotgun_Standard_Athena_SR_Ore_T03.WID_Shotgun_Standard_Athena_SR_Ore_T03")
-			? FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Shotgun_Standard_Athena_SR_Ore_T03.WID_Shotgun_Standard_Athena_SR_Ore_T03")
-			: FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Shotgun_Standard_Athena_C_Ore_T03.WID_Shotgun_Standard_Athena_C_Ore_T03");
-		static auto SMG = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Pistol_AutoHeavyPDW_Athena_R_Ore_T03.WID_Pistol_AutoHeavyPDW_Athena_R_Ore_T03")
-			? FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Pistol_AutoHeavyPDW_Athena_R_Ore_T03.WID_Pistol_AutoHeavyPDW_Athena_R_Ore_T03")
-			: FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Weapons/WID_Pistol_AutoHeavySuppressed_Athena_R_Ore_T03.WID_Pistol_AutoHeavySuppressed_Athena_R_Ore_T03");
-
-		static auto MiniShields = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Consumables/ShieldSmall/Athena_ShieldSmall.Athena_ShieldSmall");
-
-		static auto Shells = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Ammo/AthenaAmmoDataShells.AthenaAmmoDataShells");
-		static auto Medium = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Ammo/AthenaAmmoDataBulletsMedium.AthenaAmmoDataBulletsMedium");
-		static auto Light = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Ammo/AthenaAmmoDataBulletsLight.AthenaAmmoDataBulletsLight");
-		static auto Heavy = FindObject<UFortItemDefinition>(L"/Game/Athena/Items/Ammo/AthenaAmmoDataBulletsHeavy.AthenaAmmoDataBulletsHeavy");
-
-		WorldInventory->AddItem(WoodItemData, nullptr, 500);
-		WorldInventory->AddItem(StoneItemData, nullptr, 500);
-		WorldInventory->AddItem(MetalItemData, nullptr, 500);
-		WorldInventory->AddItem(Rifle, nullptr, 1);
-		WorldInventory->AddItem(Shotgun, nullptr, 1);
-		WorldInventory->AddItem(SMG, nullptr, 1);
-		WorldInventory->AddItem(MiniShields, nullptr, 6);
-		WorldInventory->AddItem(Shells, nullptr, 999);
-		WorldInventory->AddItem(Medium, nullptr, 999);
-		WorldInventory->AddItem(Light, nullptr, 999);
-		WorldInventory->AddItem(Heavy, nullptr, 999);
-
-		WorldInventory->Update();
-	}
+	// No automatic lategame weapons, ammunition or materials.
 
 	static auto SafeZonesStartTimeOffset = GameState->GetOffset("SafeZonesStartTime");
 	GameState->Get<float>(SafeZonesStartTimeOffset) = 0.001f;
 
 	return 0;
+}
+
+// Called only by the server game-thread tick.
+inline void TickHostLiveLategameBus(AFortGameModeAthena* Mode)
+{
+    auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+    if (!State || State->GetGamePhase() <= EAthenaGamePhase::Warmup)
+        return; // Warmup requests are handled by the existing countdown.
+    if (!HostLategameBusRequest.exchange(false)) return;
+    auto World = GetWorld();
+    auto Driver = World ? World->GetNetDriver() : nullptr;
+    if (!Driver || Globals::bCreative || Globals::bGoingToPlayEvent ||
+        State->GetGamePhase() >= EAthenaGamePhase::EndGame ||
+        bVictoryRestartPending || Engine_Version >= 424 ||
+        !AFortGameModeAthena::PopulationStartAircraftOriginal ||
+        !AFortPlayerControllerAthena::EnterAircraftOriginal)
+    {
+        LOG_WARN(LogLateGame, "[lategame-bus] Live request rejected: unsupported state/API.");
+        return;
+    }
+    if (LateGameWorkerRunning.exchange(true))
+    {
+        LOG_WARN(LogLateGame, "[lategame-bus] A bus worker is already running.");
+        return;
+    }
+
+    // Native StartAircraftPhase is not a live recovery API: logs show
+    // invalid Aircrafts entries and a fatal error on repeated flight start.
+    // Fail closed until a separate recovery aircraft lifecycle is implemented.
+    LateGameWorkerRunning.store(false);
+    // Inspect the loaded runtime schema without spawning or boarding.
+    auto AircraftDefaults = FindObject<AActor>(
+        L"/Script/FortniteGame.Default__FortAthenaAircraft");
+    if (AircraftDefaults)
+    {
+        const char* Fields[] = {
+            "AircraftIndex", "FlightInfo", "FlightStartTime",
+            "DropStartTime", "DropEndTime", "FlightEndTime",
+            "FlightElapsedTime", "ReplicatedFlightTimestamp", "DefaultBusSkin"
+        };
+        for (auto Field : Fields)
+            LOG_INFO(LogLateGame, "[recovery-schema] aircraft field={} offset={}",
+                Field, AircraftDefaults->GetOffset(Field, false));
+
+        const char* Functions[] = {
+            "OnRep_ReplicatedFlightTimestamp", "GetDropStartTime", "GetDropEndTime"
+        };
+        for (auto Name : Functions)
+        {
+            auto Fn = AircraftDefaults->FindFunction(Name);
+            LOG_INFO(LogLateGame, "[recovery-schema] aircraft function={} parameterBytes={}",
+                Name, Fn ? Fn->GetPropertiesSize() : -1);
+        }
+    }
+    const char* StateFields[] = {
+        "Aircrafts", "Aircraft", "bAircraftIsLocked", "AircraftStartTime",
+        "AirCraftBehavior"
+    };
+    for (auto Field : StateFields)
+        LOG_INFO(LogLateGame, "[recovery-schema] state field={} offset={}",
+            Field, State->GetOffset(Field, false));
+    const char* FlightFields[] = {
+        "TimeTillDropStart", "TimeTillDropEnd", "TimeTillFlightEnd",
+        "FlightStartLocation", "FlightStartRotation", "FlightSpeed"
+    };
+    for (auto Field : FlightFields)
+        LOG_INFO(LogLateGame, "[recovery-schema] flight field={} offset={}",
+            Field, FindOffsetStruct("/Script/FortniteGame.AircraftFlightInfo", Field));
+    LOG_WARN(LogLateGame, "[lategame-bus] Live native restart blocked to prevent the confirmed repeated-flight crash; recovery bus remains pending.");
+    return;
+
+    const bool WasLategame = Globals::bLateGame.load();
+    SetIsLategame(true);
+    PopulationStormGuard::Ready = false;
+    HostLiveLategameRecovered.clear();
+    HostLiveLategameBoarding = true;
+    struct FBoardingScope
+    {
+        ~FBoardingScope()
+        {
+            HostLiveLategameBoarding = false;
+            HostLiveLategameRecovered.clear();
+        }
+    } BoardingScope;
+    Mode->StartAircraftPhase(); // Hook restores only recovery candidates before boarding.
+
+    auto AircraftClass = FindObject<UClass>(L"/Script/FortniteGame.FortAthenaAircraft");
+    AActor* Aircraft = nullptr;
+    if (AircraftClass)
+    {
+        auto Actors = UGameplayStatics::GetAllActorsOfClass(World, AircraftClass);
+        for (int i = 0; i < Actors.Num(); ++i)
+        {
+            auto Candidate = Actors.at(i);
+            if (Candidate && !Candidate->IsActorBeingDestroyed())
+            {
+                Aircraft = Candidate;
+                break;
+            }
+        }
+        Actors.FreeEngine();
+    }
+    if (!Aircraft || State->GetGamePhase() != EAthenaGamePhase::Aircraft)
+    {
+        LateGameWorkerRunning.store(false);
+        SetIsLategame(WasLategame);
+        LOG_WARN(LogLateGame, "[lategame-bus] Native start did not produce an active aircraft phase; no forced boarding.");
+        return;
+    }
+
+    int Attempts = 0;
+    auto& Connections = Driver->GetClientConnections();
+    for (int i = 0; i < Connections.Num(); ++i)
+    {
+        auto Connection = Connections.at(i);
+        auto PC = Connection
+            ? Cast<AFortPlayerControllerAthena>(Connection->GetPlayerController()) : nullptr;
+        bool Recovered = false;
+        for (auto Target : HostLiveLategameRecovered)
+            if (Target == static_cast<void*>(PC))
+                Recovered = true;
+        if (!Recovered) continue;
+        auto Pawn = PC ? PC->GetMyFortPawn() : nullptr;
+        if (!PC || PC->IsActorBeingDestroyed() || !Pawn ||
+            Pawn->IsActorBeingDestroyed() || Pawn->GetHealth() <= 0.f ||
+            !PC->GetWorldInventory())
+            continue;
+        auto IsInAircraft = PC->FindFunction("IsInAircraft");
+        if (!IsInAircraft || IsInAircraft->GetPropertiesSize() != sizeof(bool))
+            continue;
+        bool InAircraft = false;
+        PC->ProcessEvent(IsInAircraft, &InAircraft);
+        if (!InAircraft)
+        {
+            AFortPlayerControllerAthena::EnterAircraftHook(PC, Aircraft);
+            ++Attempts;
+        }
+    }
+
+    auto Thread = CreateThread(nullptr, 0, LateGameThread,
+        reinterpret_cast<LPVOID>(2), 0, nullptr);
+    if (Thread)
+        CloseHandle(Thread);
+    else
+        LateGameWorkerRunning.store(false);
+    LOG_INFO(LogLateGame, "[lategame-bus] Native live start completed; additional boarding attempts={}. Verify clients.", Attempts);
+}
+
+static inline void DrawLategameBusButton()
+{
+    if (ImGui::Button("Bus Lategame + revivir espectadores"))
+        HostLategameBusRequest.store(true);
+    ImGui::TextUnformatted("Incluye espectadores conectados.");
 }
 
 static inline void MainUI()
@@ -1038,7 +1470,7 @@ static inline void MainUI()
 
 							if (Globals::bLateGame.load())
 							{
-								CreateThread(0, 0, LateGameThread, 0, 0, 0);
+								LateGameBusRequested.store(true);
 							}
 							else
 							{
@@ -1113,7 +1545,14 @@ static inline void MainUI()
 			}
 
 			ImGui::Text(std::format("Pregame locked: {} (bStartPregame: {})", bPregameLocked, bStartPregame).c_str());
-			ImGui::Text(std::format("Pre-assigned teams: {}", HostTeamAssignments.size()).c_str());
+            {
+                std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+                ImGui::Text(std::format("Pre-assigned teams: {}", HostTeamAssignments.size()).c_str());
+            }
+
+            bool FillAndBalance = HostFillAndBalanceTeams.load();
+            if (ImGui::Checkbox("Rellenar grupos y equilibrar al final", &FillAndBalance))
+                HostFillAndBalanceTeams.store(FillAndBalance);
 
 			if (ImGui::Button("Force Start"))
 			{
@@ -1130,6 +1569,31 @@ static inline void MainUI()
 			{
 				StartBus(10);
 			}
+
+            ImGui::NewLine();
+            ImGui::Separator();
+            ImGui::TextUnformatted("Modo de zona (cambio en caliente)");
+            const char* Labels[] = {"Auto", "1-4 jugadores", "5-10 jugadores",
+                "11-20 jugadores", "21-49 jugadores", "50+ jugadores"};
+            const int Bands[] = {-1, 4, 10, 20, 49, 100};
+            for (int i = 0; i < 6; ++i)
+            {
+                if (i % 3 != 0) ImGui::SameLine();
+                if (ImGui::Button(Labels[i]))
+                    HostZoneModeRequest.store(Bands[i]);
+            }
+            const int Selected = HostZoneModeParticipants.load();
+            ImGui::Text("Tramo activo: %d (-1 = automatico)", Selected);
+            if (IsHostTeamRumblePlaylist(PlaylistName))
+            {
+                int Goal = HostRumbleKillGoal.load();
+                if (ImGui::SliderInt("Bajas para ganar (0 = nativo)", &Goal, 0, 100))
+                    HostRumbleKillGoal.store(Goal);
+                ImGui::Text("Bajas del equipo lider: %d", HostRumbleLeadingKills.load());
+            }
+            ImGui::NewLine();
+            ImGui::Separator();
+            DrawLategameBusButton();
 		}
 
 		else if (Tab == PLAYERS_TAB)
@@ -1296,6 +1760,7 @@ static inline void MainUI()
 
 		else if (Tab == ZONE_TAB)
 		{
+			DrawLategameBusButton();
 			if (ImGui::Button("Start Safe Zone"))
 			{
 				UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"startsafezone", nullptr);
@@ -1745,6 +2210,7 @@ static inline void MainUI()
 		}
 		else if (Tab == LATEGAME_TAB)
 		{
+			DrawLategameBusButton();
 			if (bEnableReverseZone)
 				ImGui::Text(std::format("Currently {}eversing zone", bZoneReversing ? "r" : "not r").c_str());
 
@@ -1958,7 +2424,7 @@ static inline void PregameUI()
 {
 	// No consultar playlists cacheadas mientras el motor cambia de mapa.
 	// La carga/GC puede invalidar los UObject usados por esta pantalla.
-	if (bStartPregame || bSwitchedInitialLevel)
+	if (bSwitchedInitialLevel)
 		return;
 
 	StaticUI();
@@ -1998,7 +2464,17 @@ static inline void PregameUI()
 			// ImGui::InputText("Custom Map", &CustomMapName);
 		}
 
-		ImGui::SliderInt("Seconds until load into map", &SecondsUntilTravel, 1, 10);
+		// Keep editing available after backend StartMatch, until travel begins.
+        static int TravelSlider = 3;
+        static bool TravelSliderActive = false;
+        if (!TravelSliderActive)
+            TravelSlider = SecondsUntilTravel.load();
+        if (ImGui::SliderInt("Seconds until load into map", &TravelSlider, 1, 120))
+            SecondsUntilTravel.store(TravelSlider);
+        TravelSliderActive = ImGui::IsItemActive();
+        ImGui::Text("Carga en: %d s | %s", SecondsUntilTravel.load(),
+            bStartPregame ? "contador en marcha; puedes cambiar la playlist"
+                          : "esperando orden del backend o inicio manual");
 	}
 
 	ImGui::SliderInt("Players required to start the match", &WarmupRequiredPlayerCount, 1, 100);
@@ -2044,7 +2520,7 @@ static inline void PregameUI()
 			bPregamePlaylistsBuilt = false;
 	}
 
-	if (ImGui::BeginChild("##PregamePlaylists", ImVec2(0, 260), true))
+	// Playlist buttons use the main window scroll, not a nested child.
 	{
 		for (int i = 0; i < PregamePlaylists.size(); ++i)
 		{
@@ -2067,6 +2543,8 @@ static inline void PregameUI()
 			{
 				PlaylistName = Object->GetPathName();
 
+                // Local playlist selection bypasses the backend travel delay.
+                SecondsUntilTravel.store(0);
 				bPregameLocked = false;
 				bStartPregame = true;
 
@@ -2077,7 +2555,7 @@ static inline void PregameUI()
 			}
 		}
 	}
-	ImGui::EndChild();
+
 }
 
 static inline HICON LoadIconFromMemory(const char* bytes, int bytes_size, const wchar_t* IconName) {

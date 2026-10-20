@@ -14,13 +14,24 @@ public:
 
 public:
 	std::string ToString() const
-	{
-		auto length = std::wcslen(Data.Data);
-		std::string str(length, '\0');
-		std::use_facet<std::ctype<wchar_t>>(std::locale()).narrow(Data.Data, Data.Data + length, '?', &str[0]);
-
-		return str;
-	}
+    {
+        // Respect the FString length; never scan beyond its declared buffer.
+        if (!Data.Data || Data.ArrayNum <= 0 ||
+            Data.ArrayMax < Data.ArrayNum || Data.ArrayNum > 1048576)
+            return {};
+        int Length = 0;
+        while (Length < Data.ArrayNum && Data.Data[Length] != L'\0')
+            ++Length;
+        if (Length == 0) return {};
+        const int Required = WideCharToMultiByte(
+            CP_UTF8, 0, Data.Data, Length, nullptr, 0, nullptr, nullptr);
+        if (Required <= 0) return {};
+        std::string Result(Required, '\0');
+        if (WideCharToMultiByte(CP_UTF8, 0, Data.Data, Length,
+            Result.data(), Required, nullptr, nullptr) != Required)
+            return {};
+        return Result;
+    }
 
 	void Free()
 	{

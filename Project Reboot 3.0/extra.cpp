@@ -2,6 +2,22 @@
 
 #include "gui.h"
 
+// Politica comun al inicio, hot swap y progresion.
+static float PopulationWaitDuration(int Participants)
+{
+    return Participants <= 4 ? 180.f : Participants <= 10 ? 150.f
+        : Participants <= 20 ? 120.f : Participants <= 49 ? 240.f : 360.f;
+}
+
+static float PopulationShrinkDuration(int Participants, float Native)
+{
+    const float Maximum = Participants <= 4 ? 60.f
+        : Participants <= 10 ? 90.f : Participants <= 20 ? 120.f
+        : Participants <= 49 ? 150.f : 180.f;
+    return std::isfinite(Native) && Native > 0.f
+        ? (Native < Maximum ? Native : Maximum) : Maximum;
+}
+
 void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMaybeIDFK)
 {
 	static auto ZoneDurationsOffset = Fortnite_Version >= 15.20 && Fortnite_Version < 18 ? 0x258
@@ -20,9 +36,11 @@ void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMa
 
 	static int NewLateGameSafeZonePhase = 2;
 	static int LastZoneRestart = -1;
+	static int LastPopulationPhase = -1;
 	if (LastZoneRestart != AmountOfRestarts)
 	{
 		LastZoneRestart = AmountOfRestarts;
+		LastPopulationPhase = -1;
 		NewLateGameSafeZonePhase = 2;
 		bZoneReversing = false;
 	}
@@ -46,105 +64,97 @@ void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMa
 		SetZoneToIndexOriginal(GameModeAthena, OverridePhaseMaybeIDFK);
 
 		const int Actual = GameModeAthena->Get<int>(GameMode_SafeZonePhaseOffset);
+		LastPopulationPhase = Actual;
 		LOG_INFO(LogZone, "[population-zone] Initial phase: target={}, seed={}, actual={}, game state={}, override={}.",
 			Target, Seed, Actual,
 			GameState->Get<int>(GameState_SafeZonePhaseOffset), OverridePhaseMaybeIDFK);
 		if (Actual != Target)
 			LOG_WARN(LogZone, "[population-zone] Native phase differs from target; further verification required.");
 
-		const bool PreserveNativeWait = AmountOfPlayersWhenBusStart >= 11
-			&& AmountOfPlayersWhenBusStart <= 20;
-		auto Indicator = GameModeAthena->GetSafeZoneIndicator();
-		if (Indicator && PreserveNativeWait)
-		{
-			LOG_INFO(LogZone, "[population-zone] Native wait preserved: participants={}, phase={}, start={}, finish={}.",
-				AmountOfPlayersWhenBusStart, Actual,
-				Indicator->GetSafeZoneStartShrinkTime(), Indicator->GetSafeZoneFinishShrinkTime());
-			Indicator->ForceNetUpdate();
-		}
-		else if (Indicator && AmountOfPlayersWhenBusStart >= 1 &&
-			AmountOfPlayersWhenBusStart <= 5)
-		{
-			const auto NextCenterOffset = Indicator->GetOffset("NextCenter", false);
-			const auto LastCenterOffset = Indicator->GetOffset("LastCenter", false);
-			const auto NextRadiusOffset = Indicator->GetOffset("NextRadius", false);
-			const auto LastRadiusOffset = Indicator->GetOffset("LastRadius", false);
-			static auto SetCircleFn = FindObject<UFunction>(
-				L"/Script/FortniteGame.FortSafeZoneIndicator.SetSafeZoneRadiusAndCenter");
-
-			struct FSetCircleParams
-			{
-				FVector InLocation;
-				float InRadius;
-			};
-
-			const float Duration = Indicator->GetSafeZoneFinishShrinkTime()
-				- Indicator->GetSafeZoneStartShrinkTime();
-			const bool FieldsAvailable = NextCenterOffset != -1 && LastCenterOffset != -1
-				&& NextRadiusOffset != -1 && LastRadiusOffset != -1;
-			const int ParamSize = SetCircleFn ? SetCircleFn->GetPropertiesSize() : 0;
-			const bool ParamsCompatible = ParamSize >= sizeof(FVector) + sizeof(float)
-				&& ParamSize <= sizeof(FSetCircleParams);
-
-			if (FieldsAvailable && ParamsCompatible && Duration > 0.f)
-			{
-				const FVector Center = Indicator->Get<FVector>(NextCenterOffset);
-				const float Radius = Indicator->Get<float>(NextRadiusOffset);
-				if (Radius > 0.f)
-				{
-					FSetCircleParams Params{};
-					Params.InLocation = Center;
-					Params.InRadius = Radius;
-					Indicator->ProcessEvent(SetCircleFn, &Params);
-
-					// El tick interpola entre dos circulos identicos: no vuelve a abrirse.
-					Indicator->Get<FVector>(LastCenterOffset) = Center;
-					Indicator->Get<FVector>(NextCenterOffset) = Center;
-					Indicator->Get<float>(LastRadiusOffset) = Radius;
-					Indicator->Get<float>(NextRadiusOffset) = Radius;
-
-					// No finalizar el temporizador en 0.2 segundos ni avanzar otra fase.
-					const float Now = GameState->GetServerWorldTimeSeconds();
-					Indicator->GetSafeZoneStartShrinkTime() = Now;
-					Indicator->GetSafeZoneFinishShrinkTime() = Now + Duration;
-					LOG_INFO(LogZone, "[population-zone] Initial circle already closed: participants={}, phase={}, radius={}, next advance in={} seconds.",
-						AmountOfPlayersWhenBusStart, Actual, Radius, Duration);
-				}
-				else
-				{
-					LOG_WARN(LogZone, "[population-zone] Invalid destination radius; native geometry preserved.");
-				}
-			}
-			else
-			{
-				LOG_WARN(LogZone, "[population-zone] Cannot close initial circle safely: fields={}, params={}, duration={}; native geometry preserved.",
-					FieldsAvailable, ParamSize, Duration);
-			}
-			Indicator->ForceNetUpdate();
-		}
-		else if (Indicator)
-		{
-			const float Duration = Indicator->GetSafeZoneFinishShrinkTime()
-				- Indicator->GetSafeZoneStartShrinkTime();
-			if (Duration > 0.f)
-			{
-				const float Now = GameState->GetServerWorldTimeSeconds();
-				Indicator->GetSafeZoneStartShrinkTime() = Now;
-				Indicator->GetSafeZoneFinishShrinkTime() = Now + Duration;
-				LOG_INFO(LogZone, "[population-zone] Initial shrink: phase={}, duration={} seconds; no forced skip.",
-					Actual, Duration);
-			}
-			else
-			{
-				LOG_WARN(LogZone, "[population-zone] Invalid shrink duration; native timers preserved.");
-			}
-			Indicator->ForceNetUpdate();
-		}
-		else
-		{
-			LOG_WARN(LogZone, "[population-zone] Initial indicator unavailable; native timers preserved.");
-		}
+        auto Indicator = GameModeAthena->GetSafeZoneIndicator();
+        if (Indicator &&
+            Indicator->GetOffset("SafeZoneStartShrinkTime", false) >= 0 &&
+            Indicator->GetOffset("SafeZoneFinishShrinkTime", false) >= 0)
+        {
+            const int Participants = GetZoneModeParticipants(AmountOfPlayersWhenBusStart);
+            const float NativeDuration = Indicator->GetSafeZoneFinishShrinkTime()
+                - Indicator->GetSafeZoneStartShrinkTime();
+            const float Wait = PopulationWaitDuration(Participants);
+            const float Duration = PopulationShrinkDuration(Participants, NativeDuration);
+            if (std::isfinite(Duration) && Duration > 0.f)
+            {
+                const float Now = GameState->GetServerWorldTimeSeconds();
+                // El motor conserva e interpola la geometria nativa.
+                // Los tramos pequenos alcanzan la fase inicial en un segundo.
+                const bool FastInitial = Participants > 0 && Participants <= 10
+                    && Actual == Target;
+                const float InitialWait = FastInitial ? 0.f : Wait;
+                const float InitialDuration = FastInitial ? 1.f : Duration;
+                Indicator->GetSafeZoneStartShrinkTime() = Now + InitialWait;
+                Indicator->GetSafeZoneFinishShrinkTime() = Now + InitialWait + InitialDuration;
+                LOG_INFO(LogZone, "[population-zone] Initial transition: phase={} wait={} shrink={} nextPhaseWait={}",
+                    Actual, InitialWait, InitialDuration, Wait);
+                Indicator->ForceNetUpdate();
+                LOG_INFO(LogZone, "[population-zone] Initial storm schedule: participants={}, phase={}, wait={} seconds, shrink={} seconds.",
+                    Participants, Actual, InitialWait, InitialDuration);
+            }
+            else
+                LOG_WARN(LogZone, "[population-zone] Invalid duration; native timers preserved.");
+        }
+        else
+            LOG_WARN(LogZone, "[population-zone] Initial storm timer fields unavailable.");
 		GameState->ForceNetUpdate();
+		PopulationStormGuard::Capture(GameModeAthena);
+		return;
+	}
+
+	// La inicializacion nativa tardia no debe reiniciar una tormenta adelantada.
+	if (InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load()
+		&& LastPopulationPhase >= 0 && GameMode_SafeZonePhaseOffset != -1
+		&& GameState_SafeZonePhaseOffset != -1)
+	{
+		const int Current = GameModeAthena->Get<int>(GameMode_SafeZonePhaseOffset);
+		const float Now = GameState->GetServerWorldTimeSeconds();
+		const bool Premature = PopulationStormGuard::Ready
+			&& Now + 0.1f < PopulationStormGuard::Finish;
+		if (Current < LastPopulationPhase || Premature)
+		{
+			GameModeAthena->Get<int>(GameMode_SafeZonePhaseOffset) = LastPopulationPhase;
+			GameState->Get<int>(GameState_SafeZonePhaseOffset) = LastPopulationPhase;
+			LOG_WARN(LogZone, "[population-zone] Ignored native reset: current={}, override={}, active={}.",
+				Current, OverridePhaseMaybeIDFK, LastPopulationPhase);
+			PopulationStormGuard::Restore(GameModeAthena);
+			GameState->ForceNetUpdate();
+			return;
+		}
+        SetZoneToIndexOriginal(GameModeAthena, OverridePhaseMaybeIDFK);
+        LastPopulationPhase = GameModeAthena->Get<int>(GameMode_SafeZonePhaseOffset);
+        auto ProgressIndicator = GameModeAthena->GetSafeZoneIndicator();
+        // Use the selected band, or the starting population in automatic mode.
+        // Eliminations must not switch the configured timing mid-match.
+        const int Participants = GetZoneModeParticipants(AmountOfPlayersWhenBusStart);
+        if (ProgressIndicator && Participants > 0 &&
+            ProgressIndicator->GetOffset("SafeZoneStartShrinkTime", false) >= 0 &&
+            ProgressIndicator->GetOffset("SafeZoneFinishShrinkTime", false) >= 0)
+        {
+            const float Wait = PopulationWaitDuration(Participants);
+            const float Duration = PopulationShrinkDuration(Participants,
+                ProgressIndicator->GetSafeZoneFinishShrinkTime()
+                - ProgressIndicator->GetSafeZoneStartShrinkTime());
+            if (std::isfinite(Duration) && Duration > 0.f)
+            {
+                const float Now = GameState->GetServerWorldTimeSeconds();
+                ProgressIndicator->GetSafeZoneStartShrinkTime() = Now + Wait;
+                ProgressIndicator->GetSafeZoneFinishShrinkTime() = Now + Wait + Duration;
+                ProgressIndicator->ForceNetUpdate();
+                LOG_INFO(LogZone, "[population-zone] Progression storm schedule: participants={}, phase={}, wait={} seconds, shrink={} seconds.",
+                    Participants, LastPopulationPhase, Wait, Duration);
+            }
+            else
+                LOG_WARN(LogZone, "[population-zone] Invalid progression shrink duration; native timers preserved.");
+        }
+        PopulationStormGuard::Capture(GameModeAthena);
+		LOG_INFO(LogZone, "[population-zone] Native progression: phase={}.", LastPopulationPhase);
 		return;
 	}
 
@@ -295,11 +305,237 @@ void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMa
 
 	SafeZoneIndicator->Get<float>(SafeZoneFinishShrinkTimeOffset) = SafeZoneIndicator->Get<float>(SafeZoneStartShrinkTimeOffset) + ZoneDuration;
 
-	if (NewLateGameSafeZonePhase == 3 || NewLateGameSafeZonePhase == 4)
+	if (Globals::bLateGame.load() && (NewLateGameSafeZonePhase == 3 || NewLateGameSafeZonePhase == 4))
 	{
 		if (SafeZoneIndicator)
 			SafeZoneIndicator->SkipShrinkSafeZone();
 		else
 			LOG_WARN(LogZone, "Invalid SafeZoneIndicator!");
 	}
+}
+
+// Consumed only by the server game-thread tick.
+void TickHostZoneMode(AFortGameModeAthena* Mode)
+{
+    static int Pending = -2;
+    static int Generation = -1;
+    static bool StartRequested = false;
+    static auto Deadline = std::chrono::steady_clock::time_point{};
+    if (Generation != AmountOfRestarts)
+    {
+        Generation = AmountOfRestarts;
+        Pending = -2;
+        StartRequested = false;
+    }
+    const int Requested = HostZoneModeRequest.exchange(-2);
+    if (Requested != -2)
+    {
+        if (Requested != -1 && Requested != 4 && Requested != 10 &&
+            Requested != 20 && Requested != 49 && Requested != 100)
+            return;
+        Pending = Requested;
+        StartRequested = false;
+        Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    }
+    if (Pending == -2) return;
+    auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+    if (!State || Globals::bCreative || Globals::bGoingToPlayEvent ||
+        Globals::bLateGame.load() || State->GetGamePhase() >= EAthenaGamePhase::EndGame)
+    {
+        Pending = -2;
+        LOG_WARN(LogZone, "[zone-mode] Request rejected: unavailable in this game state.");
+        return;
+    }
+    const bool Live = State->GetGamePhase() > EAthenaGamePhase::Warmup;
+    if (Live)
+    {
+        if (!SetZoneToIndexOriginal ||
+            Mode->GetOffset("SafeZonePhase", false) == -1 ||
+            State->GetOffset("SafeZonePhase", false) == -1)
+        {
+            Pending = -2;
+            LOG_WARN(LogZone, "[zone-mode] Required native phase API unavailable.");
+            return;
+        }
+        // Clear the native veto before starting or switching a storm.
+        const int SkipOffset = Mode->GetOffset("bSkipSafeZones", false);
+        auto SkipProperty = SkipOffset >= 0
+            ? Mode->GetProperty("bSkipSafeZones", false) : nullptr;
+        if (SkipProperty)
+            Mode->SetBitfieldValue(SkipOffset, GetFieldMask(SkipProperty), false);
+        const int PhaseOffset = Mode->GetOffset("SafeZonePhase", false);
+        const int ActiveOffset = Mode->GetOffset("bSafeZoneActive", false);
+        auto ActiveProperty = ActiveOffset >= 0
+            ? Mode->GetProperty("bSafeZoneActive", false) : nullptr;
+        const bool Inactive = ActiveProperty &&
+            !Mode->ReadBitfieldValue(ActiveOffset, GetFieldMask(ActiveProperty));
+        const bool NeedsStart = !Mode->GetSafeZoneIndicator() ||
+            (PhaseOffset >= 0 && Mode->Get<int>(PhaseOffset) <= 0) || Inactive;
+        if (NeedsStart && !StartRequested)
+        {
+            StartRequested = true;
+            PopulationStormGuard::Ready = false;
+            InitialPopulationSafeZonePhase = 0;
+            bPopulationSafeZonePending = false;
+            LOG_INFO(LogZone, "[zone-mode] Activating storm from phase zero/inactive state.");
+            UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"startsafezone", nullptr);
+            // Allow native initialization to finish before applying the band.
+            return;
+        }
+        if (!Mode->GetSafeZoneIndicator())
+        {
+            if (std::chrono::steady_clock::now() >= Deadline)
+            {
+                Pending = -2;
+                LOG_WARN(LogZone, "[zone-mode] Timed out waiting for storm indicator.");
+                return;
+            }
+            if (!StartRequested)
+            {
+                StartRequested = true;
+                LOG_INFO(LogZone, "[zone-mode] Starting storm; waiting for indicator.");
+                UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"startsafezone", nullptr);
+            }
+            return;
+        }
+    }
+
+    const int Selected = Pending;
+    Pending = -2;
+    HostZoneModeParticipants.store(Selected);
+    const int Actual = State->GetPlayersLeft();
+    const int Effective = GetZoneModeParticipants(Actual);
+    LOG_INFO(LogZone, "[zone-mode] Selected band={} actualPlayers={} effectivePlayers={}",
+        Selected, Actual, Effective);
+    if (!Live) return;
+    InitialPopulationSafeZonePhase = GetPopulationSafeZonePhase(Effective);
+    if (InitialPopulationSafeZonePhase <= 0) return;
+    bPopulationSafeZonePending = true;
+    PopulationStormGuard::Ready = false;
+    SetZoneToIndexHook(Mode, 0);
+}
+
+// Server-side goal based on individual KillScore, grouped by actual team.
+// Do not sum TeamKillScore: it may already contain the whole team's total.
+void TickHostRumbleGoal(AFortGameModeAthena* Mode)
+{
+    // Diagnose the actual loaded version, not the old on-disk object dump.
+    static int DiagnosticGeneration = -1;
+    static int DiagnosticGoal = -1;
+    if (Mode && Globals::bInitializedPlaylist &&
+        IsHostTeamRumblePlaylist(PlaylistName) &&
+        (DiagnosticGeneration != AmountOfRestarts ||
+         DiagnosticGoal != HostRumbleKillGoal.load()))
+    {
+        DiagnosticGeneration = AmountOfRestarts;
+        DiagnosticGoal = HostRumbleKillGoal.load();
+        LOG_INFO(LogDev, "[rumble-schema] version={} goal={} playlist={}",
+            Fortnite_Version, DiagnosticGoal, PlaylistName);
+        auto Inspect = [](UObject* Object, const char* Label)
+        {
+            if (!Object) return;
+            LOG_INFO(LogDev, "[rumble-schema] object={} path={}", Label, Object->GetFullName());
+            int ClassCount = 0;
+            int Hits = 0;
+            for (auto Class = Object->ClassPrivate; Class && ClassCount++ < 32;
+                Class = *(UClass**)(__int64(Class) + Offsets::SuperStruct))
+            {
+                auto Property = *(void**)(__int64(Class) + Offsets::Children);
+                int PropertyCount = 0;
+                while (Property && PropertyCount++ < 2048)
+                {
+                    const std::string Name = GetFNameOfProp(Property)->ToString();
+                    if (Name.find("Score") != std::string::npos ||
+                        Name.find("Goal") != std::string::npos ||
+                        Name.find("Kill") != std::string::npos ||
+                        Name.find("Target") != std::string::npos ||
+                        Name.find("WinCondition") != std::string::npos ||
+                        Name.find("Victory") != std::string::npos)
+                    {
+                        LOG_INFO(LogDev, "[rumble-schema] object={} field={}", Label, Name);
+                        if (++Hits >= 100) return;
+                    }
+                    Property = GetNext(Property);
+                }
+            }
+        };
+        Inspect(Mode, "GameMode");
+        auto DiagnosticState = Mode->GetGameStateAthena();
+        Inspect(DiagnosticState, "GameState");
+        if (DiagnosticState)
+            Inspect(DiagnosticState->GetCurrentPlaylist(), "Playlist");
+        LoopMutators([&](AFortAthenaMutator* Mutator)
+        {
+            Inspect(Mutator, "Mutator");
+        });
+    }
+
+    static int Generation = -1;
+    static bool Finished = false;
+    static auto LastCheck = std::chrono::steady_clock::time_point{};
+    if (Generation != AmountOfRestarts)
+    {
+        Generation = AmountOfRestarts;
+        Finished = false;
+        LastCheck = {};
+        HostRumbleLeadingKills.store(0);
+    }
+    const int Goal = HostRumbleKillGoal.load();
+    if (!Mode || Finished || Goal <= 0 || !IsHostTeamRumblePlaylist(PlaylistName))
+        return;
+    auto State = Mode->GetGameStateAthena();
+    if (!State || State->GetGamePhase() <= EAthenaGamePhase::Warmup ||
+        State->GetGamePhase() >= EAthenaGamePhase::EndGame)
+        return;
+    const auto Now = std::chrono::steady_clock::now();
+    if (Now - LastCheck < std::chrono::milliseconds(500)) return;
+    LastCheck = Now;
+    const int PlayersOffset = State->GetOffset("PlayerArray", false);
+    if (PlayersOffset < 0) return;
+    auto& Players = State->Get<TArray<APlayerState*>>(PlayersOffset);
+    if (Players.Num() < 0 || Players.Num() > 1024 ||
+        (Players.Num() > 0 && !Players.Data)) return;
+
+    std::map<int, int> Scores;
+    for (int i = 0; i < Players.Num(); ++i)
+    {
+        auto PS = Cast<AFortPlayerStateAthena>(Players.at(i));
+        if (!PS) continue;
+        const int Offset = PS->GetOffset("KillScore", false);
+        if (Offset < 0) continue;
+        const int Kills = PS->Get<int>(Offset);
+        const int Team = PS->GetTeamIndex();
+        if (Team >= 3 && Team <= 102 && Kills >= 0 && Kills <= 100000)
+            Scores[Team] += Kills;
+    }
+    int Leading = 0;
+    int Winner = -1;
+    bool Tied = false;
+    for (const auto& Pair : Scores)
+    {
+        if (Pair.second > Leading)
+        {
+            Leading = Pair.second;
+            Winner = Pair.first;
+            Tied = false;
+        }
+        else if (Pair.second == Leading)
+            Tied = true;
+    }
+    HostRumbleLeadingKills.store(Leading);
+    if (Leading < Goal || Winner < 3 || Tied) return;
+
+    auto End = FindObject<UFunction>("/Script/Engine.GameMode.EndMatch");
+    const int WinnerOffset = State->GetOffset("WinningTeam", false);
+    if (!End || End->GetPropertiesSize() != 0 || WinnerOffset < 0)
+    {
+        LOG_WARN(LogDev, "[rumble-goal] Cannot finish safely: native API unavailable.");
+        return;
+    }
+    Finished = true;
+    State->Get<int>(WinnerOffset) = Winner;
+    State->ForceNetUpdate();
+    Mode->ProcessEvent(End);
+    LOG_INFO(LogDev, "[rumble-goal] Team {} reached {} kills; goal={}. Native EndMatch requested.",
+        Winner, Leading, Goal);
 }

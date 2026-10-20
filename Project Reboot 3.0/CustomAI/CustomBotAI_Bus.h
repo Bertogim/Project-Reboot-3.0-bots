@@ -2,6 +2,7 @@
 
 
 #include "CustomBotAI.h"
+#include "../AircraftRecovery.h"
 
 namespace CustomBotAIBus
 {
@@ -154,6 +155,30 @@ namespace CustomBotAIBus
 		if (!Bot.Pawn)
 			return;
 
+		Bot.bInAirPhase = true;
+		if (Bot.PlayerState)
+			Bot.PlayerState->SetInAircraft(false);
+		CustomBotMovement::EnableServerSimulation(Bot);
+		Bot.bCMCInitialized = false;
+		CustomBotMovement::EnsureCMCActive(Bot, false, false);
+		if (auto CM = CMC(Bot))
+		{
+			auto Fn = FindObject<UFunction>(L"/Script/Engine.CharacterMovementComponent.SetMovementMode");
+			if (Fn)
+			{
+				struct { uint8_t Mode; uint8_t CustomMode; } Params{3, 0};
+				if (Fn->GetPropertiesSize() == sizeof(Params))
+					CM->ProcessEvent(Fn, &Params);
+			}
+			const auto ModeOffset = CM->GetOffset("MovementMode", false);
+			if (ModeOffset != -1 && CM->Get<uint8_t>(ModeOffset) != 3)
+				CM->Get<uint8_t>(ModeOffset) = 3;
+			const auto GravityOffset = CM->GetOffset("GravityScale", false);
+			if (GravityOffset != -1 && CM->Get<float>(GravityOffset) <= 0.f)
+				CM->Get<float>(GravityOffset) = Bot.GroundGravityScale > 0.f
+					? Bot.GroundGravityScale : 1.f;
+		}
+
 		FVector BotLoc = Bot.Pawn->GetActorLocation();
 		FVector Dir = CustomBotMovement::DirectionTo(BotLoc, Target);
 
@@ -226,7 +251,9 @@ namespace CustomBotAIBus
 
 		Bot.bInAirPhase = true;
 
-		FVector BusPos{-47557.0f, -62295.0f, 80936.0f};
+		FVector BusPos = Bot.Pawn->GetActorLocation();
+		if (AircraftRecovery::HasBusLocation)
+			BusPos = AircraftRecovery::LastBusLocation;
 
 		if (AActor* Aircraft = CustomBotAI::GetAircraft())
 		{
@@ -264,8 +291,8 @@ namespace CustomBotAIBus
 			{
 				if (IsInAircraft(Bot))
 				{
-					LOG_WARN(LogBots, "[BotBus] aircraft phase ended while on bus, forcing ground placement");
-					ForceExitAircraft(Bot, Ctx);
+					LOG_WARN(LogBots, "[BotBus] forced aircraft exit -> normal custom skydive");
+					CustomEject(Bot, Ctx);
 				}
 				else
 				{
@@ -279,7 +306,7 @@ namespace CustomBotAIBus
 					}
 					else
 					{
-						StartLateDrop(Bot, Ctx);
+						CustomEject(Bot, Ctx);
 					}
 				}
 
@@ -288,7 +315,7 @@ namespace CustomBotAIBus
 
 			if (Ctx.State == EBotState::Ejecting)
 			{
-				StartLateDrop(Bot, Ctx);
+				CustomEject(Bot, Ctx);
 			}
 		}
 

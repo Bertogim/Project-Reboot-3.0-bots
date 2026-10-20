@@ -987,14 +987,23 @@ DWORD WINAPI Main(LPVOID)
     HostClient::Register("", "", 0);
     HostClient::StartPollThread();
 
-    while (SecondsUntilTravel > 0)
+    // Do not consume the configured delay while waiting for a mode.
+    // A full second elapses after StartMatch before the first decrement.
+    while (SecondsUntilTravel.load() > 0)
     {
-        if (bStartPregame)
+        if (!bStartPregame)
         {
-            SecondsUntilTravel -= 1;
+            Sleep(50);
+            continue;
         }
-
+        const int Before = SecondsUntilTravel.load();
         Sleep(1000);
+        if (bStartPregame && Before > 0)
+        {
+            int Expected = Before;
+            // An edit during this second takes precedence over the tick.
+            SecondsUntilTravel.compare_exchange_strong(Expected, Before - 1);
+        }
     }
 
     bSwitchedInitialLevel = true;

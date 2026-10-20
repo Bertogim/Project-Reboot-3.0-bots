@@ -160,7 +160,16 @@ void AFortPlayerControllerAthena::EnterAircraftHook(UObject* PC, AActor* Aircraf
 	if (!PlayerController)
 		return;
 
-	// LOG_INFO(LogDev, "EnterAircraftHook");
+    // During a recovery bus, native start must not reboard living players.
+    if (HostLiveLategameBoarding)
+    {
+        bool Recovered = false;
+        for (auto Target : HostLiveLategameRecovered)
+            if (Target == static_cast<void*>(PlayerController))
+                Recovered = true;
+        if (!Recovered)
+            return;
+    }
 
 	EnterAircraftOriginal(PC, Aircraft);
 
@@ -195,6 +204,14 @@ void AFortPlayerControllerAthena::EnterAircraftHook(UObject* PC, AActor* Aircraf
 	{
 		WorldInventory->RemoveItem(Pair.first, nullptr, Pair.second, true);
 	}
+
+    // Keep the pickaxe/non-droppable items, but do not grant a default
+    // loadout through playlist mutators on lategame boarding.
+    if (Globals::bLateGame.load())
+    {
+        WorldInventory->Update();
+        return;
+    }
 
 	std::vector<std::pair<AFortAthenaMutator*, UFunction*>> FunctionsToCall;
 	LoopMutators([&](AFortAthenaMutator* Mutator) { FunctionsToCall.push_back(std::make_pair(Mutator, Mutator->FindFunction("OnGamePhaseStepChanged"))); });
@@ -651,6 +668,9 @@ void AFortPlayerControllerAthena::UpdateTrackedAttributesHook(AFortPlayerControl
 
 void AFortPlayerControllerAthena::ServerClientIsReadyToRespawnHook(AFortPlayerControllerAthena* PlayerControllerAthena)
 {
+    if (!PlayerControllerAthena || PlayerControllerAthena->IsActorBeingDestroyed()
+        || !GetWorld() || !GetWorld()->GetGameMode())
+        return;
 	AFortPlayerStateAthena* PlayerStateAthena = Cast<AFortPlayerStateAthena>(PlayerControllerAthena->GetPlayerState());
 	AFortGameModeAthena* GameModeAthena = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 
@@ -662,12 +682,32 @@ void AFortPlayerControllerAthena::ServerClientIsReadyToRespawnHook(AFortPlayerCo
 
 	if (GameStateAthena->IsRespawningAllowed(PlayerStateAthena))
 	{
-		FFortRespawnData* RespawnData = PlayerStateAthena->GetRespawnData();
+        if (PlayerStateAthena->GetOffset("RespawnData", false) < 0)
+            return;
+        const char* RequiredFields[] = {
+            "bServerIsReady", "bRespawnDataAvailable", "bClientIsReady",
+            "RespawnLocation", "RespawnRotation"
+        };
+        for (auto Field : RequiredFields)
+            if (FindOffsetStruct("/Script/FortniteGame.FortRespawnData", Field) < 0)
+                return;
+        FFortRespawnData* RespawnData = PlayerStateAthena->GetRespawnData();
+        if (!RespawnData) return;
+        auto ExistingPawn = PlayerControllerAthena->GetMyFortPawn();
+        if (ExistingPawn && !ExistingPawn->IsActorBeingDestroyed()
+            && ExistingPawn->GetHealth() > 0.f)
+            return; // Duplicate readiness RPC must not spawn a second pawn.
 
 		if (RespawnData->IsServerReady() && RespawnData->IsRespawnDataAvailable())
 		{
-			const FVector& RespawnLocation = RespawnData->GetRespawnLocation();
-			const FRotator& RespawnRotation = RespawnData->GetRespawnRotation();
+            const FVector RespawnLocation = RespawnData->GetRespawnLocation();
+            const FRotator RespawnRotation = RespawnData->GetRespawnRotation();
+            if (!std::isfinite(RespawnLocation.X) || !std::isfinite(RespawnLocation.Y)
+                || !std::isfinite(RespawnLocation.Z)
+                || !std::isfinite(RespawnRotation.Pitch)
+                || !std::isfinite(RespawnRotation.Yaw)
+                || !std::isfinite(RespawnRotation.Roll))
+                return;
 
 			// RestartPlayer doesn't work, idk why
 			static auto SpawnDefaultPawnAtTransformFn = FindObject<UFunction>(L"/Script/Engine.GameModeBase.SpawnDefaultPawnAtTransform");
@@ -680,6 +720,13 @@ void AFortPlayerControllerAthena::ServerClientIsReadyToRespawnHook(AFortPlayerCo
 			struct { AController* NewPlayer; FTransform SpawnTransform; APawn* ReturnValue; }
 			AGameModeBase_SpawnDefaultPawnAtTransform_Params{ PlayerControllerAthena, SpawnTransform };
 
+            if (!SpawnDefaultPawnAtTransformFn ||
+                SpawnDefaultPawnAtTransformFn->GetPropertiesSize() !=
+                    sizeof(AGameModeBase_SpawnDefaultPawnAtTransform_Params))
+            {
+                LOG_WARN(LogDev, "[respawn] Spawn API unavailable or parameter layout mismatch.");
+                return;
+            }
 			GameModeAthena->ProcessEvent(SpawnDefaultPawnAtTransformFn, &AGameModeBase_SpawnDefaultPawnAtTransform_Params);
 
 			AFortPlayerPawn* PlayerPawn = Cast<AFortPlayerPawn>(AGameModeBase_SpawnDefaultPawnAtTransform_Params.ReturnValue);

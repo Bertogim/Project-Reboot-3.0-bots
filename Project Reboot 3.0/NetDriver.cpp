@@ -82,7 +82,12 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 		if (World && World->GetNetDriver() == NetDriver)
 		{
 			auto GameMode = Cast<AFortGameModeAthena>(World->GetGameMode());
+            TickHostLiveLategameBus(GameMode);
+			TickHostZoneMode(GameMode);
+			TickHostRumbleGoal(GameMode);
 			TickPopulationBusCountdown(GameMode);
+			AircraftRecovery::Tick(GameMode);
+			PopulationStormGuard::Tick(GameMode);
 			// Observar rivales y confirmar victoria aunque llegue tras la eliminacion.
 			CheckVictoryRoyale();
 		}
@@ -122,7 +127,17 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 		}
 	}
 
-	return TickFlushOriginal(NetDriver);
+	TickFlushOriginal(NetDriver);
+	if (Globals::bStartedListening)
+	{
+		auto World = GetWorld();
+		if (World && World->GetNetDriver() == NetDriver)
+		{
+			PopulationStormGuard::Tick(Cast<AFortGameModeAthena>(World->GetGameMode()));
+			TickVictoryInternalRestart();
+		}
+	}
+	return;
 }
 
 enum class EChannelCreateFlags : uint32_t

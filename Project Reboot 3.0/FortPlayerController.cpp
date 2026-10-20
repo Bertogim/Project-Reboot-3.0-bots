@@ -1,4 +1,5 @@
 #include "FortPlayerController.h"
+#include <cmath>
 
 #include "Rotator.h"
 #include "BuildingSMActor.h"
@@ -770,89 +771,87 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 {
 	auto PlayerController = Cast<AFortPlayerControllerAthena>(Engine_Version < 424 ? PC : ((UActorComponent*)PC)->GetOwner());
 
-	if (Engine_Version < 424 && !Globals::bLateGame.load())
-		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+	// Mantener el salto nativo (posesion, estado de vuelo y salida del bus),
+	// pero corregir su posicion para el bus estacionario de poblacion.
+	bool IsCustomBot = false;
+	if (PlayerController)
+		for (auto& Bot : CustomBotSpawner::AllCustomBots)
+			if (Bot.Controller == PlayerController)
+				IsCustomBot = true;
 
-	if (!PlayerController)
-		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
-
-	// if (!PlayerController->bInAircraft) 
-		// return;
-
-	LOG_INFO(LogDev, "ServerAttemptAircraftJumpHook!");
-
-	auto GameMode = (AFortGameModeAthena*)GetWorld()->GetGameMode();
-	auto GameState = GameMode->GetGameStateAthena();
-
-	AActor* AircraftToJumpFrom = nullptr;
-
-	static auto AircraftsOffset = GameState->GetOffset("Aircrafts", false);
-
-	if (AircraftsOffset == -1)
+	if (PlayerController && !IsCustomBot && InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load())
 	{
-		static auto AircraftOffset = GameState->GetOffset("Aircraft");
-		AircraftToJumpFrom = GameState->Get<AActor*>(AircraftOffset);
-	}
-	else
-	{
-		auto Aircrafts = GameState->GetPtr<TArray<AActor*>>(AircraftsOffset);
-		AircraftToJumpFrom = Aircrafts->Num() > 0 ? Aircrafts->at(0) : nullptr; // skunky
-	}
+		auto World = GetWorld();
+		auto Mode = World ? Cast<AFortGameModeAthena>(World->GetGameMode()) : nullptr;
+		auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+		auto PlayerState = PlayerController->GetPlayerStateAthena();
+		if (!State || !PlayerState || !PlayerState->IsInAircraft())
+			return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
 
-	if (!AircraftToJumpFrom)
-		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
-
-	if (false)
-	{
-		auto NewPawn = GameMode->SpawnDefaultPawnForHook(GameMode, (AController*)PlayerController, AircraftToJumpFrom);
-		PlayerController->Possess(NewPawn);
-	}
-	else
-	{
-		if (false)
+		AActor* Aircraft = nullptr;
+		const auto AircraftsOffset = State->GetOffset("Aircrafts", false);
+		if (AircraftsOffset != -1)
 		{
-			// honestly idk why this doesnt work ( ithink its suppsoed to be spectator)
-
-			auto NAME_Inactive = UKismetStringLibrary::Conv_StringToName(L"NAME_Inactive");
-
-			LOG_INFO(LogDev, "name Comp: {}", NAME_Inactive.ComparisonIndex.Value);
-
-			PlayerController->GetStateName() = NAME_Inactive;
-			PlayerController->SetPlayerIsWaiting(true);
-			PlayerController->ServerRestartPlayer();
+			const auto& Aircrafts = State->Get<TArray<AActor*>>(AircraftsOffset);
+			const int Index = State->GetAircraftIndex(PlayerState);
+			if (Index >= 0 && Index < Aircrafts.Num())
+				Aircraft = Aircrafts.at(Index);
 		}
 		else
 		{
-			GameMode->RestartPlayer(PlayerController);
+			const auto AircraftOffset = State->GetOffset("Aircraft", false);
+			if (AircraftOffset != -1)
+				Aircraft = State->Get<AActor*>(AircraftOffset);
 		}
+		if (!Aircraft)
+			return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
 
-		// we are supposed to do some skydivign stuff here but whatever
-	}
-
-	auto NewPawnAsFort = PlayerController->GetMyFortPawn();
-
-	if (Fortnite_Version >= 18) // TODO (Milxnor) Find a better fix and move this
-	{
-		static auto StormEffectClass = FindObject<UClass>(L"/Game/Athena/SafeZone/GE_OutsideSafeZoneDamage.GE_OutsideSafeZoneDamage_C");
-		auto PlayerState = PlayerController->GetPlayerStateAthena();
-
-		PlayerState->GetAbilitySystemComponent()->RemoveActiveGameplayEffectBySourceEffect(StormEffectClass, 1, PlayerState->GetAbilitySystemComponent());
-	}
-
-	if (NewPawnAsFort)
-	{
-		NewPawnAsFort->SetHealth(100); // needed with server restart player?
-		
-		if (Globals::bLateGame)
+		// Capturar antes del original: el ultimo salto puede destruir el bus.
+		FVector DropLocation = Aircraft->GetActorLocation();
+		const bool ValidDrop = std::isfinite(DropLocation.X)
+			&& std::isfinite(DropLocation.Y) && std::isfinite(DropLocation.Z)
+			&& DropLocation.Z > 1000.f;
+		if (ValidDrop)
+			AircraftRecovery::Arm(PlayerController, State->GetServerWorldTimeSeconds(), DropLocation);
+		ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+		auto Pawn = PlayerController->GetMyFortPawn();
+		if (Pawn && ValidDrop)
 		{
-			NewPawnAsFort->SetShield(100);
-
-			NewPawnAsFort->TeleportTo(AircraftToJumpFrom->GetActorLocation(), FRotator());
+			// Separar jugadores para evitar colisiones al salir simultaneamente.
+			const unsigned int Slot = static_cast<unsigned int>(PlayerState->GetPlayerID()) % 9;
+			DropLocation.X += (static_cast<int>(Slot % 3) - 1) * 300.f;
+			DropLocation.Y += (static_cast<int>(Slot / 3) - 1) * 300.f;
+			DropLocation.Z -= 300.f;
+			const bool Moved = Pawn->TeleportTo(DropLocation, ClientRotation);
+			Pawn->ForceNetUpdate();
+			LOG_INFO(LogDev, "[population-jump] player={}, moved={}, destination=({},{},{}).",
+				PlayerState->GetPlayerID(), Moved, DropLocation.X, DropLocation.Y, DropLocation.Z);
 		}
+		else
+		{
+			LOG_WARN(LogDev, "[population-jump] Native jump preserved: pawn={}, valid aircraft position={}.",
+				Pawn != nullptr, ValidDrop);
+		}
+		return;
 	}
 
-	// PlayerController->ServerRestartPlayer();
-	// return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+	// Los bots custom no deben pasar por RestartPlayer: cambiaria el pawn
+	// mientras la IA y el CMC siguen referenciando el anterior.
+	if (PlayerController)
+	{
+		for (auto& Bot : CustomBotSpawner::AllCustomBots)
+		{
+			if (Bot.Controller == PlayerController)
+			{
+				if (Bot.IsReady() && Bot.AI && Bot.GetHealth() > 0.f
+					&& Bot.PlayerState->IsInAircraft())
+					CustomBotAIBus::CustomEject(Bot, *Bot.AI);
+				return;
+			}
+		}
+	}
+	// El original completa posesion, salida del asiento y estado de vuelo.
+	return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
 }
 
 void AFortPlayerController::ServerSuicideHook(AFortPlayerController* PlayerController)

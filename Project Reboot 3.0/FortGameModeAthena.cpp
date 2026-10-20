@@ -198,10 +198,21 @@ void AFortGameModeAthena::StartAircraftPhaseHook(AFortGameModeAthena* GameMode, 
 	if (!GameMode || !PopulationStartAircraftOriginal)
 		return;
 
-	auto GameState = GameMode->GetGameStateAthena();
+    auto GameState = GameMode->GetGameStateAthena();
+    if (!GameState)
+        return;
+
+    // Re-entering the native match flight lifecycle is not a recovery API.
+    // Protect every caller, not only the GUI request handler.
+    if (bStartedBus && GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
+    {
+        LOG_WARN(LogLateGame, "[aircraft-start-guard] Repeated native flight start rejected; match state preserved.");
+        return;
+    }
+	PrepareLategameSpectators(GameMode);
 	AmountOfPlayersWhenBusStart = GameState ? GameState->GetPlayersLeft() : 0;
 	InitialPopulationSafeZonePhase = !Globals::bCreative && !Globals::bGoingToPlayEvent
-		? GetPopulationSafeZonePhase(AmountOfPlayersWhenBusStart) : 0;
+		? GetPopulationSafeZonePhase(GetZoneModeParticipants(AmountOfPlayersWhenBusStart)) : 0;
 	bPopulationSafeZonePending = InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load();
 	const bool bPopulationStart = bPopulationSafeZonePending;
 
@@ -318,6 +329,10 @@ void AFortGameModeAthena::OnAircraftEnteredDropZoneHook(AFortGameModeAthena* Gam
 {
 	LOG_INFO(LogDev, "OnAircraftEnteredDropZoneHook!");
 
+	// Posicionar antes de que el motor permita/ fuerce los saltos.
+	if (InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load())
+		LateGameThread(reinterpret_cast<LPVOID>(1));
+
 	OnAircraftEnteredDropZoneOriginal(GameModeAthena, Aircraft);
 
 	if (Globals::bLateGame.load() || InitialPopulationSafeZonePhase > 0)
@@ -328,16 +343,9 @@ void AFortGameModeAthena::OnAircraftEnteredDropZoneHook(AFortGameModeAthena* Gam
 
 		GameState->SkipAircraft();
 
-		// El motor puede fijar la espera inicial durante SkipAircraft.
-		// Adelantarla despues de esa llamada, solo para arranques por poblacion.
-		const bool PreserveNativeWait = AmountOfPlayersWhenBusStart >= 11
-			&& AmountOfPlayersWhenBusStart <= 20;
-		if (PreserveNativeWait && InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load())
-		{
-			LOG_INFO(LogZone, "[population-zone] Native initial storm delay preserved: participants={}, target phase={}.",
-				AmountOfPlayersWhenBusStart, InitialPopulationSafeZonePhase);
-		}
-		if (InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load() && !PreserveNativeWait)
+		// Todos los tramos personalizados arrancan sin espera inicial.
+
+		if (InitialPopulationSafeZonePhase > 0 && !Globals::bLateGame.load())
 		{
 			const auto StartTimeOffset = GameState->GetOffset("SafeZonesStartTime", false);
 			if (StartTimeOffset != -1)
@@ -422,7 +430,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		LocalPlayers.Remove(0);
 	} */
 
-	static int LastNum2 = 1;
+	static int LastNum2 = -1;
 
 	if (AmountOfRestarts != LastNum2)
 	{
@@ -749,7 +757,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		Globals::bInitializedPlaylist = true;
 	}
 
-	static int LastNum6 = 1;
+	static int LastNum6 = -1;
 
 	if (AmountOfRestarts != LastNum6)
 	{
@@ -765,7 +773,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		}
 	}
 
-	static int LastNum5 = 1;
+	static int LastNum5 = -1;
 
 	if (AmountOfRestarts != LastNum5 && LastNum6 == AmountOfRestarts) // Make sure we loaded the event successfully.
 	{
@@ -809,7 +817,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		)
 		return false;
 
-	static int LastNum = 1;
+	static int LastNum = -1;
 
 	if (AmountOfRestarts != LastNum)
 	{
@@ -895,7 +903,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 	if (Teams.Num() <= 0)
 		return false;
 
-	static int LastNum3 = 1;
+	static int LastNum3 = -1;
 
 	if (AmountOfRestarts != LastNum3)
 	{
@@ -1115,34 +1123,156 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 	return Ret;
 }
 
+// Match known backend IDs against their serialized representation, not a hex
+// string made by dropping zero bytes (which corrupts both ASCII and binary IDs).
 static std::string GetPlayerAccountId(APlayerState* PlayerState)
 {
-	if (!PlayerState)
-		return "";
+    if (!PlayerState) return "";
+    static auto UniqueIdOffset = PlayerState->GetOffset("UniqueId");
+    if (UniqueIdOffset == -1) return "";
+    auto UniqueId = PlayerState->GetPtr<FUniqueNetIdRepl>(UniqueIdOffset);
+    auto& Bytes = UniqueId->GetReplicationBytes();
+    if (!Bytes.Data || Bytes.Num() <= 0 || Bytes.Num() > 4096) return "";
+    std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+    std::string Found;
+    for (const auto& Pair : HostTeamAssignments)
+    {
+        const auto& Id = Pair.first;
+        if (Id.empty()) continue;
+        bool Matches = false;
+        // FString serialization contains a length prefix and a trailing NUL.
+        for (int Width : {1, 2})
+        {
+            const int Length = (int)Id.size() * Width;
+            for (int Start = 0; Start + Length <= Bytes.Num(); ++Start)
+            {
+                bool Equal = true;
+                for (int i = 0; i < (int)Id.size() && Equal; ++i)
+                {
+                    Equal = Bytes.at(Start + i * Width) == (uint8_t)Id[i];
+                    if (Width == 2) Equal = Equal && Bytes.at(Start + i * Width + 1) == 0;
+                }
+                const bool End = Start + Length == Bytes.Num() ||
+                    (Bytes.at(Start + Length) == 0 &&
+                     (Width == 1 || (Start + Length + 1 < Bytes.Num() && Bytes.at(Start + Length + 1) == 0)));
+                if (Equal && End) { Matches = true; break; }
+            }
+            if (Matches) break;
+        }
+        // EOS hexadecimal IDs can be packed as 16 bytes; preserve zero bytes.
+        if (!Matches && Id.size() == 32 && Id.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos)
+        {
+            for (int Start = 0; Start + 16 <= Bytes.Num(); ++Start)
+            {
+                bool Equal = true;
+                for (int i = 0; i < 16 && Equal; ++i)
+                    Equal = Bytes.at(Start + i) == (uint8_t)std::stoul(Id.substr(i * 2, 2), nullptr, 16);
+                if (Equal) { Matches = true; break; }
+            }
+        }
+        if (Matches)
+        {
+            // Refuse ambiguous matches instead of assigning another player's team.
+            if (!Found.empty() && Found != Id) return "";
+            Found = Id;
+        }
+    }
+    return Found;
+}
 
-	static auto UniqueIdOffset = PlayerState->GetOffset("UniqueId");
+void ApplyHostTeamAssignments(AFortGameModeAthena* GameMode)
+{
+    if (!GameMode) return;
+    auto GameState = GameMode->GetGameStateAthena();
+    if (!GameState || GameState->GetGamePhase() > EAthenaGamePhase::Warmup) return;
 
-	if (UniqueIdOffset == -1)
-		return "";
+    // UniqueId may not be populated when a player first joins. Reconcile
+    // throughout warmup instead of consuming a one-shot update too early.
+    static int LastAssignmentRestart = -1;
+    static auto LastAssignmentCheck = std::chrono::steady_clock::time_point{};
+    const auto Now = std::chrono::steady_clock::now();
+    if (LastAssignmentRestart == AmountOfRestarts && !HostTeamsDirty.load() &&
+        Now - LastAssignmentCheck < std::chrono::milliseconds(500))
+        return;
+    LastAssignmentRestart = AmountOfRestarts;
+    LastAssignmentCheck = Now;
+    {
+        std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+        if (HostTeamAssignments.empty()) return;
+    }
 
-	auto UniqueId = PlayerState->GetPtr<FUniqueNetIdRepl>(UniqueIdOffset);
-
-	if (!UniqueId)
-		return "";
-
-	auto& ReplicationBytes = UniqueId->GetReplicationBytes();
-
-	std::string AccountId;
-
-	for (int i = 0; i < ReplicationBytes.Num(); i++)
-	{
-		uint8_t Byte = ReplicationBytes.at(i);
-
-		if (Byte != 0)
-			AccountId += std::format("{:02x}", Byte);
-	}
-
-	return AccountId;
+    static auto PlayerArrayOffset = GameState->GetOffset("PlayerArray", false);
+    if (PlayerArrayOffset == -1) return;
+    HostTeamsDirty.exchange(false);
+    auto& Players = GameState->Get<TArray<APlayerState*>>(PlayerArrayOffset);
+    if (Players.Num() < 0 || Players.Num() > 1024 ||
+        (Players.Num() > 0 && !Players.Data))
+        return;
+    for (int i = 0; i < Players.Num(); ++i)
+    {
+        auto PS = Cast<AFortPlayerStateAthena>(Players.at(i));
+        if (!PS) continue;
+        const auto Id = GetPlayerAccountId(PS);
+        int Team = -1;
+        {
+            std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+            auto It = HostTeamAssignments.find(Id);
+            if (It != HostTeamAssignments.end()) Team = It->second;
+        }
+        if (Team < 3 || Team > 102) continue;
+        const int Squad = Team - NumToSubtractFromSquadId;
+        if (Squad < 0 || Squad > 255) continue;
+        const bool HasSquad = PS->GetOffset("SquadId", false) >= 0;
+        const bool TeamMatches = PS->GetTeamIndex() == Team;
+        const bool SquadMatches = !HasSquad || PS->GetSquadId() == Squad;
+        if (TeamMatches && SquadMatches)
+        {
+            GameState->SyncHostGameMemberTeam(PS);
+            continue;
+        }
+        auto Container = GameState->GetTeamsArrayContainer();
+        if (Container && (Team >= Container->TeamsArray.Num() ||
+            Squad < 0 || Squad >= Container->SquadsArray.Num())) continue;
+        TWeakObjectPtr<AFortPlayerStateAthena> Weak{};
+        auto Item = GetItemByIndex(PS->InternalIndex);
+        if (!Item) continue;
+        Weak.ObjectIndex = PS->InternalIndex;
+        Weak.ObjectSerialNumber = Item->SerialNumber;
+        if (Container)
+        {
+            // Remove all old memberships before inserting the new team/squad.
+            auto Remove = [&](auto& Arrays) {
+                for (int t = 0; t < Arrays.Num(); ++t)
+                {
+                    auto& Members = Arrays.at(t);
+                    for (int j = Members.Num() - 1; j >= 0; --j)
+                        if (Members.at(j).ObjectIndex == Weak.ObjectIndex &&
+                            Members.at(j).ObjectSerialNumber == Weak.ObjectSerialNumber)
+                        {
+                            // RemoveAtImpl does not shift elements in this SDK.
+                            // Membership order is irrelevant: swap with the last.
+                            const int Last = Members.Num() - 1;
+                            if (j != Last) Members.at(j) = Members.at(Last);
+                            --Members.ArrayNum;
+                        }
+                }
+            };
+            Remove(Container->TeamsArray);
+            Remove(Container->SquadsArray);
+            Container->TeamsArray.at(Team).Add(Weak);
+            Container->SquadsArray.at(Squad).Add(Weak);
+        }
+        PS->GetTeamIndex() = (uint8)Team;
+        if (PS->GetOffset("SquadId", false) != -1) PS->GetSquadId() = (uint8)Squad;
+        GameState->SyncHostGameMemberTeam(PS);
+        // Do not invoke client replication notifications with a null
+        // parameter buffer. Let replication deliver team/squad changes and
+        // invoke the appropriate notifications on the receiving clients.
+        // ForceNetUpdate below schedules the updated PlayerState.
+        PS->ForceNetUpdate();
+        LOG_INFO(LogTeams, "[HostClient] Applied warmup team: {} -> {} squad={}", Id, Team, Squad);
+    }
+    GameState->ForceNetUpdate();
 }
 
 int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint8 preferredTeam, AActor* Controller)
@@ -1201,7 +1331,7 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 	static int Current = DefaultFirstTeam;
 	static int NextTeamIndex = DefaultFirstTeam;
 
-	static int LastNum = 1;
+	static int LastNum = -1;
 
 	if (Globals::AmountOfListens != LastNum)
 	{
@@ -1214,9 +1344,38 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 
 	// Matchmaker pre-assigned team (accountId -> teamIndex from StartMatch).
 	auto AccountId = GetPlayerAccountId(PlayerState);
+    if (AccountId.empty())
+    {
+        size_t KnownCount = 0;
+        {
+            std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+            KnownCount = HostTeamAssignments.size();
+        }
+        LOG_WARN(LogTeams, "[team-debug] No backend identity matched: playerId={} knownAssignments={}",
+            PlayerState->GetPlayerID(), KnownCount);
+        LOG_INFO(LogTeams, "[team-debug] name offsets: private={} legacy={}",
+            PlayerState->GetOffset("PlayerNamePrivate", false),
+            PlayerState->GetOffset("PlayerName", false));
+        const int IdOffset = PlayerState->GetOffset("UniqueId", false);
+        if (IdOffset >= 0)
+        {
+            auto Id = PlayerState->GetPtr<FUniqueNetIdRepl>(IdOffset);
+            auto& Bytes = Id->GetReplicationBytes();
+            LOG_INFO(LogTeams, "[team-debug] UniqueId bytes={}", Bytes.Num());
+            if (Bytes.Data && Bytes.Num() > 0 && Bytes.Num() <= 4096)
+            {
+                std::string Hex;
+                const int Limit = Bytes.Num() < 128 ? Bytes.Num() : 128;
+                for (int i = 0; i < Limit; ++i)
+                    Hex += std::format("{:02x} ", Bytes.at(i));
+                LOG_INFO(LogTeams, "[team-debug] UniqueId hex={}", Hex);
+            }
+        }
+    }
 
 	if (!AccountId.empty())
 	{
+		std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
 		auto It = HostTeamAssignments.find(AccountId);
 
 		if (It != HostTeamAssignments.end())
@@ -1244,6 +1403,12 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 			return NextTeamIndex;
 		}
 	}
+
+    {
+        std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+        for (const auto& Pair : HostTeamAssignments)
+            if (NextTeamIndex <= Pair.second) NextTeamIndex = Pair.second + 1;
+    }
 
 	// std::cout << "Dru!\n";
 
@@ -1666,6 +1831,8 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 	}
 
 	GameState->AddPlayerStateToGameMemberInfo(PlayerStateAthena);
+
+	HostTeamsDirty.store(true);
 
 	LOG_INFO(LogDev, "New player going on TeamIndex {} with SquadId {}", PlayerStateAthena->GetTeamIndex(), SquadIdOffset != -1 ? PlayerStateAthena->GetSquadId() : -1);
 

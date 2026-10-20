@@ -199,6 +199,10 @@ void HostClient::PollLoop()
 		Body["hostState"] = hostState;
 		Body["canJoin"] = bCanJoin;
 		Body["playlist"] = PlaylistName;
+		Body["countdownRemaining"] = HostCountdownRemainingSeconds.load();
+        Body["fillAndBalanceTeams"] = HostFillAndBalanceTeams.load();
+		const int ListeningPort = HostListeningPort.load();
+		if (ListeningPort > 0) Body["port"] = ListeningPort;
 
 		std::string Response;
 
@@ -229,17 +233,23 @@ void HostClient::PollLoop()
 								LOG_INFO(LogMatchmaker, "[HostClient] Playlist: {}", PlaylistName);
 							}
 
-							HostTeamAssignments.clear();
-
-							if (Cmd.contains("groupTeams") && Cmd["groupTeams"].is_object())
 							{
-								for (auto& [AccountId, TeamJson] : Cmd["groupTeams"].items())
-								{
-									int TeamIndex = TeamJson.get<int>();
-									HostTeamAssignments[AccountId] = TeamIndex;
-									LOG_INFO(LogMatchmaker, "[HostClient] Team assignment: {} -> team {}", AccountId, TeamIndex);
-								}
-							}
+                                std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+                                HostTeamAssignments.clear();
+                                if (Cmd.contains("groupTeams") && Cmd["groupTeams"].is_object())
+                                    for (auto& [AccountId, TeamJson] : Cmd["groupTeams"].items())
+                                        if (TeamJson.is_number_integer() && TeamJson.get<int>() >= 3 && TeamJson.get<int>() <= 102)
+                                            HostTeamAssignments[AccountId] = TeamJson.get<int>();
+                            }
+                            HostTeamsDirty.store(true);
+                            {
+                                std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+                                LOG_INFO(LogMatchmaker, "[team-debug] command={} assignments={}",
+                                    Type, HostTeamAssignments.size());
+                                for (const auto& Pair : HostTeamAssignments)
+                                    LOG_INFO(LogMatchmaker, "[team-debug] account={} team={}",
+                                        Pair.first, Pair.second);
+                            }
 
 							bPregameLocked = false;
 							bStartPregame = true;
@@ -247,6 +257,27 @@ void HostClient::PollLoop()
 
 							LOG_INFO(LogMatchmaker, "[HostClient] Match armed, pregame countdown started.");
 						}
+                        else if (Type == "UpdateTeams")
+                        {
+                            {
+                                std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+                                if (Cmd.contains("groupTeams") && Cmd["groupTeams"].is_object())
+                                    for (auto& [AccountId, TeamJson] : Cmd["groupTeams"].items())
+                                        if (TeamJson.is_number_integer() && TeamJson.get<int>() >= 3 && TeamJson.get<int>() <= 102)
+                                            HostTeamAssignments[AccountId] = TeamJson.get<int>();
+                            }
+                            // UObject access is deferred to the game thread.
+                            HostTeamsDirty.store(true);
+                            {
+                                std::lock_guard<std::mutex> Lock(HostTeamAssignmentsMutex);
+                                LOG_INFO(LogMatchmaker, "[team-debug] command={} assignments={}",
+                                    Type, HostTeamAssignments.size());
+                                for (const auto& Pair : HostTeamAssignments)
+                                    LOG_INFO(LogMatchmaker, "[team-debug] account={} team={}",
+                                        Pair.first, Pair.second);
+                            }
+                            LOG_INFO(LogMatchmaker, "[HostClient] Team update received (final={}).", Cmd.value("finalized", false));
+                        }
 						else
 						{
 							LOG_WARN(LogMatchmaker, "[HostClient] Unknown command type: {}", Type);

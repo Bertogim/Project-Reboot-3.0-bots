@@ -159,6 +159,7 @@ public:
 	TScriptInterface<UFortSafeZoneInterface> GetSafeZoneInterface();
 
 	void AddPlayerStateToGameMemberInfo(class AFortPlayerStateAthena* PlayerState);
+	bool SyncHostGameMemberTeam(class AFortPlayerStateAthena* PlayerState);
 	void SkipAircraft();
 
 	int GetAircraftIndex(AFortPlayerState* PlayerState);

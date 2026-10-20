@@ -74,6 +74,73 @@ void AFortGameStateAthena::AddPlayerStateToGameMemberInfo(AFortPlayerStateAthena
 	GameMemberInfoArray->MarkArrayDirty();
 }
 
+
+// Update existing replicated membership only. Never append duplicate members.
+bool AFortGameStateAthena::SyncHostGameMemberTeam(AFortPlayerStateAthena* PS)
+{
+    if (!PS || PS->GetOffset("SquadId", false) < 0) return false;
+    const int ArrayOffset = GetOffset("GameMemberInfoArray", false);
+    const int IdOffset = PS->GetOffset("UniqueId", false);
+    if (ArrayOffset < 0 || IdOffset < 0) return false;
+    auto MemberStruct = FindObject<UStruct>("/Script/FortniteGame.GameMemberInfo");
+    auto ArrayStruct = FindObject<UStruct>("/Script/FortniteGame.GameMemberInfoArray");
+    auto IdStruct = FindObject<UStruct>("/Script/Engine.UniqueNetIdRepl");
+    if (!MemberStruct || !ArrayStruct || !IdStruct) return false;
+
+    const int Size = MemberStruct->GetPropertiesSize();
+    const int MembersOffset = FindOffsetStruct("/Script/FortniteGame.GameMemberInfoArray", "Members");
+    const int TeamOffset = FindOffsetStruct("/Script/FortniteGame.GameMemberInfo", "TeamIndex");
+    const int SquadOffset = FindOffsetStruct("/Script/FortniteGame.GameMemberInfo", "SquadId");
+    const int MemberIdOffset = FindOffsetStruct("/Script/FortniteGame.GameMemberInfo", "MemberUniqueId");
+    const int BytesOffset = FindOffsetStruct("/Script/Engine.UniqueNetIdRepl", "ReplicationBytes");
+    if (Size < sizeof(FFastArraySerializerItem) || Size > 4096 ||
+        MembersOffset < 0 ||
+        MembersOffset + sizeof(TArray<uint8>) > ArrayStruct->GetPropertiesSize() ||
+        TeamOffset < sizeof(FFastArraySerializerItem) || TeamOffset >= Size ||
+        SquadOffset < sizeof(FFastArraySerializerItem) || SquadOffset >= Size ||
+        MemberIdOffset < 0 || MemberIdOffset + IdStruct->GetPropertiesSize() > Size ||
+        BytesOffset < 0 ||
+        BytesOffset + sizeof(TArray<uint8>) > IdStruct->GetPropertiesSize())
+        return false;
+
+    auto& Identity = PS->GetPtr<FUniqueNetIdRepl>(IdOffset)->GetReplicationBytes();
+    if (!Identity.Data || Identity.Num() <= 0 || Identity.Num() > 4096)
+        return false;
+    auto Serializer = GetPtr<FFastArraySerializer>(ArrayOffset);
+    auto Members = reinterpret_cast<TArray<uint8>*>(
+        reinterpret_cast<uint8*>(Serializer) + MembersOffset);
+    if (Members->Num() < 0 || Members->Num() > 1024 ||
+        (Members->Num() > 0 && !Members->Data))
+        return false;
+
+    bool Changed = false;
+    for (int i = 0; i < Members->Num(); ++i)
+    {
+        auto Entry = Members->Data + i * Size;
+        auto& Bytes = *reinterpret_cast<TArray<uint8>*>(
+            Entry + MemberIdOffset + BytesOffset);
+        if (!Bytes.Data || Bytes.Num() != Identity.Num()) continue;
+        bool Same = true;
+        for (int j = 0; j < Identity.Num(); ++j)
+            if (Bytes.at(j) != Identity.at(j)) { Same = false; break; }
+        if (!Same) continue;
+        if (Entry[TeamOffset] == PS->GetTeamIndex() &&
+            Entry[SquadOffset] == PS->GetSquadId())
+            continue;
+        Entry[TeamOffset] = PS->GetTeamIndex();
+        Entry[SquadOffset] = PS->GetSquadId();
+        Serializer->MarkItemDirty(reinterpret_cast<FFastArraySerializerItem*>(Entry));
+        Changed = true;
+    }
+    if (Changed)
+    {
+        ForceNetUpdate();
+        LOG_INFO(LogTeams, "[team-members] Updated replicated membership: playerId={} team={} squad={}",
+            PS->GetPlayerID(), (int)PS->GetTeamIndex(), (int)PS->GetSquadId());
+    }
+    return Changed;
+}
+
 void AFortGameStateAthena::SkipAircraft()
 {
 	// return UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"skipaircraft", nullptr);
@@ -170,30 +237,29 @@ UFortPlaylistAthena*& AFortGameStateAthena::GetCurrentPlaylist()
 
 int AFortGameStateAthena::GetAircraftIndex(AFortPlayerState* PlayerState)
 {
-	// The function has a string in it but we can just remake lol
+    auto AthenaState = Cast<AFortPlayerStateAthena>(PlayerState);
+    auto Playlist = GetCurrentPlaylist();
+    if (!AthenaState || !Playlist)
+        return 0;
 
-	auto PlayerStateAthena = Cast<AFortPlayerStateAthena>(PlayerState);
+    const int BehaviorOffset = GetOffset("AirCraftBehavior", false);
+    if (BehaviorOffset < 0 || Get<uint8_t>(BehaviorOffset) != 1)
+        return 0;
 
-	if (!PlayerStateAthena)
-		return 0;
+    const int FirstTeamOffset = Playlist->GetOffset("DefaultFirstTeam", false);
+    const int TeamOffset = AthenaState->GetOffset("TeamIndex", false);
+    const int AircraftsOffset = GetOffset("Aircrafts", false);
+    if (FirstTeamOffset < 0 || TeamOffset < 0 || AircraftsOffset < 0)
+        return 0;
 
-	auto CurrentPlaylist = GetCurrentPlaylist();
-	
-	if (!CurrentPlaylist)
-		return 0;
+    const int Index = static_cast<int>(AthenaState->Get<uint8_t>(TeamOffset))
+        - Playlist->Get<int>(FirstTeamOffset);
+    const auto& Aircrafts = Get<TArray<AActor*>>(AircraftsOffset);
+    if (Index < 0 || Index >= Aircrafts.Num() || !Aircrafts.Data)
+        return 0;
 
-	static auto AirCraftBehaviorOffset = GetOffset("AirCraftBehavior");
-
-	if (Get<uint8_t>(AirCraftBehaviorOffset) != 1) // AirCraftBehavior != EAirCraftBehavior::OpposingAirCraftForEachTeam
-		return 0;
-
-	auto TeamIndex = PlayerStateAthena->GetTeamIndex();
-	int idfkwhatthisisimguessing = TeamIndex;
-
-	static auto DefaultFirstTeamOffset = CurrentPlaylist->GetOffset("DefaultFirstTeam");
-	auto DefaultFirstTeam = CurrentPlaylist->Get<int>(DefaultFirstTeamOffset);
-
-	return TeamIndex - idfkwhatthisisimguessing;
+    auto Aircraft = Aircrafts.at(Index);
+    return Aircraft && !Aircraft->IsActorBeingDestroyed() ? Index : 0;
 }
 
 bool AFortGameStateAthena::IsPlayerBuildableClass(UClass* Class)

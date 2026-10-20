@@ -94,7 +94,8 @@ void UWorld::Listen()
 		NewNetDriver->GetMaxClientRate() = NewNetDriver->GetMaxInternetClientRate();
 	}
 
-	LOG_INFO(LogNet, "Listening on port {}!", Port + Globals::AmountOfListens - 1);
+	HostListeningPort.store(URL.Port);
+	LOG_INFO(LogNet, "Listening on port {}!", URL.Port);
 }
 
 AWorldSettings* UWorld::GetWorldSettings(const bool bCheckStreamingPersistent, const bool bChecked) const

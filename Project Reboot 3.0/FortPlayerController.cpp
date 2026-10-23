@@ -773,6 +773,28 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 
 	// Mantener el salto nativo (posesion, estado de vuelo y salida del bus),
 	// pero corregir su posicion para el bus estacionario de poblacion.
+	// Arm only this recovery flight's passengers before native jump can move
+	// their pawn or destroy the aircraft. Ordinary players remain untouched.
+	if (PlayerController && HostRecoveryBus::Active)
+	{
+		for (const auto& Identity : HostRecoveryBus::Passengers)
+		{
+			if (Identity.Resolve() != PlayerController)
+				continue;
+			auto Aircraft = static_cast<AActor*>(HostRecoveryBus::Bus.Resolve());
+			auto World = GetWorld();
+			auto Mode = World ? Cast<AFortGameModeAthena>(World->GetGameMode()) : nullptr;
+			auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+			if (Aircraft && !Aircraft->IsActorBeingDestroyed() && State)
+			{
+				AircraftRecovery::Arm(PlayerController,
+					State->GetServerWorldTimeSeconds(), Aircraft->GetActorLocation());
+				if (auto Entry = AircraftRecovery::Find(PlayerController))
+					Entry->RecoveryPassenger = true;
+			}
+			break;
+		}
+	}
 	bool IsCustomBot = false;
 	if (PlayerController)
 		for (auto& Bot : CustomBotSpawner::AllCustomBots)

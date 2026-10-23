@@ -239,6 +239,7 @@ public:
 };
 
 void ApplyHostTeamAssignments(class AFortGameModeAthena* GameMode);
+void PublishHostPopulation(class AFortGameModeAthena* GameMode);
 
 class AFortGameModeAthena : public AFortGameModePvPBase
 {
@@ -302,6 +303,8 @@ extern inline bool bVictoryRoyaleHadTeams = false;
 inline bool bVictoryRestartPending = false;
 inline std::chrono::steady_clock::time_point VictoryRestartDeadline{};
 
+void TryFinishLastSurvivingTeam(AFortGameModeAthena* Mode);
+
 // Reinicio interno solo con victoria confirmada por el motor:
 // hubo rivales, queda exactamente un equipo, fase EndGame y puesto 1.
 // Un jugador solo, cero equipos o un contador TeamsLeft no bastan.
@@ -311,6 +314,8 @@ static inline void CheckVictoryRoyale()
     auto Mode = World ? Cast<AFortGameModeAthena>(World->GetGameMode()) : nullptr;
     auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
     if (!State) return;
+
+    TryFinishLastSurvivingTeam(Mode);
 
     // MatchState is the engine's match lifecycle. GamePhase may remain at
     // SafeZones after the engine has already entered WaitingPostMatch.
@@ -375,8 +380,8 @@ static inline void CheckVictoryRoyale()
     if (!ConfirmedWinner) return;
 
     bVictoryRoyaleLogged = true;
-    VictoryRestartDeadline = Now + std::chrono::seconds(7);
+    VictoryRestartDeadline = Now + std::chrono::seconds(15);
     bVictoryRestartPending = true;
     LOG_INFO(LogDev,
-        "[internal-restart] Victory confirmed; Restart scheduled in 7 seconds.");
+        "[internal-restart] Victory confirmed; Restart scheduled in 15 seconds.");
 }

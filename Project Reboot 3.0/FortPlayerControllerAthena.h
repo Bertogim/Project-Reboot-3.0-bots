@@ -156,6 +156,10 @@ public:
 	static inline void (*ServerReadyToStartMatchOriginal)(AFortPlayerControllerAthena* PlayerController);
 	static inline void (*ServerRequestSeatChangeOriginal)(AFortPlayerControllerAthena* PlayerController, int TargetSeatIndex);
 	static inline void (*EnterAircraftOriginal)(UObject* PC, AActor* Aircraft);
+	static inline void (*ServerSpectatePlayerOriginal)(AFortPlayerControllerAthena*, APawn*, bool) = nullptr;
+	static inline void (*ServerSpectatePlayerStateOriginal)(AFortPlayerControllerAthena*, APlayerState*, bool) = nullptr;
+	static void ServerSpectatePlayerHook(AFortPlayerControllerAthena* PC, APawn* Target, bool AllowStateChange);
+	static void ServerSpectatePlayerStateHook(AFortPlayerControllerAthena* PC, APlayerState* Target, bool AllowStateChange);
 	static inline void (*StartGhostModeOriginal)(UObject* Context, FFrame* Stack, void* Ret);
 	static inline void (*EndGhostModeOriginal)(AFortPlayerControllerAthena* PlayerController);
 
@@ -244,7 +248,11 @@ public:
 
 		if (RespawnPlayerAfterDeathFn)
 		{
-			this->ProcessEvent(RespawnPlayerAfterDeathFn, &bEnterSkydiving);
+			// Season 7 exposes this function without parameters.
+			if (RespawnPlayerAfterDeathFn->GetPropertiesSize() == 0)
+				this->ProcessEvent(RespawnPlayerAfterDeathFn);
+			else if (RespawnPlayerAfterDeathFn->GetPropertiesSize() == sizeof(bool))
+				this->ProcessEvent(RespawnPlayerAfterDeathFn, &bEnterSkydiving);
 		}
 		else
 		{
@@ -277,6 +285,7 @@ public:
 	static void ServerRestartPlayerHook(AFortPlayerControllerAthena* Controller);
 	static void ServerGiveCreativeItemHook(AFortPlayerControllerAthena* Controller, FFortItemEntry CreativeItem);
 	static void ServerTeleportToPlaygroundLobbyIslandHook(AFortPlayerControllerAthena* Controller);
+	static inline void (*ServerAcknowledgePossessionOriginal)(APlayerController*, APawn*) = nullptr;
 	static void ServerAcknowledgePossessionHook(APlayerController* Controller, APawn* Pawn);
 	static void ServerPlaySquadQuickChatMessageHook(AFortPlayerControllerAthena* PlayerController, __int64 ChatEntry, __int64 SenderID);
 	static void GetPlayerViewPointHook(AFortPlayerControllerAthena* PlayerController, FVector& Location, FRotator& Rotation);

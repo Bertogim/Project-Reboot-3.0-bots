@@ -16,6 +16,42 @@
 
 namespace
 {
+    // The launcher permits arbitrary host names and adds instance suffixes.
+    // Read the actual login instead of guessing a "Host" name prefix.
+    std::string HostLoginAccountId()
+    {
+        const std::wstring Command = GetCommandLineW();
+        std::wstring Login;
+        for (size_t i = 0; i < Command.size();)
+        {
+            while (i < Command.size() && (Command[i] == L' ' || Command[i] == L'\t')) ++i;
+            std::wstring Token;
+            bool Quoted = false;
+            while (i < Command.size())
+            {
+                const wchar_t Ch = Command[i];
+                if (Ch == L'"') { Quoted = !Quoted; ++i; continue; }
+                if (!Quoted && (Ch == L' ' || Ch == L'\t')) break;
+                Token.push_back(Ch);
+                ++i;
+            }
+            const std::wstring Key = L"-AUTH_LOGIN=";
+            if (Token.size() >= Key.size() &&
+                _wcsnicmp(Token.c_str(), Key.c_str(), Key.size()) == 0)
+                Login = Token.substr(Key.size());
+        }
+        const auto At = Login.find(L'@');
+        if (At != std::wstring::npos) Login.resize(At);
+        if (Login.empty()) return {};
+        const int Length = WideCharToMultiByte(CP_UTF8, 0, Login.data(),
+            (int)Login.size(), nullptr, 0, nullptr, nullptr);
+        if (Length <= 0) return {};
+        std::string Result(Length, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, Login.data(), (int)Login.size(),
+            Result.data(), Length, nullptr, nullptr);
+        return Result;
+    }
+
 	struct PostResponse
 	{
 		std::string Body;
@@ -197,6 +233,15 @@ void HostClient::PollLoop()
 		nlohmann::json Body;
 		Body["hostId"] = HostId;
 		Body["hostState"] = hostState;
+        const bool ReportingMatchEnd = HostMatchEnding.load();
+        Body["matchEnding"] = ReportingMatchEnd;
+        Body["hostAccountId"] = HostLoginAccountId();
+        unsigned long long PopulationGeneration;
+        {
+            std::lock_guard<std::mutex> Lock(HostPopulationMutex);
+            PopulationGeneration = HostPopulationGeneration;
+            Body["presentAccountIds"] = HostPresentAccountIds;
+        }
 		Body["canJoin"] = bCanJoin;
 		Body["playlist"] = PlaylistName;
 		Body["countdownRemaining"] = HostCountdownRemainingSeconds.load();
@@ -213,6 +258,26 @@ void HostClient::PollLoop()
 			try
 			{
 				auto Json = nlohmann::json::parse(Response);
+                if (ReportingMatchEnd && Json.value("matchEndAcknowledged", false))
+                {
+                    std::lock_guard<std::mutex> Lock(HostPopulationMutex);
+                    if (PopulationGeneration == HostPopulationGeneration &&
+                        HostMatchEnding.load())
+                        HostMatchEndAcknowledged.store(true);
+                }
+                if (Json.contains("population") && Json["population"].is_object())
+                {
+                    const auto& Population = Json["population"];
+                    const int Outside = Population.value("outside", -1);
+                    const bool AllHere = Population.value("allHere", false);
+                    std::lock_guard<std::mutex> Lock(HostPopulationMutex);
+                    if (PopulationGeneration == HostPopulationGeneration)
+                    {
+                        HostPopulationOutside.store(Outside);
+                        HostPopulationAllHere.store(AllHere);
+                        HostPopulationReceivedAt = GetTickCount64();
+                    }
+                }
 
 				if (Json.contains("commands") && Json["commands"].is_array())
 				{

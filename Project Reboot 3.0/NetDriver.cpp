@@ -83,6 +83,7 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 		{
 			auto GameMode = Cast<AFortGameModeAthena>(World->GetGameMode());
             TickHostLiveLategameBus(GameMode);
+			HostRecoveryBus::Tick(GameMode);
 			TickHostZoneMode(GameMode);
 			TickHostRumbleGoal(GameMode);
 			TickPopulationBusCountdown(GameMode);

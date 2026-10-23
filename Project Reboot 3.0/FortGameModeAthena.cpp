@@ -38,6 +38,129 @@
 #include "TSubclassOf.h"
 #include "FortAthenaSupplyDrop.h"
 
+void TryFinishLastSurvivingTeam(AFortGameModeAthena* Mode)
+{
+    static int Session = -1;
+    static int Candidate = -1;
+    static bool Requested = false;
+    static auto CandidateSince = std::chrono::steady_clock::time_point{};
+    if (Session != Globals::AmountOfListens)
+    {
+        Session = Globals::AmountOfListens;
+        Candidate = -1;
+        Requested = false;
+        bVictoryRoyaleHadTeams = false;
+    }
+    auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+    if (!State || Requested || bVictoryRestartPending || Globals::bCreative
+        || Globals::bGoingToPlayEvent)
+        return;
+    if (State->GetGamePhase() <= EAthenaGamePhase::Warmup)
+    {
+        Candidate = -1;
+        bVictoryRoyaleHadTeams = false;
+        return;
+    }
+    if (State->GetGamePhase() >= EAthenaGamePhase::EndGame)
+        return;
+    auto Playlist = State->GetCurrentPlaylist();
+    if (!Playlist)
+        return;
+    const int RespawnOffset = Playlist->GetOffset("RespawnType", false);
+    if (RespawnOffset < 0 || Playlist->Get<uint8_t>(RespawnOffset) != 0)
+        return;
+    // Restrict the fallback to ordinary elimination playlists.
+    const std::string Name = Playlist->GetName();
+    if (Name.find("Rumble") != std::string::npos
+        || Name.find("Respawn") != std::string::npos)
+        return;
+    const int PlayersOffset = State->GetOffset("PlayerArray", false);
+    if (PlayersOffset < 0)
+        return;
+    auto& Players = State->Get<TArray<APlayerState*>>(PlayersOffset);
+    if (Players.Num() <= 0 || Players.Num() > 1024 || !Players.Data)
+        return;
+    bool Teams[103]{};
+    int TeamCount = 0;
+    int Winner = -1;
+    AFortPawn* Finisher = nullptr;
+    for (int i = 0; i < Players.Num(); ++i)
+    {
+        auto PS = Cast<AFortPlayerStateAthena>(Players.at(i));
+        if (!PS || PS->IsActorBeingDestroyed())
+            continue;
+        auto PC = Cast<AFortPlayerControllerAthena>(PS->GetOwner());
+        if (!PC || PC->IsActorBeingDestroyed() || PC->GetPlayerStateAthena() != PS)
+            continue;
+        auto Pawn = PC->GetMyFortPawn();
+        if (!PS->IsInAircraft()
+            && (!Pawn || Pawn->IsActorBeingDestroyed() || Pawn->GetHealth() <= 0.f))
+            continue;
+        // DBNO players still belong to a surviving team.
+        const int Team = PS->GetTeamIndex();
+        if (Team < 3 || Team > 102)
+            return;
+        if (!Teams[Team])
+        {
+            Teams[Team] = true;
+            ++TeamCount;
+            Winner = Team;
+        }
+        if (Pawn && !Pawn->IsActorBeingDestroyed() && Pawn->GetHealth() > 0.f)
+            Finisher = Pawn;
+    }
+    if (TeamCount > 1)
+        bVictoryRoyaleHadTeams = true;
+    if (TeamCount != 1 || !bVictoryRoyaleHadTeams
+        || State->GetGamePhase() != EAthenaGamePhase::SafeZones
+        || HostRecoveryBus::Active || HostLiveLategameBoarding)
+    {
+        Candidate = -1;
+        return;
+    }
+    const auto Now = std::chrono::steady_clock::now();
+    if (Candidate != Winner)
+    {
+        Candidate = Winner;
+        CandidateSince = Now;
+        return;
+    }
+    if (Now - CandidateSince < std::chrono::seconds(2))
+        return;
+    auto End = FindObject<UFunction>("/Script/Engine.GameMode.EndMatch");
+    const int WinnerOffset = State->GetOffset("WinningTeam", false);
+    if (!End || End->GetPropertiesSize() != 0 || WinnerOffset < 0)
+        return;
+    Requested = true;
+    State->Get<int>(WinnerOffset) = Winner;
+    const int WinningPlayerOffset = State->GetOffset("WinningPlayerState", false);
+    if (WinningPlayerOffset >= 0 && Finisher)
+        State->Get<UObject*>(WinningPlayerOffset) = Finisher->GetPlayerState();
+    for (int i = 0; i < Players.Num(); ++i)
+    {
+        auto PS = Cast<AFortPlayerStateAthena>(Players.at(i));
+        if (!PS || PS->IsActorBeingDestroyed() || PS->GetTeamIndex() != Winner)
+            continue;
+        PS->GetPlace() = 1;
+        PS->ForceNetUpdate();
+        auto PC = Cast<AFortPlayerControllerAthena>(PS->GetOwner());
+        if (!PC || PC->IsActorBeingDestroyed())
+            continue;
+        struct FWinParams
+        {
+            APawn* FinisherPawn;
+            UObject* FinishingWeapon;
+            uint8_t DeathCause;
+        } Params{Finisher, nullptr, 0};
+        auto Notify = PC->FindFunction("ClientNotifyTeamWon");
+        if (Notify && Notify->GetPropertiesSize() == sizeof(Params))
+            PC->ProcessEvent(Notify, &Params);
+    }
+    State->ForceNetUpdate();
+    Mode->ProcessEvent(End);
+    LOG_INFO(LogDev, "[victory-fallback] Last surviving team {}; native EndMatch requested.", Winner);
+}
+
 static UFortPlaylistAthena* GetPlaylistToUse()
 {
 	// LOG_DEBUG(LogDev, "PlaylistName: {}", PlaylistName);
@@ -1180,6 +1303,33 @@ static std::string GetPlayerAccountId(APlayerState* PlayerState)
     return Found;
 }
 
+void PublishHostPopulation(AFortGameModeAthena* GameMode)
+{
+    std::vector<std::string> Present;
+    auto World = GetWorld();
+    auto Driver = World ? World->GetNetDriver() : nullptr;
+    if (!GameMode || !Driver) return;
+    auto& Connections = Driver->GetClientConnections();
+    if (Connections.Num() < 0 || Connections.Num() > 1024 ||
+        (Connections.Num() > 0 && !Connections.Data)) return;
+    for (int i = 0; i < Connections.Num(); ++i)
+    {
+        auto Connection = Connections.at(i);
+        auto Controller = Connection ? Connection->GetPlayerController() : nullptr;
+        if (!Controller) continue;
+        // Only remote connections with a resolved backend identity count.
+        // Reserved teams, local host controllers and bots are not arrivals.
+        const auto Id = GetPlayerAccountId(Controller->GetPlayerState());
+        if (Id.empty()) continue;
+        bool Duplicate = false;
+        for (const auto& Existing : Present)
+            if (Existing == Id) { Duplicate = true; break; }
+        if (!Duplicate) Present.push_back(Id);
+    }
+    std::lock_guard<std::mutex> Lock(HostPopulationMutex);
+    HostPresentAccountIds = std::move(Present);
+}
+
 void ApplyHostTeamAssignments(AFortGameModeAthena* GameMode)
 {
     if (!GameMode) return;
@@ -1208,6 +1358,11 @@ void ApplyHostTeamAssignments(AFortGameModeAthena* GameMode)
     if (Players.Num() < 0 || Players.Num() > 1024 ||
         (Players.Num() > 0 && !Players.Data))
         return;
+    // Inspect the native team objects before changing replication behavior.
+    // Numeric team/squad IDs do not prove that private team data agrees.
+    static auto LastTeamDiagnostic = std::chrono::steady_clock::time_point{};
+    const bool DiagnoseTeams = Now - LastTeamDiagnostic >= std::chrono::seconds(10);
+    if (DiagnoseTeams) LastTeamDiagnostic = Now;
     for (int i = 0; i < Players.Num(); ++i)
     {
         auto PS = Cast<AFortPlayerStateAthena>(Players.at(i));
@@ -1225,6 +1380,31 @@ void ApplyHostTeamAssignments(AFortGameModeAthena* GameMode)
         const bool HasSquad = PS->GetOffset("SquadId", false) >= 0;
         const bool TeamMatches = PS->GetTeamIndex() == Team;
         const bool SquadMatches = !HasSquad || PS->GetSquadId() == Squad;
+        if (DiagnoseTeams)
+        {
+            const int TeamOffset = PS->GetOffset("PlayerTeam", false);
+            const int PrivateOffset = PS->GetOffset("PlayerTeamPrivate", false);
+            auto NativeTeam = TeamOffset >= 0 ? PS->Get<AActor*>(TeamOffset) : nullptr;
+            auto NativePrivate = PrivateOffset >= 0 ? PS->Get<AActor*>(PrivateOffset) : nullptr;
+            const bool ValidTeam = NativeTeam && !NativeTeam->IsActorBeingDestroyed();
+            const bool ValidPrivate = NativePrivate && !NativePrivate->IsActorBeingDestroyed();
+            const int NativeIndexOffset = ValidTeam ? NativeTeam->GetOffset("Team", false) : -1;
+            const int MembersOffset = ValidTeam ? NativeTeam->GetOffset("TeamMembers", false) : -1;
+            const int PrivateTeamOffset = ValidPrivate ? NativePrivate->GetOffset("TeamInfo", false) : -1;
+            const int HealthOffset = PS->GetOffset("CurrentHealth", false);
+            const int ShieldOffset = PS->GetOffset("CurrentShield", false);
+            LOG_INFO(LogTeams,
+                "[team-health-diag] account={} player={} desired={} actual={} squad={} nativeTeam={} nativeIndex={} private={} privateTeam={} members={} health={} shield={}",
+                Id, PS->GetPlayerID(), Team, (int)PS->GetTeamIndex(),
+                HasSquad ? (int)PS->GetSquadId() : -1,
+                ValidTeam ? NativeTeam->InternalIndex : -1,
+                NativeIndexOffset >= 0 ? (int)NativeTeam->Get<uint8>(NativeIndexOffset) : -1,
+                ValidPrivate ? NativePrivate->InternalIndex : -1,
+                PrivateTeamOffset >= 0 && NativePrivate->Get<AActor*>(PrivateTeamOffset) == NativeTeam,
+                MembersOffset >= 0 ? NativeTeam->Get<TArray<AController*>>(MembersOffset).Num() : -1,
+                HealthOffset >= 0 ? PS->Get<float>(HealthOffset) : -1.f,
+                ShieldOffset >= 0 ? PS->Get<float>(ShieldOffset) : -1.f);
+        }
         if (TeamMatches && SquadMatches)
         {
             GameState->SyncHostGameMemberTeam(PS);
@@ -1262,13 +1442,27 @@ void ApplyHostTeamAssignments(AFortGameModeAthena* GameMode)
             Container->TeamsArray.at(Team).Add(Weak);
             Container->SquadsArray.at(Squad).Add(Weak);
         }
+        const uint8 PreviousTeam = PS->GetTeamIndex();
         PS->GetTeamIndex() = (uint8)Team;
-        if (PS->GetOffset("SquadId", false) != -1) PS->GetSquadId() = (uint8)Squad;
+        if (HasSquad) PS->GetSquadId() = (uint8)Squad;
+        // Run the native server-side membership notifications too. Updating
+        // numeric IDs alone leaves native team/squad bookkeeping stale.
+        // OnRep_TeamIndex takes OldVal: never dispatch it with null parameters.
+        static auto TeamNotify = FindObject<UFunction>(
+            "/Script/FortniteGame.FortPlayerStateAthena.OnRep_TeamIndex");
+        static auto SquadNotify = FindObject<UFunction>(
+            "/Script/FortniteGame.FortPlayerStateAthena.OnRep_SquadId");
+        if (!TeamMatches && TeamNotify &&
+            TeamNotify->GetPropertiesSize() == sizeof(uint8))
+        {
+            uint8 OldVal = PreviousTeam;
+            PS->ProcessEvent(TeamNotify, &OldVal);
+        }
+        if (!SquadMatches && SquadNotify &&
+            SquadNotify->GetPropertiesSize() == 0)
+            PS->ProcessEvent(SquadNotify);
         GameState->SyncHostGameMemberTeam(PS);
-        // Do not invoke client replication notifications with a null
-        // parameter buffer. Let replication deliver team/squad changes and
-        // invoke the appropriate notifications on the receiving clients.
-        // ForceNetUpdate below schedules the updated PlayerState.
+        // Clients still receive the replicated values and their own notifies.
         PS->ForceNetUpdate();
         LOG_INFO(LogTeams, "[HostClient] Applied warmup team: {} -> {} squad={}", Id, Team, Squad);
     }

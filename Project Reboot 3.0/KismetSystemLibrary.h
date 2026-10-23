@@ -106,6 +106,15 @@ public:
 		KismetSystemLibrary->ProcessEvent(fn, &UKismetSystemLibrary_ExecuteConsoleCommand_Params);
 	}
 
+	static void K2_ClearTimer(UObject* Object, const FString& FunctionName)
+	{
+		auto Library = FindObject("/Script/Engine.Default__KismetSystemLibrary");
+		auto Function = FindObject<UFunction>("/Script/Engine.KismetSystemLibrary.K2_ClearTimer");
+		struct { UObject* Object; FString FunctionName; } Params{Object, FunctionName};
+		if (Library && Function && Function->GetPropertiesSize() == sizeof(Params))
+			Library->ProcessEvent(Function, &Params);
+	}
+
 	static FTimerHandle K2_SetTimer(UObject* Object, FString FunctionName, float Time, bool bLooping)
 	{
 		struct {

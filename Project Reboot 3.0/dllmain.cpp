@@ -1364,7 +1364,8 @@ DWORD WINAPI Main(LPVOID)
     }
 
     Hooking::MinHook::Hook(FortPlayerControllerAthenaDefault, FindObject<UFunction>(L"/Script/Engine.PlayerController.ServerAcknowledgePossession"),
-        AFortPlayerControllerAthena::ServerAcknowledgePossessionHook, nullptr, false);
+        AFortPlayerControllerAthena::ServerAcknowledgePossessionHook,
+        (PVOID*)&AFortPlayerControllerAthena::ServerAcknowledgePossessionOriginal, false);
 
     if (Engine_Version >= 424)
     {
@@ -1755,6 +1756,17 @@ DWORD WINAPI Main(LPVOID)
         }
     }
 
+    if (Fortnite_Version >= 7 && Fortnite_Version < 8)
+    {
+        Hooking::MinHook::Hook(FortPlayerControllerAthenaDefault,
+            FindObject<UFunction>(L"/Script/FortniteGame.FortPlayerControllerZone.ServerSpectatePlayer"),
+            AFortPlayerControllerAthena::ServerSpectatePlayerHook,
+            (PVOID*)&AFortPlayerControllerAthena::ServerSpectatePlayerOriginal, false);
+        Hooking::MinHook::Hook(FortPlayerControllerAthenaDefault,
+            FindObject<UFunction>(L"/Script/FortniteGame.FortPlayerControllerZone.ServerSpectatePlayerState"),
+            AFortPlayerControllerAthena::ServerSpectatePlayerStateHook,
+            (PVOID*)&AFortPlayerControllerAthena::ServerSpectatePlayerStateOriginal, false);
+    }
     Hooking::MinHook::Hook((PVOID)Addresses::GetPlayerViewpoint, (PVOID)AFortPlayerControllerAthena::GetPlayerViewPointHook, (PVOID*)&AFortPlayerControllerAthena::GetPlayerViewPointOriginal);
 
     Hooking::MinHook::Hook((PVOID)Addresses::TickFlush, (PVOID)UNetDriver::TickFlushHook, (PVOID*)&UNetDriver::TickFlushOriginal);
@@ -1904,4 +1916,3 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
 
     return TRUE;
 }
-

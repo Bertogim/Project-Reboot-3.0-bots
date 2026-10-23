@@ -18,6 +18,8 @@ namespace AircraftRecovery
 		bool InAircraft = false;
 		bool Armed = false;
 		bool MovementReleased = false;
+		bool RecoveryPassenger = false;
+		bool AwaitingBoarding = false;
 		float Until = 0.f;
 		float NextAttempt = 0.f;
 		int Attempts = 0;
@@ -63,9 +65,10 @@ namespace AircraftRecovery
 		if (!ValidLocation(Bus))
 			return;
 		auto E = Find(PC);
-		if (!E || E->Armed)
+		if (!E || (E->Armed && Now <= E->Until))
 			return; // RPC repetidas no prolongan los diez segundos.
 		E->Armed = true;
+		E->MovementReleased = false;
 		E->Until = Now + 10.f;
 		E->Destination = Bus;
 		E->Destination.Z -= 300.f;
@@ -134,7 +137,13 @@ namespace AircraftRecovery
 			Entries.clear();
 			return;
 		}
-		if (InitialPopulationSafeZonePhase <= 0 && !Globals::bLateGame.load())
+		// Explicitly armed recovery passengers also need protection in normal BR.
+		bool HasArmedRecovery = false;
+		for (const auto& Entry : Entries)
+			if (Entry.Armed && State->GetServerWorldTimeSeconds() <= Entry.Until)
+				HasArmedRecovery = true;
+		if (InitialPopulationSafeZonePhase <= 0 && !Globals::bLateGame.load()
+			&& !HasArmedRecovery)
 			return;
 
 		const float Now = State->GetServerWorldTimeSeconds();
@@ -165,10 +174,17 @@ namespace AircraftRecovery
 			if (!E)
 				continue;
 			const bool InAircraft = PS->IsInAircraft();
+			// Recovery spawns before boarding. Do not release movement or
+			// repair its position while the aircraft transition still owns it.
+			if (E->RecoveryPassenger && (E->AwaitingBoarding || InAircraft))
+			{
+				E->InAircraft = InAircraft;
+				continue;
+			}
 			if (E->InAircraft && !InAircraft && HasBusLocation)
 				Arm(PC, Now, LastBusLocation);
 			E->InAircraft = InAircraft;
-			if (!E->Armed || InAircraft || Now > E->Until
+			if (!E->Armed || (InAircraft && !E->RecoveryPassenger) || Now > E->Until
 				|| Now < E->NextAttempt || E->Attempts >= 12)
 				continue;
 			auto Pawn = Cast<AFortPlayerPawn>(PC->GetMyFortPawn());
@@ -181,7 +197,7 @@ namespace AircraftRecovery
 			const bool Invalid = !std::isfinite(P.X) || !std::isfinite(P.Y)
 				|| !std::isfinite(P.Z) || P.Z < 0.f
 				|| (std::abs(P.X) < 1.f && std::abs(P.Y) < 1.f && std::abs(P.Z) < 1.f);
-			if (!E->MovementReleased)
+			if (!InAircraft && !E->MovementReleased)
 			{
 				ReleaseMovement(PC, Pawn);
 				E->MovementReleased = true;
@@ -208,6 +224,250 @@ namespace AircraftRecovery
 			else
 				++It;
 		}
+	}
+}
+
+// Independent recovery flight. Never restarts the native match lifecycle.
+// Object identities are resolved on the game thread, not retained as raw pointers.
+namespace HostRecoveryBus
+{
+	struct FIdentity
+	{
+		int Index = -1;
+		int Serial = 0;
+
+		void Set(UObject* Object)
+		{
+			auto Item = Object ? GetItemByIndex(Object->InternalIndex) : nullptr;
+			Index = Item && Item->Object == Object ? Object->InternalIndex : -1;
+			Serial = Item ? Item->SerialNumber : 0;
+		}
+
+		UObject* Resolve() const
+		{
+			auto Item = GetItemByIndex(Index);
+			return Item && !Item->IsPendingKill() && Item->SerialNumber == Serial
+				? Item->Object : nullptr;
+		}
+	};
+
+	inline FIdentity Bus;
+	inline std::vector<FIdentity> Passengers;
+	inline int Session = -1;
+	inline float BoardingTime = 0.f;
+	inline float EjectTime = 0.f;
+	inline bool Active = false;
+	inline bool Boarded = false;
+
+	inline void Tick(AFortGameModeAthena* Mode)
+	{
+		if (!Active)
+			return;
+		auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
+		if (!State || Session != Globals::AmountOfListens)
+		{
+			// Never touch an actor from the previous world.
+			Active = false;
+			Passengers.clear();
+			Bus = {};
+			return;
+		}
+
+		auto Aircraft = static_cast<AActor*>(Bus.Resolve());
+		const float Now = State->GetServerWorldTimeSeconds();
+		if (!Aircraft || Aircraft->IsActorBeingDestroyed())
+		{
+			Active = false;
+			Passengers.clear();
+			LOG_WARN(LogDev, "[recovery-bus] Aircraft disappeared; no stale actor access.");
+			return;
+		}
+
+		if (!Boarded && Now >= BoardingTime)
+		{
+			Boarded = true;
+			int Count = 0;
+			for (const auto& Identity : Passengers)
+			{
+				auto PC = Cast<AFortPlayerControllerAthena>(Identity.Resolve());
+				auto PS = PC ? PC->GetPlayerStateAthena() : nullptr;
+				auto Pawn = PC ? PC->GetMyFortPawn() : nullptr;
+				if (!PS || PC->IsActorBeingDestroyed() || !Pawn
+					|| Pawn->IsActorBeingDestroyed() || Pawn->GetHealth() <= 0.f
+					|| !PC->GetWorldInventory())
+					continue;
+				// Direct boarding only, without StartAircraftPhase or its hooks.
+				AircraftRecovery::Arm(PC, Now, Aircraft->GetActorLocation());
+				if (auto Entry = AircraftRecovery::Find(PC))
+					Entry->RecoveryPassenger = true;
+				AFortPlayerControllerAthena::EnterAircraftOriginal(PC, Aircraft);
+				if (auto Entry = AircraftRecovery::Find(PC))
+				{
+					Entry->AwaitingBoarding = false;
+					Entry->InAircraft = PS->IsInAircraft();
+					Entry->MovementReleased = false;
+				}
+				// Boarding can move the existing pawn to the origin even when
+				// bInAircraft is true. Repair it before the next damage tick.
+				Pawn = PC->GetMyFortPawn();
+				if (Pawn && !Pawn->IsActorBeingDestroyed() && Pawn->GetHealth() > 0.f)
+				{
+					const FVector Position = Pawn->GetActorLocation();
+					if (!std::isfinite(Position.X) || !std::isfinite(Position.Y)
+						|| !std::isfinite(Position.Z)
+						|| (std::abs(Position.X) < 1.f && std::abs(Position.Y) < 1.f
+							&& std::abs(Position.Z) < 1.f))
+					{
+						const bool Moved = Pawn->TeleportTo(
+							Aircraft->GetActorLocation(), Pawn->GetActorRotation());
+						Pawn->ForceNetUpdate();
+						LOG_WARN(LogDev, "[recovery-bus] Boarding origin repair: player={} moved={}.",
+							PS->GetPlayerID(), Moved);
+					}
+				}
+				PC->ForceNetUpdate();
+				PS->ForceNetUpdate();
+				if (PS->IsInAircraft())
+					++Count;
+				LOG_INFO(LogDev, "[recovery-bus] player={} boarded={}.",
+					PS->GetPlayerID(), PS->IsInAircraft());
+			}
+			LOG_INFO(LogDev, "[recovery-bus] Boarding complete: {}/{}.",
+				Count, Passengers.size());
+		}
+
+		// Clear dead passengers promptly, even before the exit deadline.
+		for (const auto& Identity : Passengers)
+		{
+			auto PC = Cast<AFortPlayerControllerAthena>(Identity.Resolve());
+			auto PS = PC ? PC->GetPlayerStateAthena() : nullptr;
+			auto Pawn = PC ? PC->GetMyFortPawn() : nullptr;
+			if (PS && PS->IsInAircraft()
+				&& (!Pawn || Pawn->IsActorBeingDestroyed() || Pawn->GetHealth() <= 0.f))
+			{
+				PS->SetInAircraft(false);
+				PS->ForceNetUpdate();
+			}
+		}
+		if (Now < EjectTime)
+			return;
+
+		bool StillInAircraft = false;
+		for (const auto& Identity : Passengers)
+		{
+			auto PC = Cast<AFortPlayerControllerAthena>(Identity.Resolve());
+			auto PS = PC ? PC->GetPlayerStateAthena() : nullptr;
+			if (!PS || PC->IsActorBeingDestroyed() || !PS->IsInAircraft())
+				continue;
+			auto Pawn = PC->GetMyFortPawn();
+			if (!Pawn || Pawn->IsActorBeingDestroyed() || Pawn->GetHealth() <= 0.f)
+			{
+				// Eliminated passengers cannot complete a native jump. They
+				// must not retain an occupied seat and block every future request.
+				PS->SetInAircraft(false);
+				PS->ForceNetUpdate();
+				LOG_INFO(LogDev, "[recovery-bus] Released eliminated passenger {}.",
+					PS->GetPlayerID());
+				continue;
+			}
+			AircraftRecovery::Arm(PC, Now, Aircraft->GetActorLocation());
+			// Preserve native possession and aircraft exit semantics.
+			if (AFortPlayerController::ServerAttemptAircraftJumpOriginal)
+				AFortPlayerController::ServerAttemptAircraftJumpOriginal(PC, FRotator());
+			// A second flight during SafeZones can reject the native jump.
+			// Complete only this recovery passenger's exit using the living
+			// pawn, without restarting the match or spawning another pawn.
+			if (PS->IsInAircraft() && Engine_Version < 424)
+			{
+				auto LivingPawn = Cast<AFortPlayerPawn>(PC->GetMyFortPawn());
+				auto Skydive = LivingPawn ? LivingPawn->FindFunction("BeginSkydiving") : nullptr;
+				auto RestartClient = PC->FindFunction("ClientRestart");
+				auto SetView = PC->FindFunction("SetViewTargetWithBlend");
+				auto ClientView = PC->FindFunction("ClientSetViewTarget");
+				struct FSetViewParams
+				{
+					AActor* Target;
+					float BlendTime;
+					uint8 BlendFunction;
+					uint8 Padding[3];
+					float BlendExp;
+					bool LockOutgoing;
+					uint8 TailPadding[3];
+				};
+				struct FClientViewParams
+				{
+					AActor* Target;
+					float BlendTime;
+					uint8 BlendFunction;
+					uint8 Padding[3];
+					float BlendExp;
+					bool LockOutgoing;
+					uint8 TailPadding[3];
+				};
+				const bool Compatible = LivingPawn && !LivingPawn->IsActorBeingDestroyed()
+					&& LivingPawn->GetHealth() > 0.f && PC->GetPawn() == LivingPawn
+					&& Skydive && Skydive->GetPropertiesSize() == sizeof(bool)
+					&& RestartClient && RestartClient->GetPropertiesSize() == sizeof(APawn*)
+					&& SetView && SetView->GetPropertiesSize() == sizeof(FSetViewParams)
+					&& ClientView && ClientView->GetPropertiesSize() == sizeof(FClientViewParams);
+				if (Compatible)
+				{
+					FVector Drop = Aircraft->GetActorLocation();
+					const unsigned int Slot = static_cast<unsigned int>(PS->GetPlayerID()) % 9;
+					Drop.X += (static_cast<int>(Slot % 3) - 1) * 300.f;
+					Drop.Y += (static_cast<int>(Slot / 3) - 1) * 300.f;
+					Drop.Z -= 300.f;
+					if (AircraftRecovery::ValidLocation(Drop)
+						&& LivingPawn->TeleportTo(Drop, LivingPawn->GetActorRotation()))
+					{
+						PS->SetInAircraft(false);
+						AircraftRecovery::ReleaseMovement(PC, LivingPawn);
+						bool FromBus = true;
+						LivingPawn->ProcessEvent(Skydive, &FromBus);
+						APawn* RestartPawn = LivingPawn;
+						PC->ProcessEvent(RestartClient, &RestartPawn);
+						FSetViewParams ServerParams{};
+						ServerParams.Target = LivingPawn;
+						PC->ProcessEvent(SetView, &ServerParams);
+						FClientViewParams ClientParams{};
+						ClientParams.Target = LivingPawn;
+						PC->ProcessEvent(ClientView, &ClientParams);
+						PC->ForceNetUpdate();
+						PS->ForceNetUpdate();
+						LivingPawn->ForceNetUpdate();
+						LOG_INFO(LogDev, "[recovery-bus] Explicit recovery exit and pawn camera restored: player={}.",
+							PS->GetPlayerID());
+					}
+				}
+				else
+					LOG_WARN(LogDev, "[recovery-bus] Explicit exit unavailable: incompatible pawn or RPC layout for player={}.",
+						PS->GetPlayerID());
+			}
+			StillInAircraft = StillInAircraft || PS->IsInAircraft();
+			LOG_INFO(LogDev, "[recovery-bus] player={} forced exit complete={}.",
+				PS->GetPlayerID(), !PS->IsInAircraft());
+		}
+		if (StillInAircraft)
+		{
+			// Do not destroy an occupied aircraft or repeatedly invoke native exit.
+			EjectTime = Now + 2.f;
+			LOG_WARN(LogDev, "[recovery-bus] Exit incomplete; occupied bus retained for diagnosis.");
+			return;
+		}
+
+		const auto Offset = State->GetOffset("Aircrafts", false);
+		if (Offset != -1)
+		{
+			auto& Aircrafts = State->Get<TArray<AActor*>>(Offset);
+			if (Aircrafts.Data && Aircrafts.Num() > 0 && Aircrafts.at(0) == Aircraft)
+				Aircrafts.at(0) = nullptr;
+		}
+		Aircraft->K2_DestroyActor();
+		State->ForceNetUpdate();
+		Active = false;
+		Passengers.clear();
+		Bus = {};
+		LOG_INFO(LogDev, "[recovery-bus] Independent flight finished; match phase and storm preserved.");
 	}
 }
 

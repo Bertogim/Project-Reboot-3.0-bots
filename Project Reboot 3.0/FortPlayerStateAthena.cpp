@@ -22,6 +22,8 @@ void AFortPlayerStateAthena::ServerSetInAircraftHook(UObject* Context, FFrame& S
 	auto bNewInAircraft = ((aaa*)Stack.Locals)->wtf;// *(bool*)Stack.Locals;
 	LOG_INFO(LogDev, "bNewInAircraft: {}", bNewInAircraft);
 	auto WorldInventory = PlayerController->GetWorldInventory();
+	if (!WorldInventory)
+		return ServerSetInAircraftOriginal(Context, Stack, Ret);
 	auto& InventoryList = WorldInventory->GetItemList();
 
 	auto& ItemInstances = InventoryList.GetItemInstances();

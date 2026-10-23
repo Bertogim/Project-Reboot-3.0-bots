@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <mutex>
+#include <vector>
 
 #include "inc.h"
 
@@ -46,6 +47,15 @@ extern inline std::atomic<int> HostCountdownRemainingSeconds{300};
 extern inline std::atomic<bool> HostCountdownPaused{false};
 extern inline std::atomic<int> HostCountdownResetRequest{-1};
 extern inline std::atomic<int> HostCountdownPauseRequest{0}; // 1=pausar, 2=reanudar
+// Snapshots cross threads; UObject access stays on the game thread.
+inline std::mutex HostPopulationMutex{};
+inline std::vector<std::string> HostPresentAccountIds{};
+inline std::atomic<int> HostPopulationOutside{-1};
+inline std::atomic<bool> HostPopulationAllHere{false};
+inline unsigned long long HostPopulationReceivedAt = 0;
+inline unsigned long long HostPopulationGeneration = 0;
+inline std::atomic<bool> HostMatchEnding{false};
+inline std::atomic<bool> HostMatchEndAcknowledged{false};
 
 extern inline int InitialPopulationSafeZonePhase = 0;
 extern inline bool bPopulationSafeZonePending = false;
@@ -64,7 +74,10 @@ static inline int GetPopulationSafeZonePhase(int Players)
 {
 	// Humanos + bots al arrancar el bus.
 	if (Players <= 0) return 0;
-	return Players <= 4 ? 2 : 1;
+	// 50+ conserva el inicio y los tiempos nativos de la tormenta.
+	if (Players >= 50) return 0;
+	// 1-5 empieza en fase 2; 6-49 empieza en fase 1.
+	return Players <= 5 ? 2 : 1;
 }
 extern inline bool bHostConnected = false;         // true once the backend accepted /lawin/hosts/register
 extern inline std::string hostState = "idle";      // idle -> starting -> inGame

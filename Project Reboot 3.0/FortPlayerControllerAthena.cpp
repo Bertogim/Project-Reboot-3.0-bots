@@ -13,6 +13,71 @@
 #include "FortGadgetItemDefinition.h"
 #include "gui.h"
 
+static bool RejectStaleRecoverySpectate(AFortPlayerControllerAthena* PC)
+{
+	if (!PC || PC->IsActorBeingDestroyed())
+		return false;
+	auto PS = PC->GetPlayerStateAthena();
+	auto Pawn = PC->GetMyFortPawn();
+	if (!PS || !Pawn || Pawn->IsActorBeingDestroyed()
+		|| Pawn->GetHealth() <= 0.f || PC->GetPawn() != Pawn
+		|| !PC->IsMarkedAlive() || PS->GetPlace() != 0
+		|| PC->GetStateName().ToString() != "Playing")
+		return false;
+	// A recovered living player can still send spectator RPCs queued by
+	// the old death UI. Do not let those RPCs re-enter spectator mode.
+	for (const auto& Entry : AircraftRecovery::Entries)
+	{
+		if (!Entry.RecoveryPassenger || Entry.Index != PC->InternalIndex)
+			continue;
+		auto Item = GetItemByIndex(Entry.Index);
+		if (Item && !Item->IsPendingKill() && Item->Object == PC
+			&& Item->SerialNumber == Entry.Serial)
+			return true;
+	}
+	return false;
+}
+
+static void PreserveRequestedSpectatorTarget(AFortPlayerControllerAthena* PC, APawn* Target)
+{
+	if (!PC || !Target || PC->IsActorBeingDestroyed() || Target->IsActorBeingDestroyed())
+		return;
+	// The delayed death callback must not restore the original killer after
+	// the spectator has explicitly selected another player.
+	UKismetSystemLibrary::K2_ClearTimer(PC, FString(L"SpectateOnDeath"));
+	const int Offset = PC->GetOffset("PlayerToSpectateOnDeath", false);
+	if (Offset >= 0)
+		PC->Get<APawn*>(Offset) = Target;
+	PC->ForceNetUpdate();
+	LOG_INFO(LogDev, "[spectator-sync] Explicit target accepted; delayed death timer cleared.");
+}
+
+void AFortPlayerControllerAthena::ServerSpectatePlayerHook(
+	AFortPlayerControllerAthena* PC, APawn* Target, bool AllowStateChange)
+{
+	if (!PC || !ServerSpectatePlayerOriginal)
+		return;
+	if (RejectStaleRecoverySpectate(PC))
+		return;
+	ServerSpectatePlayerOriginal(PC, Target, AllowStateChange);
+	// Only preserve a target that the native server actually accepted.
+	if (Target && PC->GetViewTarget() == Target)
+		PreserveRequestedSpectatorTarget(PC, Target);
+}
+
+void AFortPlayerControllerAthena::ServerSpectatePlayerStateHook(
+	AFortPlayerControllerAthena* PC, APlayerState* Target, bool AllowStateChange)
+{
+	if (!PC || !ServerSpectatePlayerStateOriginal)
+		return;
+	if (RejectStaleRecoverySpectate(PC))
+		return;
+	ServerSpectatePlayerStateOriginal(PC, Target, AllowStateChange);
+	auto Pawn = Cast<AFortPlayerPawn>(PC->GetViewTarget());
+	if (Target && Pawn && Pawn->GetPlayerState() == Target)
+		PreserveRequestedSpectatorTarget(PC, Pawn);
+}
+
 void AFortPlayerControllerAthena::StartGhostModeHook(UObject* Context, FFrame* Stack, void* Ret)
 {
 	LOG_INFO(LogDev, __FUNCTION__);
@@ -434,17 +499,34 @@ void AFortPlayerControllerAthena::ServerTeleportToPlaygroundLobbyIslandHook(AFor
 
 void AFortPlayerControllerAthena::ServerAcknowledgePossessionHook(APlayerController* Controller, APawn* Pawn)
 {
+	if (!Controller || Controller->IsActorBeingDestroyed())
+		return;
+	// A delayed acknowledgement of the old pawn must not replace the
+	// acknowledgement of the newly possessed recovery pawn.
+	if (!Pawn || Pawn->IsActorBeingDestroyed() || Controller->GetPawn() != Pawn)
+	{
+		LOG_WARN(LogDev, "[possession-sync] Ignored null, destroyed or stale pawn acknowledgement.");
+		return;
+	}
 	LOG_INFO(LogDev, "ServerAcknowledgePossession!");
 	static auto AcknowledgedPawnOffset = Controller->GetOffset("AcknowledgedPawn");
 
+	if (AcknowledgedPawnOffset < 0)
+	{
+		if (ServerAcknowledgePossessionOriginal)
+			ServerAcknowledgePossessionOriginal(Controller, Pawn);
+		return;
+	}
 	const APawn* OldAcknowledgedPawn = Controller->Get<APawn*>(AcknowledgedPawnOffset);
+	// Preserve the engine's possession handshake instead of replacing it
+	// with only a write to AcknowledgedPawn.
+	if (ServerAcknowledgePossessionOriginal)
+		ServerAcknowledgePossessionOriginal(Controller, Pawn);
 	Controller->Get<APawn*>(AcknowledgedPawnOffset) = Pawn;
 
 	auto ControllerAsFort = Cast<AFortPlayerController>(Controller);
 	auto PawnAsFort = Cast<AFortPlayerPawn>(Pawn);
-	auto PlayerStateAsFort = Cast<AFortPlayerState>(Pawn->GetPlayerState());
-
-	if (!PawnAsFort)
+	if (!ControllerAsFort || !PawnAsFort)
 		return;
 
 	if (OldAcknowledgedPawn != PawnAsFort)
@@ -538,7 +620,12 @@ void AFortPlayerControllerAthena::GetPlayerViewPointHook(AFortPlayerControllerAt
 	void (*GetActorEyesViewPointOriginal)(AActor* Actor, FVector* OutLocation, FRotator* OutRotation) = decltype(GetActorEyesViewPointOriginal)(PlayerController->VFTable[GetActorEyesViewPointIndex]);
 	return GetActorEyesViewPointOriginal(PlayerController, &Location, &Rotation); */
 
-	if (auto MyFortPawn = PlayerController->GetMyFortPawn())
+	auto MyFortPawn = PlayerController->GetMyFortPawn();
+	// A dead pawn can remain referenced while spectating. Using its location
+	// overrides the spectator camera and replication viewpoint.
+	if (MyFortPawn && !MyFortPawn->IsActorBeingDestroyed()
+		&& MyFortPawn->GetHealth() > 0.f
+		&& PlayerController->GetStateName().ToString() != "Spectating")
 	{
 		Location = MyFortPawn->GetActorLocation();
 		Rotation = PlayerController->GetControlRotation();

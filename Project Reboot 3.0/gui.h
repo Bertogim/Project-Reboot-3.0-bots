@@ -156,6 +156,7 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 		return;
 
 	auto GameState = GameMode->GetGameStateAthena();
+    PublishHostPopulation(GameMode);
 	if (!GameState || GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
 		return;
 
@@ -163,16 +164,61 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 	static float Remaining = 300.f;
 	static float LastTime = 0.f;
 	static bool NativeFinalCountdownArmed = false;
+	static bool FirstPlayerJoined = false;
+    static bool PopulationInitialized = false;
+    static bool ManualCountdown = false;
+    static std::set<std::string> CountedArrivals;
 	const float Now = GameState->GetServerWorldTimeSeconds();
 	if (CountdownRestart != AmountOfRestarts)
 	{
 		CountdownRestart = AmountOfRestarts;
 		NativeFinalCountdownArmed = false;
+		FirstPlayerJoined = false;
+        PopulationInitialized = false;
+        ManualCountdown = false;
+        CountedArrivals.clear();
 		Remaining = (float)HostCountdownDurationSeconds.load();
 		LastTime = Now;
 		HostCountdownPaused.store(false);
 		HostCountdownPauseRequest.store(0);
-		LOG_INFO(LogMatchmaker, "[host-countdown] Automatic countdown started: {} seconds.", (int)Remaining);
+		LOG_INFO(LogMatchmaker, "[host-countdown] Waiting for the first remote player before starting countdown: {} seconds.", (int)Remaining);
+	}
+
+	// Local host controllers and bots must not start an empty match.
+	// Check actual remote controllers without waiting for backend identity.
+	if (!FirstPlayerJoined)
+	{
+		auto World = GetWorld();
+		auto Driver = World ? World->GetNetDriver() : nullptr;
+		if (Driver)
+		{
+			auto& Connections = Driver->GetClientConnections();
+			if (Connections.Num() >= 0 && Connections.Num() <= 1024 &&
+				(Connections.Num() == 0 || Connections.Data))
+			{
+				for (int i = 0; i < Connections.Num(); ++i)
+				{
+					auto Connection = Connections.at(i);
+					auto Controller = Connection ? Connection->GetPlayerController() : nullptr;
+					if (Controller && !Controller->IsActorBeingDestroyed() &&
+						Controller->GetPlayerState())
+					{
+						FirstPlayerJoined = true;
+						break;
+					}
+				}
+			}
+		}
+		// Discard idle elapsed time so the first arrival gets the full timer.
+		LastTime = Now;
+		if (!FirstPlayerJoined)
+		{
+			HostCountdownRemainingSeconds.store((int)Remaining);
+			busCountdownSeconds = 0;
+			SetWarmupCountdown(GameMode, GameState, 100000.f);
+			return;
+		}
+		LOG_INFO(LogMatchmaker, "[host-countdown] First remote player joined; countdown started: {} seconds.", (int)Remaining);
 	}
 
     if (HostLategameBusRequest.exchange(false))
@@ -216,6 +262,7 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 	const int ResetSeconds = HostCountdownResetRequest.exchange(-1);
 	if (ResetSeconds >= 0)
 	{
+        ManualCountdown = true;
 		Remaining = (float)ResetSeconds;
 		LOG_INFO(LogMatchmaker, "[host-countdown] Remaining time reset to {} seconds.", ResetSeconds);
 	}
@@ -228,6 +275,56 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 			HostCountdownPaused.load(), (int)Remaining);
 	}
 
+    bool PopulationEdited = false;
+    if (!ManualCountdown && !HostCountdownPaused.load() &&
+        !Globals::bLateGame.load() && Remaining > 10.f)
+    {
+        int Outside = -1;
+        bool AllHere = false;
+        std::vector<std::string> Present;
+        {
+            std::lock_guard<std::mutex> Lock(HostPopulationMutex);
+            Present = HostPresentAccountIds;
+            const auto PopulationNow = GetTickCount64();
+            if (HostPopulationReceivedAt != 0 &&
+                PopulationNow >= HostPopulationReceivedAt &&
+                PopulationNow - HostPopulationReceivedAt <= 5000)
+            {
+                Outside = HostPopulationOutside.load();
+                AllHere = HostPopulationAllHere.load();
+            }
+        }
+        if (!PopulationInitialized && Outside >= 0)
+        {
+            const float PopulationSeconds = (float)Outside * 10.f + 40.f;
+            if (PopulationSeconds < Remaining) Remaining = PopulationSeconds;
+            PopulationInitialized = true;
+            CountedArrivals.insert(Present.begin(), Present.end());
+            PopulationEdited = true;
+        }
+        else if (PopulationInitialized)
+        {
+            int Arrivals = 0;
+            for (const auto& Id : Present)
+                if (CountedArrivals.insert(Id).second) ++Arrivals;
+            if (Arrivals > 0)
+            {
+                // Each account reduces the timer once per match. Reconnecting
+                // cannot repeatedly shorten it; preserve the final ten seconds.
+                Remaining -= (float)Arrivals * 7.f;
+                if (Remaining < 10.f) Remaining = 10.f;
+                PopulationEdited = true;
+            }
+        }
+        if (PopulationInitialized && AllHere && Remaining > 15.f)
+        {
+            // Allow loading to finish without resetting the timer every tick
+            // or extending a countdown that is already below fifteen seconds.
+            Remaining = 15.f;
+            PopulationEdited = true;
+        }
+    }
+
 	const int DisplaySeconds = (int)Remaining + (Remaining > (float)(int)Remaining ? 1 : 0);
 	HostCountdownRemainingSeconds.store(DisplaySeconds);
 	ApplyHostTeamAssignments(GameMode);
@@ -235,7 +332,7 @@ inline void TickPopulationBusCountdown(AFortGameModeAthena* GameMode)
 
     // Publish a stable native deadline only during the final ten seconds.
     // Reset/pause/resume invalidates it before another server tick can use it.
-    const bool CountdownEdited = ResetSeconds >= 0 || PauseRequest != 0;
+    const bool CountdownEdited = ResetSeconds >= 0 || PauseRequest != 0 || PopulationEdited;
     if (CountdownEdited)
         NativeFinalCountdownArmed = false;
     const bool NativeFinalCountdown = !Globals::bLateGame.load() &&
@@ -364,6 +461,16 @@ static inline void RestartNow()
 	HostCountdownResetRequest.store(-1);
 	HostCountdownPauseRequest.store(0);
 	HostCountdownPaused.store(false);
+    {
+        std::lock_guard<std::mutex> Lock(HostPopulationMutex);
+        ++HostPopulationGeneration;
+        HostMatchEnding.store(false);
+        HostMatchEndAcknowledged.store(false);
+        HostPopulationReceivedAt = 0;
+        HostPopulationOutside.store(-1);
+        HostPopulationAllHere.store(false);
+        HostPresentAccountIds.clear();
+    }
 	HostCountdownRemainingSeconds.store(HostCountdownDurationSeconds.load());
 	busCountdownSeconds = 0;
 	lastPlayerCountForBus = 0;
@@ -407,10 +514,13 @@ static inline void TickVictoryInternalRestart()
     static bool Draining = false;
     static int DrainGeneration = -1;
     static auto DrainDeadline = std::chrono::steady_clock::time_point{};
+    static auto NextDrainLog = std::chrono::steady_clock::time_point{};
+    static auto LobbyRestoreDeadline = std::chrono::steady_clock::time_point{};
     if (DrainGeneration != AmountOfRestarts)
     {
         DrainGeneration = AmountOfRestarts;
         Draining = false;
+        LobbyRestoreDeadline = {};
     }
 
     const auto Now = std::chrono::steady_clock::now();
@@ -434,7 +544,22 @@ static inline void TickVictoryInternalRestart()
             bVictoryRestartPending = false;
             return;
         }
+        // Restore backend lobby visibility before clients load the frontend.
+        // Keep the host occupied until native disconnect cleanup completes.
+        if (!HostMatchEnding.exchange(true))
+            LobbyRestoreDeadline = Now + std::chrono::seconds(10);
+        if (!HostMatchEndAcknowledged.load() && Now < LobbyRestoreDeadline)
+        {
+            if (Manual) HostCleanRestartRequest.store(true);
+            return;
+        }
+        if (!HostMatchEndAcknowledged.load())
+            LOG_WARN(LogDev, "[clean-restart] Backend lobby restoration not acknowledged after 10 seconds; returning clients without blocking restart indefinitely.");
         bVictoryRestartPending = false;
+        // Listen() reuses the beacon's NetDriver as the game NetDriver.
+        // Do not pause that shared transport during disconnect cleanup:
+        // return-to-menu RPCs and native connection draining still need it.
+        LOG_INFO(LogDev, "[clean-restart] Keeping shared beacon/game transport active during client drain.");
         auto Fn = FindObject<UFunction>("/Script/Engine.PlayerController.ClientReturnToMainMenu");
         const bool Compatible = Fn && Fn->GetPropertiesSize() == sizeof(FString);
         int Sent = 0;
@@ -465,13 +590,47 @@ static inline void TickVictoryInternalRestart()
             LOG_WARN(LogDev, "[clean-restart] Return RPC missing or incompatible; no unsafe call made.");
         Draining = true;
         DrainDeadline = Now + std::chrono::seconds(2);
-        LOG_INFO(LogDev, "[clean-restart] Return-to-menu requested for {} clients; allowing 2 seconds before travel.", Sent);
+        NextDrainLog = DrainDeadline;
+        LOG_INFO(LogDev, "[clean-restart] Return-to-menu requested for {} clients; waiting at least 2 seconds and for all connections to drain before travel.", Sent);
         return;
     }
 
-    if (Now < DrainDeadline || LateGameWorkerRunning.load()) return;
+    if (Now < DrainDeadline) return;
+    if (LateGameWorkerRunning.load())
+    {
+        if (Now >= NextDrainLog)
+        {
+            LOG_WARN(LogDev, "[clean-restart] Travel deferred: aircraft worker still running; preserving old world.");
+            NextDrainLog = Now + std::chrono::seconds(5);
+        }
+        return;
+    }
+    // The delivery grace is not proof that clients disconnected. In the
+    // observed crash, LoadMap cleaned up a live controller after teardown
+    // had already started, and native logout attempted to spawn an actor.
+    // Keep the old world alive while the driver processes disconnections.
+    // Never edit ClientConnections or destroy remote controllers manually.
+    auto Driver = World->GetNetDriver();
+    if (Driver)
+    {
+        auto& Connections = Driver->GetClientConnections();
+        const int Remaining = Connections.Num();
+        const bool Valid = Remaining >= 0 && Remaining <= 1024 &&
+            (Remaining == 0 || Connections.Data);
+        if (!Valid || Remaining != 0)
+        {
+            if (Now >= NextDrainLog)
+            {
+                LOG_WARN(LogDev,
+                    "[clean-restart] Travel deferred: connections={} valid={}; waiting for native disconnect cleanup in the live world.",
+                    Remaining, Valid);
+                NextDrainLog = Now + std::chrono::seconds(5);
+            }
+            return;
+        }
+    }
     Draining = false;
-    LOG_INFO(LogDev, "[clean-restart] Delivery grace elapsed; executing internal map restart.");
+    LOG_INFO(LogDev, "[clean-restart] Delivery grace elapsed and no client connections remain; executing internal map restart.");
     RestartNow();
 }
 
@@ -862,12 +1021,12 @@ static inline void PlayerTabs()
 
 // Se ejecuta desde StartAircraftPhaseHook, en el hilo del servidor,
 // antes de que el inicio nativo seleccione los pasajeros.
-inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
+inline void PrepareLategameSpectators(AFortGameModeAthena* Mode, bool RecoveryRequest = false)
 {
 	auto World = GetWorld();
 	auto State = Mode ? Mode->GetGameStateAthena() : nullptr;
 	auto Driver = World ? World->GetNetDriver() : nullptr;
-	if (!State || !Driver || !Globals::bLateGame.load()
+	if (!State || !Driver || (!Globals::bLateGame.load() && !RecoveryRequest)
 		|| (State->GetGamePhase() > EAthenaGamePhase::Warmup && !HostLiveLategameBoarding))
 		return;
 
@@ -919,14 +1078,53 @@ inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
 
 		if (!HealthyPawn)
 		{
-			auto Start = Mode->K2_FindPlayerStart(PC, FString());
-			if (!Start)
+			APawn* RecoveryPawn = nullptr;
+			if (RecoveryRequest)
+			{
+				auto Aircraft = static_cast<AActor*>(HostRecoveryBus::Bus.Resolve());
+				auto Spawn = FindObject<UFunction>(L"/Script/Engine.GameModeBase.SpawnDefaultPawnAtTransform");
+				auto Skydive = FindObject<UFunction>(L"/Script/FortniteGame.FortPlayerPawn.BeginSkydiving");
+				struct FRecoverySpawnParams
+				{
+					AController* Controller;
+					FTransform Transform;
+					APawn* Result;
+				};
+				if (!Aircraft || Aircraft->IsActorBeingDestroyed() || !Spawn
+					|| Spawn->GetPropertiesSize() != sizeof(FRecoverySpawnParams)
+					|| !Skydive || Skydive->GetPropertiesSize() != sizeof(bool))
+				{
+					LOG_WARN(LogLateGame, "[recovery-direct] Spawn/skydive API unavailable; spectator preserved.");
+					continue;
+				}
+				FRecoverySpawnParams Params{};
+				Params.Controller = PC;
+				Params.Transform.Translation = Aircraft->GetActorLocation();
+				const unsigned int Slot = static_cast<unsigned int>(PS->GetPlayerID()) % 9;
+				Params.Transform.Translation.X += (static_cast<int>(Slot % 3) - 1) * 300.f;
+				Params.Transform.Translation.Y += (static_cast<int>(Slot / 3) - 1) * 300.f;
+				Params.Transform.Translation.Z -= 300.f;
+				Params.Transform.Rotation = FQuat(0, 0, 0, 1);
+				Params.Transform.Scale3D = FVector(1, 1, 1);
+				if (!AircraftRecovery::ValidLocation(Params.Transform.Translation))
+					continue;
+				// Spawn at the final drop position. Do not run the warmup
+				// spawn hook, which also grants starting items and refills ammo.
+				Mode->ProcessEvent(Spawn, &Params);
+				RecoveryPawn = Params.Result;
+				if (!RecoveryPawn)
+					continue;
+				RecoveryPawn->SetOwner(PC);
+			}
+			auto Start = RecoveryRequest ? nullptr : Mode->K2_FindPlayerStart(PC, FString());
+			if (!RecoveryRequest && !Start)
 			{
 				LOG_WARN(LogLateGame, "[lategame-spectator] No valid player start for {}; spectator unchanged.",
 					PS->GetPlayerID());
 				continue;
 			}
-			auto NewPawn = Mode->SpawnDefaultPawnForHook(Mode, PC, Start);
+			auto NewPawn = RecoveryRequest ? RecoveryPawn
+				: Mode->SpawnDefaultPawnForHook(Mode, PC, Start);
 			if (!NewPawn)
 			{
 				LOG_WARN(LogLateGame, "[lategame-spectator] Spawn failed for {}; spectator unchanged.",
@@ -942,7 +1140,89 @@ inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
 			}
 			Pawn->SetMaxHealth(100.f);
 			Pawn->SetHealth(100.f);
+			Pawn->SetMaxShield(100.f);
 			Pawn->SetShield(100.f);
+		}
+
+		if (RecoveryRequest)
+		{
+			auto Aircraft = static_cast<AActor*>(HostRecoveryBus::Bus.Resolve());
+			if (!Aircraft || Aircraft->IsActorBeingDestroyed())
+			{
+				LOG_WARN(LogLateGame, "[recovery-bus] Recovery aircraft unavailable for player {}.",
+					PS->GetPlayerID());
+				continue;
+			}
+			const FVector BusLocation = Aircraft->GetActorLocation();
+			// A second recovery can arrive before the previous guard expires.
+			// Reset only this passenger, never reuse its old drop destination.
+			if (auto Entry = AircraftRecovery::Find(PC))
+			{
+				Entry->Armed = false;
+				Entry->RecoveryPassenger = false;
+				Entry->AwaitingBoarding = false;
+				Entry->InAircraft = false;
+			}
+			AircraftRecovery::Arm(PC, State->GetServerWorldTimeSeconds(), BusLocation);
+			if (auto Entry = AircraftRecovery::Find(PC))
+			{
+				Entry->RecoveryPassenger = true;
+				Entry->AwaitingBoarding = false;
+				Entry->InAircraft = false;
+				Entry->Until = State->GetServerWorldTimeSeconds() + 25.f;
+			}
+			FVector SpawnLocation = BusLocation;
+			const unsigned int Slot = static_cast<unsigned int>(PS->GetPlayerID()) % 9;
+			SpawnLocation.X += (static_cast<int>(Slot % 3) - 1) * 300.f;
+			SpawnLocation.Y += (static_cast<int>(Slot / 3) - 1) * 300.f;
+			SpawnLocation.Z -= 300.f;
+			if (auto Entry = AircraftRecovery::Find(PC))
+				Entry->Destination = SpawnLocation;
+			const FVector CurrentLocation = Pawn->GetActorLocation();
+			const bool AlreadyAtDrop = std::isfinite(CurrentLocation.X)
+				&& std::isfinite(CurrentLocation.Y) && std::isfinite(CurrentLocation.Z)
+				&& std::abs(CurrentLocation.X - SpawnLocation.X) < 1.f
+				&& std::abs(CurrentLocation.Y - SpawnLocation.Y) < 1.f
+				&& std::abs(CurrentLocation.Z - SpawnLocation.Z) < 1.f;
+			const bool Moved = AlreadyAtDrop
+				|| Pawn->TeleportTo(SpawnLocation, Pawn->GetActorRotation());
+			Pawn->ForceNetUpdate();
+			LOG_INFO(LogLateGame, "[recovery-bus] Respawn placement: player={} moved={} destination=({},{},{}).",
+				PS->GetPlayerID(), Moved, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
+			if (!Moved)
+			{
+				if (auto Entry = AircraftRecovery::Find(PC))
+				{
+					Entry->Armed = false;
+					Entry->RecoveryPassenger = false;
+				}
+				continue;
+			}
+			// Recovery is one direct airborne spawn, not spawn -> board ->
+			// native jump -> second restart. Configure flight before notifying
+			// the owning client so its first pawn state is already airborne.
+			PS->SetInAircraft(false);
+			auto RecoveryPlayerPawn = Cast<AFortPlayerPawn>(Pawn);
+			if (!RecoveryPlayerPawn)
+			{
+				if (auto Entry = AircraftRecovery::Find(PC))
+				{
+					Entry->Armed = false;
+					Entry->RecoveryPassenger = false;
+				}
+				LOG_WARN(LogLateGame, "[recovery-direct] Unexpected pawn class for player={}; movement release skipped.",
+					PS->GetPlayerID());
+				continue;
+			}
+			AircraftRecovery::ReleaseMovement(PC, RecoveryPlayerPawn);
+			auto Skydive = Pawn->FindFunction("BeginSkydiving");
+			if (Skydive && Skydive->GetPropertiesSize() == sizeof(bool))
+			{
+				bool FromBus = true;
+				Pawn->ProcessEvent(Skydive, &FromBus);
+			}
+			if (auto Entry = AircraftRecovery::Find(PC))
+				Entry->MovementReleased = true;
 		}
 
 		auto WriteFlag = [](UObject* Object, const char* Name, bool Value)
@@ -955,7 +1235,40 @@ inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
 		WriteFlag(PS, "bIsSpectator", false);
 		WriteFlag(PS, "bOnlySpectator", false);
 		WriteFlag(PC, "bMarkedAlive", true);
+		UKismetSystemLibrary::K2_ClearTimer(PC, FString(L"SpectateOnDeath"));
+		const int DeathTargetOffset = PC->GetOffset("PlayerToSpectateOnDeath", false);
+		if (DeathTargetOffset >= 0)
+			PC->Get<APawn*>(DeathTargetOffset) = nullptr;
+		const int SpectatingTargetOffset = PS->GetOffset("SpectatingTarget", false);
+		if (SpectatingTargetOffset >= 0)
+		{
+			PS->Get<APlayerState*>(SpectatingTargetOffset) = nullptr;
+			auto OnRep = PS->FindFunction("OnRep_SpectatingTarget");
+			if (OnRep && OnRep->GetPropertiesSize() == 0)
+				PS->ProcessEvent(OnRep);
+		}
 		PS->GetPlace() = 0;
+		// A new living pawn does not clear the previous replicated death.
+		// Reset that state before notifying the client about possession.
+		if (PS->GetOffset("DeathInfo", false) >= 0 && FDeathInfo::GetStructSize() > 0)
+		{
+			PS->ClearDeathInfo();
+			PS->OnRep_DeathInfo();
+		}
+		if (RecoveryRequest)
+		{
+			auto ASC = PS->GetAbilitySystemComponent();
+			const int AvatarOffset = ASC ? ASC->GetOffset("AvatarActor", false) : -1;
+			auto Avatar = AvatarOffset >= 0 ? ASC->Get<AActor*>(AvatarOffset) : nullptr;
+			LOG_INFO(LogLateGame,
+				"[recovery-state] player={} pawn={} possessed={} abilityAvatar={} avatarMatches={}",
+				PS->GetPlayerID(), Pawn->InternalIndex, PC->GetPawn() == Pawn,
+				Avatar ? Avatar->InternalIndex : -1, Avatar == Pawn);
+		}
+		// Recovery already spawned and possessed the living pawn above.
+		// Do not start a second native respawn lifecycle here: its delayed
+		// camera preparation can override the ClientRestart sent below.
+		// Recovery now starts airborne without boarding or a second restart.
 		PC->SetPlayerIsWaiting(false);
 		PC->GetStateName() = UKismetStringLibrary::Conv_StringToName(L"Playing");
 		auto ClientGotoState = PC->FindFunction("ClientGotoState");
@@ -965,6 +1278,97 @@ inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
 			PC->ProcessEvent(ClientGotoState, &Playing);
 		}
 		PC->ClientClearDeathNotification();
+		// Re-sync the owning client after leaving spectator state.
+		// Possession alone can leave its camera attached to the spectated player.
+		auto ClientRestart = PC->FindFunction("ClientRestart");
+		if (ClientRestart && ClientRestart->GetPropertiesSize() == sizeof(APawn*))
+		{
+			APawn* RestartPawn = Pawn;
+			PC->ProcessEvent(ClientRestart, &RestartPawn);
+		}
+		if (RecoveryRequest)
+		{
+			// Use owning-client notifications, not server-only input-stack
+			// operations. Runtime testing must confirm the death UI releases
+			// its map/input bindings on this client version.
+			auto Revived = PC->FindFunction("ClientOnPawnRevived");
+			if (Revived && Revived->GetPropertiesSize() == sizeof(AController*))
+			{
+				AController* Instigator = PC;
+				PC->ProcessEvent(Revived, &Instigator);
+			}
+			auto Cinematic = PC->FindFunction("ClientSetCinematicMode");
+			struct FCinematicParams
+			{
+				bool InCinematicMode;
+				bool AffectsMovement;
+				bool AffectsTurning;
+				bool AffectsHUD;
+			} CinematicParams{false, true, true, true};
+			if (Cinematic && Cinematic->GetPropertiesSize() == sizeof(CinematicParams))
+				PC->ProcessEvent(Cinematic, &CinematicParams);
+			struct FRecoveryViewParams
+			{
+				AActor* Target;
+				float BlendTime;
+				uint8 BlendFunction;
+				uint8 Padding[3];
+				float BlendExp;
+				bool LockOutgoing;
+				uint8 TailPadding[3];
+			};
+			for (const char* Name : {"SetViewTargetWithBlend", "ClientSetViewTarget"})
+			{
+				auto View = PC->FindFunction(Name);
+				if (View && View->GetPropertiesSize() == sizeof(FRecoveryViewParams))
+				{
+					FRecoveryViewParams Params{};
+					Params.Target = Pawn;
+					PC->ProcessEvent(View, &Params);
+				}
+			}
+			// Finish the client spawn/UI transition before restoring the map
+			// action. Spawn notifications may rebuild the client's input state.
+			auto ClientSpawned = PC->FindFunction("ClientOnPawnSpawned");
+			if (ClientSpawned && ClientSpawned->GetPropertiesSize() == 0)
+			{
+				PC->ProcessEvent(ClientSpawned);
+				LOG_INFO(LogLateGame, "[recovery-ui] Sent ClientOnPawnSpawned for player={}.",
+					PS->GetPlayerID());
+			}
+			else
+				LOG_WARN(LogLateGame, "[recovery-ui] ClientOnPawnSpawned unavailable; map/input restoration requires runtime verification.");
+			// Resolve the actual map action name instead of guessing a binding.
+			// Only the Client RPC changes the owning client's action mapping.
+			auto UI = FindObject<UObject>(L"/Script/FortniteUI.Default__FortGlobalUIContext");
+			auto MapAction = UI ? UI->FindFunction("GetToggleFullscreenMapActionName") : nullptr;
+			auto EnableAction = PC->FindFunction("ClientSetActionMappingEnabled");
+			bool MapActionSent = false;
+			if (MapAction && MapAction->GetPropertiesSize() == sizeof(FName) && EnableAction)
+			{
+				const int Size = EnableAction->GetPropertiesSize();
+				const int NameOffset = EnableAction->GetOffsetFunc("ActionName", false);
+				const int EnabledOffset = EnableAction->GetOffsetFunc("bEnabled", false);
+				auto EnabledProperty = EnableAction->GetPropertyFunc("bEnabled", false);
+				if (Size > 0 && Size <= 128 && NameOffset >= 0
+					&& NameOffset + static_cast<int>(sizeof(FName)) <= Size
+					&& EnabledOffset >= 0 && EnabledOffset < Size && EnabledProperty)
+				{
+					FName Action{};
+					UI->ProcessEvent(MapAction, &Action);
+					if (Action.ComparisonIndex.Value)
+					{
+						std::vector<uint8> Params(Size, 0);
+						memcpy(Params.data() + NameOffset, &Action, sizeof(Action));
+						Params[EnabledOffset] |= GetFieldMask(EnabledProperty);
+						PC->ProcessEvent(EnableAction, Params.data());
+						MapActionSent = true;
+					}
+				}
+			}
+			LOG_INFO(LogLateGame, "[recovery-direct] player={} airborne spawn; map action RPC sent after spawn UI={}.",
+				PS->GetPlayerID(), MapActionSent);
+		}
 		if (!Registered)
 		{
 			auto AddAlive = reinterpret_cast<void(*)(AFortGameModeAthena*, AFortPlayerControllerAthena*)>(
@@ -976,8 +1380,8 @@ inline void PrepareLategameSpectators(AFortGameModeAthena* Mode)
 		PC->ForceNetUpdate();
 		PS->ForceNetUpdate();
 		Pawn->ForceNetUpdate();
-		LOG_INFO(LogLateGame, "[lategame-spectator] Player {} restored before native bus boarding.",
-			PS->GetPlayerID());
+		LOG_INFO(LogLateGame, "[lategame-spectator] Player {} restored; direct airborne recovery={}.",
+			PS->GetPlayerID(), RecoveryRequest);
 	}
 }
 
@@ -1074,16 +1478,19 @@ static inline DWORD WINAPI LateGameThread(LPVOID Parameter)
 	}
 
 	FVector LocationToStartAircraft = ZoneCenterLocation;
-	float AircraftHeightAboveZone = 10000.f;
+	float AircraftHeightAboveZone = 20000.f;
 	if (bPopulationStart)
 	{
 		const int Participants = GetZoneModeParticipants(AmountOfPlayersWhenBusStart);
-		if (Participants > 0 && Participants <= 10)
-			AircraftHeightAboveZone = 20000.f;
-		else if (Participants <= 20 && Participants > 10)
-			AircraftHeightAboveZone = 25000.f;
-		else if (Participants > 20 && Participants < 50)
+		// Higher population bands start farther above the zone center.
+		if (Participants > 0 && Participants <= 5)
 			AircraftHeightAboveZone = 30000.f;
+		else if (Participants > 5 && Participants <= 10)
+			AircraftHeightAboveZone = 40000.f;
+		else if (Participants <= 20 && Participants > 10)
+			AircraftHeightAboveZone = 50000.f;
+		else if (Participants > 20 && Participants < 50)
+			AircraftHeightAboveZone = 60000.f;
 	}
 	LocationToStartAircraft.Z += AircraftHeightAboveZone;
 	if (bPopulationStart && LocationToStartAircraft.Z < AircraftHeightAboveZone)
@@ -1215,6 +1622,154 @@ inline void TickHostLiveLategameBus(AFortGameModeAthena* Mode)
         LOG_WARN(LogLateGame, "[lategame-bus] A bus worker is already running.");
         return;
     }
+
+    // Recovery uses its own aircraft, never the native match-start lifecycle.
+    // Keep the repeated-flight guard in StartAircraftPhaseHook intact.
+    if (State->GetGamePhase() != EAthenaGamePhase::SafeZones)
+    {
+        LateGameWorkerRunning.store(false);
+        LOG_WARN(LogLateGame, "[recovery-bus] Wait until the initial flight has ended.");
+        return;
+    }
+    struct FRecoveryRequestReset
+    {
+        ~FRecoveryRequestReset() { LateGameWorkerRunning.store(false); }
+    } RecoveryRequestReset;
+    if (HostRecoveryBus::Active)
+    {
+        LOG_WARN(LogLateGame, "[recovery-bus] A recovery flight is already active.");
+        return;
+    }
+
+    const int AircraftsOffset = State->GetOffset("Aircrafts", false);
+    const int BehaviorOffset = State->GetOffset("AirCraftBehavior", false);
+    auto RecoveryClass = FindObject<UClass>(
+        L"/Game/Athena/Aircraft/AthenaAircraft.AthenaAircraft_C");
+    auto Defaults = FindObject<AActor>(
+        L"/Game/Athena/Aircraft/AthenaAircraft.Default__AthenaAircraft_C");
+    auto Indicator = Mode->GetSafeZoneIndicator();
+    const int CenterOffset = Indicator ? Indicator->GetOffset("NextCenter", false) : -1;
+    auto TickFunction = FindObject<UFunction>(L"/Script/Engine.Actor.SetActorTickEnabled");
+    if (AircraftsOffset < 0 || BehaviorOffset < 0 || !RecoveryClass || !Defaults
+        || CenterOffset < 0 || !TickFunction
+        || TickFunction->GetPropertiesSize() != sizeof(bool)
+        || !AFortPlayerController::ServerAttemptAircraftJumpOriginal)
+    {
+        LOG_WARN(LogLateGame, "[recovery-bus] Unsupported recovery schema; match unchanged.");
+        return;
+    }
+    auto& Slots = State->Get<TArray<AActor*>>(AircraftsOffset);
+    if (Slots.Num() < 0 || Slots.Num() > 64 || (Slots.Num() > 0 && !Slots.Data))
+    {
+        LOG_WARN(LogLateGame, "[recovery-bus] Invalid aircraft array; match unchanged.");
+        return;
+    }
+    // Direct airborne recovery does not use native aircraft seats.
+    // Leave the initial flight's slots untouched, even if its actor remains.
+    // An occupied native slot must not block this independent recovery.
+    const char* RequiredFields[] = {
+        "AircraftIndex", "FlightInfo", "FlightStartTime", "DropStartTime",
+        "DropEndTime", "FlightEndTime", "FlightElapsedTime", "ReplicatedFlightTimestamp"
+    };
+    for (auto Field : RequiredFields)
+        if (Defaults->GetOffset(Field, false) < 0)
+        {
+            LOG_WARN(LogLateGame, "[recovery-bus] Missing aircraft field {}; cancelled.", Field);
+            return;
+        }
+    const char* RequiredFlightFields[] = {
+        "TimeTillDropStart", "TimeTillDropEnd", "TimeTillFlightEnd",
+        "FlightStartLocation", "FlightStartRotation", "FlightSpeed"
+    };
+    for (auto Field : RequiredFlightFields)
+        if (FindOffsetStruct("/Script/FortniteGame.AircraftFlightInfo", Field) < 0)
+        {
+            LOG_WARN(LogLateGame, "[recovery-bus] Missing flight field {}; cancelled.", Field);
+            return;
+        }
+
+    FVector Destination = Indicator->Get<FVector>(CenterOffset);
+    Destination.Z += 30000.f;
+    if (!AircraftRecovery::ValidLocation(Destination))
+    {
+        LOG_WARN(LogLateGame, "[recovery-bus] Invalid zone center; cancelled.");
+        return;
+    }
+    FTransform Transform{};
+    Transform.Translation = Destination;
+    Transform.Rotation = FQuat(0, 0, 0, 1);
+    Transform.Scale3D = FVector(1, 1, 1);
+    auto RecoveryAircraft = UGameplayStatics::BeginDeferredActorSpawnFromClass(
+        World, RecoveryClass, Transform, ESpawnActorCollisionHandlingMethod::AlwaysSpawn, Mode);
+    if (!RecoveryAircraft)
+    {
+        LOG_WARN(LogLateGame, "[recovery-bus] Deferred spawn failed; spectators unchanged.");
+        return;
+    }
+    // Disable native aircraft ticking before construction finishes. Our game-thread
+    // tick owns boarding/exit; native flight delegates must not reset the storm.
+    bool TickEnabled = false;
+    RecoveryAircraft->ProcessEvent(TickFunction, &TickEnabled);
+    const float Now = State->GetServerWorldTimeSeconds();
+    auto WriteTime = [&](const char* Field, float Value)
+    {
+        RecoveryAircraft->Get<float>(RecoveryAircraft->GetOffset(Field, false)) = Value;
+    };
+    RecoveryAircraft->Get<int>(RecoveryAircraft->GetOffset("AircraftIndex", false)) = 0;
+    WriteTime("FlightStartTime", Now);
+    WriteTime("DropStartTime", Now);
+    WriteTime("DropEndTime", Now + 15.f);
+    WriteTime("FlightEndTime", Now + 30.f);
+    WriteTime("FlightElapsedTime", 0.f);
+    WriteTime("ReplicatedFlightTimestamp", Now);
+    auto Flight = RecoveryAircraft->GetPtr<FAircraftFlightInfo>(
+        RecoveryAircraft->GetOffset("FlightInfo", false));
+    Flight->GetFlightStartLocation() = Destination;
+    Flight->GetFlightSpeed() = 0.f;
+    Flight->GetTimeTillDropStart() = 0.f;
+    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(Flight)
+        + FindOffsetStruct("/Script/FortniteGame.AircraftFlightInfo", "TimeTillDropEnd")) = 15.f;
+    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(Flight)
+        + FindOffsetStruct("/Script/FortniteGame.AircraftFlightInfo", "TimeTillFlightEnd")) = 30.f;
+    *reinterpret_cast<FRotator*>(reinterpret_cast<uintptr_t>(Flight)
+        + FindOffsetStruct("/Script/FortniteGame.AircraftFlightInfo", "FlightStartRotation")) = FRotator();
+    auto Finished = UGameplayStatics::FinishSpawningActor(RecoveryAircraft, Transform);
+    if (!Finished || Finished != RecoveryAircraft || RecoveryAircraft->IsActorBeingDestroyed())
+    {
+        LOG_WARN(LogLateGame, "[recovery-bus] Aircraft construction failed; spectators unchanged.");
+        return;
+    }
+    RecoveryAircraft->ProcessEvent(TickFunction, &TickEnabled);
+    // Decorative aircraft only: never replace the native match aircraft.
+    RecoveryAircraft->ForceNetUpdate();
+
+    HostRecoveryBus::Bus.Set(RecoveryAircraft);
+    HostLiveLategameRecovered.clear();
+    HostLiveLategameBoarding = true;
+    PrepareLategameSpectators(Mode, true);
+    HostLiveLategameBoarding = false;
+    HostRecoveryBus::Passengers.clear();
+    for (auto Target : HostLiveLategameRecovered)
+    {
+        HostRecoveryBus::FIdentity Identity;
+        Identity.Set(static_cast<UObject*>(Target));
+        if (Identity.Resolve())
+            HostRecoveryBus::Passengers.push_back(Identity);
+    }
+    HostLiveLategameRecovered.clear();
+    HostRecoveryBus::Bus.Set(RecoveryAircraft);
+    HostRecoveryBus::Session = Globals::AmountOfListens;
+    HostRecoveryBus::BoardingTime = Now + 2.f;
+    // Keep the bus visible long enough to replicate to clients. Previously
+    // it was destroyed in the same server tick as its creation.
+    HostRecoveryBus::EjectTime = Now + 15.f;
+    // Pawns are already airborne. Never enter the native aircraft lifecycle
+    // for this recovery, which would override possession and camera again.
+    HostRecoveryBus::Boarded = true;
+    HostRecoveryBus::Active = true;
+    LOG_INFO(LogLateGame, "[recovery-bus] Independent bus created: candidates={}, position=({},{},{}). Native restart not called.",
+        HostRecoveryBus::Passengers.size(), Destination.X, Destination.Y, Destination.Z);
+    return;
 
     // Native StartAircraftPhase is not a live recovery API: logs show
     // invalid Aircrafts entries and a fatal error on repeated flight start.

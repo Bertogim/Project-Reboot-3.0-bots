@@ -5,17 +5,20 @@
 // Politica comun al inicio, hot swap y progresion.
 static float PopulationWaitDuration(int Participants)
 {
-    return Participants <= 4 ? 180.f : Participants <= 10 ? 150.f
-        : Participants <= 20 ? 120.f : Participants <= 49 ? 240.f : 360.f;
+    // 1-5: 3 min; 6-10: 4 min; 11-20: 5 min;
+    // 21-49: 6 min; 50+: 8 min antes de cada cierre.
+    return Participants <= 5 ? 180.f : Participants <= 10 ? 240.f
+        : Participants <= 20 ? 300.f : Participants <= 49 ? 360.f : 480.f;
 }
 
 static float PopulationShrinkDuration(int Participants, float Native)
 {
-    const float Maximum = Participants <= 4 ? 60.f
+    const float Maximum = Participants <= 5 ? 60.f
         : Participants <= 10 ? 90.f : Participants <= 20 ? 120.f
         : Participants <= 49 ? 150.f : 180.f;
-    return std::isfinite(Native) && Native > 0.f
-        ? (Native < Maximum ? Native : Maximum) : Maximum;
+    // Duracion efectiva, no un limite que el tiempo nativo pueda acortar.
+    (void)Native;
+    return Maximum;
 }
 
 void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMaybeIDFK)
@@ -85,8 +88,9 @@ void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMa
             {
                 const float Now = GameState->GetServerWorldTimeSeconds();
                 // El motor conserva e interpola la geometria nativa.
-                // Los tramos pequenos alcanzan la fase inicial en un segundo.
-                const bool FastInitial = Participants > 0 && Participants <= 10
+                // Todos alcanzan el mismo radio inicial en un segundo.
+                // La espera y el cierre posteriores escalan con la poblacion.
+                const bool FastInitial = Participants > 0
                     && Actual == Target;
                 const float InitialWait = FastInitial ? 0.f : Wait;
                 const float InitialDuration = FastInitial ? 1.f : Duration;
@@ -127,6 +131,8 @@ void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMa
 			GameState->ForceNetUpdate();
 			return;
 		}
+        const bool LeavingInitialPhaseOne =
+            InitialPopulationSafeZonePhase == 1 && LastPopulationPhase == 1;
         SetZoneToIndexOriginal(GameModeAthena, OverridePhaseMaybeIDFK);
         LastPopulationPhase = GameModeAthena->Get<int>(GameMode_SafeZonePhaseOffset);
         auto ProgressIndicator = GameModeAthena->GetSafeZoneIndicator();
@@ -137,10 +143,39 @@ void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMa
             ProgressIndicator->GetOffset("SafeZoneStartShrinkTime", false) >= 0 &&
             ProgressIndicator->GetOffset("SafeZoneFinishShrinkTime", false) >= 0)
         {
-            const float Wait = PopulationWaitDuration(Participants);
-            const float Duration = PopulationShrinkDuration(Participants,
+            // Solo 6-10: tras llegar a fase 1 en un segundo,
+            // cerrar inmediatamente hacia fase 2 durante cinco minutos y medio.
+            const bool ImmediateFirstClose = Participants >= 6 && Participants <= 10
+                && LeavingInitialPhaseOne && LastPopulationPhase == 2;
+            float Wait = ImmediateFirstClose ? 0.f : PopulationWaitDuration(Participants);
+            float Duration = ImmediateFirstClose ? 330.f : PopulationShrinkDuration(Participants,
                 ProgressIndicator->GetSafeZoneFinishShrinkTime()
                 - ProgressIndicator->GetSafeZoneStartShrinkTime());
+            // Desde fase 3, reducir espera y cierre por fase de destino.
+            // Calcular desde la base evita acumular divisiones en llamadas
+            // repetidas y mantiene el resultado si el motor salta una fase.
+            // 1-10 comparte tiempos desde fase 3; 50+ conserva el recorrido nativo.
+            if (Participants >= 1 && Participants < 50 && LastPopulationPhase >= 3)
+            {
+                const float Divisor = Participants <= 10 ? 2.f
+                    : Participants <= 20 ? 1.5f : 1.25f;
+                const float Scale = std::pow(Divisor,
+                    -static_cast<float>(LastPopulationPhase - 2));
+                Wait = PopulationWaitDuration(Participants) * Scale;
+                const float BaseShrink = Participants <= 10 ? 330.f
+                    : PopulationShrinkDuration(Participants, 0.f);
+                Duration = BaseShrink * Scale;
+                // 1-10: fase 3 = 90 s de espera + 60 s de cierre.
+                // Cada fase posterior divide ambos tiempos entre dos.
+                // El cierre inicial hacia fase 2 conserva sus 330 s.
+                if (Participants <= 10)
+                {
+                    const float PhaseThreeScale = std::pow(2.f,
+                        -static_cast<float>(LastPopulationPhase - 3));
+                    Wait = 90.f * PhaseThreeScale;
+                    Duration = 60.f * PhaseThreeScale;
+                }
+            }
             if (std::isfinite(Duration) && Duration > 0.f)
             {
                 const float Now = GameState->GetServerWorldTimeSeconds();

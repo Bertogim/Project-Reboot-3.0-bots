@@ -2488,6 +2488,19 @@ static inline void PregameUI()
 
 	static std::vector<UObject*> PregamePlaylists;
 	static bool bPregamePlaylistsBuilt = false;
+	static int PregameNormalPlaylistCount = 0;
+	const auto NormalPlaylistOrder = [](UObject* Object) {
+		const auto Path = Object->GetPathName();
+		if (Path == "/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo")
+			return 0;
+		if (Path == "/Game/Athena/Playlists/Playlist_DefaultDuo.Playlist_DefaultDuo")
+			return 1;
+		if (Path == "/Game/Athena/Playlists/Trios/Playlist_Trios.Playlist_Trios")
+			return 2;
+		if (Path == "/Game/Athena/Playlists/Playlist_DefaultSquad.Playlist_DefaultSquad")
+			return 3;
+		return 4;
+	};
 
 	if (!bPregamePlaylistsBuilt)
 	{
@@ -2516,6 +2529,22 @@ static inline void PregameUI()
 			PregamePlaylists.push_back(Object);
 		}
 
+		// Pin only the normal team modes, keeping all other playlists in order.
+		std::vector<UObject*> OrderedPlaylists;
+		PregameNormalPlaylistCount = 0;
+		for (int Order = 0; Order < 5; ++Order)
+		{
+			for (auto Object : PregamePlaylists)
+			{
+				if (NormalPlaylistOrder(Object) != Order)
+					continue;
+				OrderedPlaylists.push_back(Object);
+				if (Order < 4)
+					++PregameNormalPlaylistCount;
+			}
+		}
+		PregamePlaylists = std::move(OrderedPlaylists);
+
 		if (PregamePlaylists.empty())
 			bPregamePlaylistsBuilt = false;
 	}
@@ -2524,6 +2553,13 @@ static inline void PregameUI()
 	{
 		for (int i = 0; i < PregamePlaylists.size(); ++i)
 		{
+			if (PregameNormalPlaylistCount > 0 && i == PregameNormalPlaylistCount)
+			{
+				ImGui::Spacing();
+				ImGui::Separator();
+				ImGui::Spacing();
+			}
+
 			auto Object = PregamePlaylists.at(i);
 
 			if (!Object)
@@ -2539,6 +2575,8 @@ static inline void PregameUI()
 			if (!PlaylistNameFStr.Data.Data)
 				continue;
 
+			// Different playlist assets can share the same display name.
+			ImGui::PushID(Object);
 			if (ImGui::Button(PlaylistNameFStr.ToString().c_str()))
 			{
 				PlaylistName = Object->GetPathName();
@@ -2553,6 +2591,7 @@ static inline void PregameUI()
 
 				LOG_INFO(LogMatchmaker, "[HostClient] Force Start pressed locally (playlist={}).", PlaylistName);
 			}
+			ImGui::PopID();
 		}
 	}
 
